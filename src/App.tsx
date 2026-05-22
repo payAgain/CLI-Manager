@@ -39,6 +39,7 @@ function App() {
   const lightThemePalette = useSettingsStore((s) => s.lightThemePalette);
   const darkThemePalette = useSettingsStore((s) => s.darkThemePalette);
   const uiFontFamily = useSettingsStore((s) => s.uiFontFamily);
+  const uiTextColor = useSettingsStore((s) => s.uiTextColor);
   const historySessions = useHistoryStore((s) => s.sessions);
   const loadHistorySessions = useHistoryStore((s) => s.loadSessions);
   const openHistoryWorkspace = useHistoryStore((s) => s.openHistory);
@@ -108,6 +109,14 @@ function App() {
     document.documentElement.setAttribute("data-light-palette", lightThemePalette);
     document.documentElement.setAttribute("data-dark-palette", darkThemePalette);
   }, [resolvedTheme, lightThemePalette, darkThemePalette]);
+
+  useEffect(() => {
+    if (uiTextColor) {
+      document.documentElement.style.setProperty("--text-primary", uiTextColor);
+    } else {
+      document.documentElement.style.removeProperty("--text-primary");
+    }
+  }, [uiTextColor]);
 
   useEffect(() => {
     if (uiFontFamily) {

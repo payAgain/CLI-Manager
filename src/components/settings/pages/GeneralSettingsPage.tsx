@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
@@ -107,6 +107,41 @@ const DARK_PALETTE_OPTIONS: {
     swatches: ["#0f172a", "#f8fafc", "#f59e0b"],
   },
 ];
+
+const HEX_COLOR_PATTERN = /^#[0-9a-fA-F]{6}$/;
+const FONT_SIZE_MIN = 10;
+const FONT_SIZE_MAX = 24;
+
+const LIGHT_TEXT_COLORS: Record<LightThemePalette, string> = {
+  "warm-paper": "#2e3336",
+  "cream-green": "#25302a",
+  "ink-red": "#1f1f1c",
+  "saas-analytics-dashboard": "#1e293b",
+  "apple-pure": "#1d1d1f",
+  "apple-mist": "#1c1f23",
+  "apple-warm": "#1f1d1a",
+  "apple-mono": "#0f0f10",
+};
+
+const DARK_TEXT_COLORS: Record<DarkThemePalette, string> = {
+  "night-indigo": "#c0caf5",
+  "forest-night": "#d8e5dc",
+  "graphite-red": "#e6dfdb",
+  "investment-platform": "#f8fafc",
+};
+
+function getDefaultUiTextColor(
+  resolvedTheme: "dark" | "light",
+  lightPalette: LightThemePalette,
+  darkPalette: DarkThemePalette
+) {
+  return resolvedTheme === "dark" ? DARK_TEXT_COLORS[darkPalette] : LIGHT_TEXT_COLORS[lightPalette];
+}
+
+function clampFontSize(value: number) {
+  if (!Number.isFinite(value)) return FONT_SIZE_MIN;
+  return Math.min(FONT_SIZE_MAX, Math.max(FONT_SIZE_MIN, value));
+}
 
 const FONT_FAMILY_OPTIONS: { value: string; label: string }[] = [
   { value: "Cascadia Code, Consolas, monospace", label: "Cascadia Code（推荐）" },
@@ -232,11 +267,13 @@ function PaletteCard({
 
 export function GeneralSettingsPage() {
   const theme = useSettingsStore((s) => s.theme);
+  const resolvedTheme = useSettingsStore((s) => s.resolvedTheme);
   const lightThemePalette = useSettingsStore((s) => s.lightThemePalette);
   const darkThemePalette = useSettingsStore((s) => s.darkThemePalette);
   const fontSize = useSettingsStore((s) => s.fontSize);
   const fontFamily = useSettingsStore((s) => s.fontFamily);
   const uiFontFamily = useSettingsStore((s) => s.uiFontFamily);
+  const uiTextColor = useSettingsStore((s) => s.uiTextColor);
   const defaultShell = useSettingsStore((s) => s.defaultShell);
   const sidebarDensity = useSettingsStore((s) => s.sidebarDensity);
   const viewMode = useSettingsStore((s) => s.viewMode);
@@ -245,6 +282,35 @@ export function GeneralSettingsPage() {
   const closeBehavior = useSettingsStore((s) => s.closeBehavior);
   const setTheme = useSettingsStore((s) => s.setTheme);
   const update = useSettingsStore((s) => s.update);
+  const [uiTextColorDraft, setUiTextColorDraft] = useState(uiTextColor);
+  const [fontSizeDraft, setFontSizeDraft] = useState(fontSize);
+
+  useEffect(() => {
+    setUiTextColorDraft(uiTextColor);
+  }, [uiTextColor]);
+
+  useEffect(() => {
+    setFontSizeDraft(fontSize);
+  }, [fontSize]);
+
+  const defaultUiTextColor = getDefaultUiTextColor(resolvedTheme, lightThemePalette, darkThemePalette);
+  const normalizedUiTextColorDraft = uiTextColorDraft.trim();
+  const uiTextColorDraftInvalid = normalizedUiTextColorDraft !== "" && !HEX_COLOR_PATTERN.test(normalizedUiTextColorDraft);
+  const colorPickerValue = HEX_COLOR_PATTERN.test(normalizedUiTextColorDraft) ? normalizedUiTextColorDraft : defaultUiTextColor;
+  const commitUiTextColor = (value = uiTextColorDraft) => {
+    const next = value.trim();
+    if (next !== "" && !HEX_COLOR_PATTERN.test(next)) return;
+    if (next !== uiTextColor) {
+      void update("uiTextColor", next);
+    }
+  };
+  const commitFontSize = (value = fontSizeDraft) => {
+    const next = clampFontSize(value);
+    setFontSizeDraft(next);
+    if (next !== fontSize) {
+      void update("fontSize", next);
+    }
+  };
 
   const isCustomFontFamily = useMemo(
     () => !FONT_FAMILY_OPTIONS.some((opt) => opt.value === fontFamily),
@@ -334,6 +400,62 @@ export function GeneralSettingsPage() {
               影响除终端外的应用整体界面字体；终端字体在下方"终端与侧栏"中单独设置。
             </div>
           </div>
+
+          <div className="mt-4">
+            <label className="mb-1 block text-xs text-on-surface-variant">应用字体颜色</label>
+            <div className="flex items-center gap-2">
+              <Input
+                type="color"
+                value={colorPickerValue}
+                onChange={(e) => {
+                  setUiTextColorDraft(e.target.value);
+                }}
+                onBlur={() => commitUiTextColor()}
+                className="h-8 w-12 shrink-0 cursor-pointer p-1"
+                aria-label="应用字体颜色选择器"
+              />
+              <Input
+                type="text"
+                value={uiTextColorDraft}
+                onChange={(e) => {
+                  setUiTextColorDraft(e.target.value.trim());
+                }}
+                onBlur={() => commitUiTextColor()}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    commitUiTextColor();
+                  }
+                }}
+                placeholder={defaultUiTextColor}
+                className="font-mono text-xs"
+                aria-label="应用字体颜色十六进制值"
+                aria-invalid={uiTextColorDraftInvalid}
+              />
+              <button
+                type="button"
+                className="ui-flat-action ui-focus-ring h-8 shrink-0 px-3 text-xs"
+                onClick={() => {
+                  setUiTextColorDraft("");
+                  void update("uiTextColor", "");
+                }}
+                disabled={!uiTextColor && uiTextColorDraft === ""}
+              >
+                跟随主题
+              </button>
+            </div>
+            <div className="mt-2 flex items-center gap-2 text-[11px] text-text-muted">
+              <span
+                className="h-4 w-4 rounded-full border border-border"
+                style={{ backgroundColor: uiTextColor || defaultUiTextColor }}
+              />
+              <span>{uiTextColor ? `当前自定义 ${uiTextColor}` : `当前跟随主题 ${defaultUiTextColor}`}</span>
+            </div>
+            <div className={`mt-1 text-[11px] ${uiTextColorDraftInvalid ? "text-danger" : "text-text-muted"}`}>
+              {uiTextColorDraftInvalid
+                ? "请输入 #RRGGBB 格式，例如 #c0caf5。"
+                : "仅影响除终端外的应用主文字颜色；留空时跟随当前主题。"}
+            </div>
+          </div>
         </Card>
 
         <Card className="p-4">
@@ -344,20 +466,29 @@ export function GeneralSettingsPage() {
               <div className="flex items-center gap-3">
                 <input
                   type="range"
-                  min={10}
-                  max={24}
+                  min={FONT_SIZE_MIN}
+                  max={FONT_SIZE_MAX}
                   step={1}
-                  value={fontSize}
-                  onChange={(e) => update("fontSize", Number(e.target.value))}
+                  value={fontSizeDraft}
+                  onChange={(e) => setFontSizeDraft(Number(e.target.value))}
+                  onPointerUp={() => commitFontSize()}
+                  onKeyUp={() => commitFontSize()}
+                  onBlur={() => commitFontSize()}
                   className="w-full accent-accent"
                   aria-label="终端字体大小滑杆"
                 />
                 <Input
                   type="number"
-                  min={10}
-                  max={24}
-                  value={fontSize}
-                  onChange={(e) => update("fontSize", Math.min(24, Math.max(10, Number(e.target.value))))}
+                  min={FONT_SIZE_MIN}
+                  max={FONT_SIZE_MAX}
+                  value={fontSizeDraft}
+                  onChange={(e) => setFontSizeDraft(Number(e.target.value))}
+                  onBlur={() => commitFontSize()}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      commitFontSize();
+                    }
+                  }}
                   className="w-16 text-xs"
                 />
               </div>

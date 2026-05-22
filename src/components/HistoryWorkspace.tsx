@@ -151,23 +151,17 @@ export function HistoryWorkspace() {
 
   const normalizedGlobal = globalQuery.trim().toLowerCase();
 
-  const sessionHaystacks = useMemo(() => {
-    return sessions.map(
-      (item) =>
-        `${item.displayTitle.toLowerCase()}${item.project_key.toLowerCase()}${item.tags.join(" ").toLowerCase()}`
-    );
-  }, [sessions]);
-
   const filteredSessions = useMemo(() => {
     if (!normalizedGlobal) return sessions;
     const result: HistorySessionView[] = [];
-    for (let i = 0; i < sessions.length; i++) {
-      if (sessionHaystacks[i].includes(normalizedGlobal)) {
-        result.push(sessions[i]);
+    for (const item of sessions) {
+      const haystack = `${item.displayTitle.toLowerCase()}${item.project_key.toLowerCase()}${item.tags.join(" ").toLowerCase()}`;
+      if (haystack.includes(normalizedGlobal)) {
+        result.push(item);
       }
     }
     return result;
-  }, [sessions, sessionHaystacks, normalizedGlobal]);
+  }, [sessions, normalizedGlobal]);
 
   useEffect(() => {
     setVisibleSessionCount(Math.min(SESSION_PAGE_SIZE, filteredSessions.length));
@@ -203,22 +197,17 @@ export function HistoryWorkspace() {
     setVisibleSessionCount((prev) => Math.min(filteredSessions.length, prev + SESSION_PAGE_SIZE));
   }, [filteredSessions.length, hasMoreSessions]);
 
-  const messageHaystacks = useMemo(() => {
-    if (!activeSession) return null;
-    return activeSession.messages.map((msg) => msg.content.toLowerCase());
-  }, [activeSession]);
-
   const matchIndices = useMemo(() => {
     const query = debouncedSessionQuery.trim().toLowerCase();
-    if (!query || !activeSession || !messageHaystacks) return [];
+    if (!query || !activeSession) return [];
     const indices: number[] = [];
-    for (let i = 0; i < messageHaystacks.length; i++) {
-      if (messageHaystacks[i].includes(query)) {
+    for (let i = 0; i < activeSession.messages.length; i++) {
+      if (activeSession.messages[i].content.toLowerCase().includes(query)) {
         indices.push(i);
       }
     }
     return indices;
-  }, [activeSession, messageHaystacks, debouncedSessionQuery]);
+  }, [activeSession, debouncedSessionQuery]);
 
   useEffect(() => {
     setMatchCursor(0);

@@ -106,6 +106,15 @@ const DiffCodeViewer = memo(function DiffCodeViewer({ patch }: { patch: string }
   );
 });
 
+function isDiffCandidate(content: string): boolean {
+  return (
+    content.includes("diff --git") ||
+    content.includes("*** Begin Patch") ||
+    content.includes("@@") ||
+    content.includes("+++")
+  );
+}
+
 export function DiffModal({ open, messages, onClose, onJumpToMessage }: DiffModalProps) {
   const workerRef = useRef<Worker | null>(null);
   const requestIdRef = useRef(0);
@@ -137,7 +146,9 @@ export function DiffModal({ open, messages, onClose, onJumpToMessage }: DiffModa
     worker.addEventListener("message", onMessage);
     worker.postMessage({
       id: requestId,
-      messages: messages.map((m) => ({ content: m.content, timestamp: m.timestamp ?? null })),
+      messages: messages.flatMap((m, index) =>
+        isDiffCandidate(m.content) ? [{ content: m.content, timestamp: m.timestamp ?? null, messageIndex: index }] : []
+      ),
     });
 
     return () => {

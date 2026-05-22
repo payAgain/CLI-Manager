@@ -3,7 +3,6 @@ use chrono::Local;
 use serde::{Deserialize, Serialize};
 use log::{info, error};
 use std::fs::{self, File};
-use std::io::Read;
 use std::path::Path;
 
 const SYNC_FILE_PATH: &str = "cli-manager/sync.json";
@@ -148,12 +147,7 @@ pub fn local_import(zip_path: &str) -> Result<SyncData, String> {
             format!("无效的同步文件: {}", e)
         })?;
 
-    let mut buf = String::new();
-    entry
-        .read_to_string(&mut buf)
-        .map_err(|e| format!("读取数据失败: {}", e))?;
-
-    let data: SyncData = serde_json::from_str(&buf)
+    let data: SyncData = serde_json::from_reader(&mut entry)
         .map_err(|e| format!("解析数据失败: {}", e))?;
     Ok(data)
 }

@@ -37,11 +37,15 @@ function getHighlightRegex(trimmed: string): { regex: RegExp; normalized: string
   return { regex, normalized: cachedNormalized };
 }
 
+const HIGHLIGHT_TEXT_MAX_LENGTH = 24_000;
+const HIGHLIGHT_PARTS_MAX = 400;
+
 export function highlightText(text: string, query: string): ReactNode {
   const trimmed = query.trim();
-  if (!trimmed) return text;
+  if (!trimmed || text.length > HIGHLIGHT_TEXT_MAX_LENGTH) return text;
   const { regex, normalized } = getHighlightRegex(trimmed);
   const parts = text.split(regex);
+  if (parts.length > HIGHLIGHT_PARTS_MAX) return text;
   return parts.map((part, idx) => {
     if (part.toLowerCase() === normalized) {
       return (

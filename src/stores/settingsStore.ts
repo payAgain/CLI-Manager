@@ -28,6 +28,7 @@ interface Settings {
   fontSize: number;
   fontFamily: string;
   uiFontFamily: string;
+  uiTextColor: string;
   defaultShell: string;
   sidebarWidth: number;
   historySidebarWidth: number;
@@ -59,6 +60,7 @@ const DEFAULTS: Settings = {
   fontFamily: "Cascadia Code, Consolas, monospace",
   uiFontFamily:
     "\"Segoe UI Variable\", \"Segoe UI\", -apple-system, BlinkMacSystemFont, \"PingFang SC\", \"Microsoft YaHei\", sans-serif",
+  uiTextColor: "",
   defaultShell: "powershell.exe",
   sidebarWidth: 280,
   historySidebarWidth: 300,
@@ -90,6 +92,8 @@ const LEGACY_TERMINAL_THEME_MAP: Partial<Record<string, string>> = {
   luxuryCommerceLight: "saasAnalyticsDashboardLight",
   cryptoWalletDark: "investmentPlatformDark",
 };
+
+const HEX_COLOR_PATTERN = /^#[0-9a-fA-F]{6}$/;
 
 function getSystemTheme(): "dark" | "light" {
   return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
@@ -190,6 +194,15 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
 
     entries.terminalThemeName = terminalThemeName;
     entries.terminalThemeMode = terminalThemeMode;
+
+    if (
+      entries.uiTextColor !== undefined &&
+      (typeof entries.uiTextColor !== "string" ||
+        (entries.uiTextColor !== "" && !HEX_COLOR_PATTERN.test(entries.uiTextColor)))
+    ) {
+      entries.uiTextColor = DEFAULTS.uiTextColor;
+      await s.set("uiTextColor", DEFAULTS.uiTextColor);
+    }
 
     if (entries.keyboardShortcuts) {
       entries.keyboardShortcuts = { ...DEFAULTS.keyboardShortcuts, ...entries.keyboardShortcuts };

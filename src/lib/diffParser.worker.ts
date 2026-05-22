@@ -3,6 +3,7 @@
 interface WorkerMessage {
   content: string;
   timestamp: string | null;
+  messageIndex: number;
 }
 
 export interface ParsedDiffBlock {
@@ -98,16 +99,16 @@ function splitDiffBlocks(content: string): string[] {
 
 function parseDiffs(messages: WorkerMessage[]): ParsedDiffBlock[] {
   const result: ParsedDiffBlock[] = [];
-  messages.forEach((msg, index) => {
+  messages.forEach((msg) => {
     const content = msg.content?.trim();
     if (!content) return;
     const blocks = splitDiffBlocks(content);
     blocks.forEach((patch, seq) => {
       result.push({
-        id: `${index}-${seq}`,
+        id: `${msg.messageIndex}-${seq}`,
         filePath: extractFilePath(patch),
         patch,
-        messageIndex: index,
+        messageIndex: msg.messageIndex,
         timestamp: msg.timestamp ?? null,
       });
     });

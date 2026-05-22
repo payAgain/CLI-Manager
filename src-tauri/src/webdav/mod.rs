@@ -65,6 +65,14 @@ impl WebDavClient {
     async fn handle_response(response: Response) -> Result<Vec<u8>, WebDavError> {
         let status = response.status();
         if status.is_success() {
+            if let Some(len) = response.content_length() {
+                if len > 16 * 1024 * 1024 {
+                    return Err(WebDavError {
+                        message: format!("Response too large: {} bytes", len),
+                        status_code: Some(status.as_u16()),
+                    });
+                }
+            }
             response
                 .bytes()
                 .await

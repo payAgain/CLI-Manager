@@ -238,41 +238,45 @@ pub async fn history_list_sessions(
     query: Option<String>,
     limit: Option<usize>,
 ) -> Result<Vec<HistorySessionSummary>, String> {
-    let files = collect_session_files(source.as_deref());
-    let query_lower = query
-        .map(|q| q.trim().to_lowercase())
-        .filter(|q| !q.is_empty());
-    let mut sessions = Vec::new();
+    tokio::task::spawn_blocking(move || {
+        let files = collect_session_files(source.as_deref());
+        let query_lower = query
+            .map(|q| q.trim().to_lowercase())
+            .filter(|q| !q.is_empty());
+        let mut sessions = Vec::new();
 
-    for file_ref in files {
-        let summary = build_session_summary(&file_ref);
-        if let Some(q) = &query_lower {
-            let title = summary.title.to_lowercase();
-            let session_id = summary.session_id.to_lowercase();
-            let project = summary.project_key.to_lowercase();
-            let source_name = summary.source.to_lowercase();
-            let branch = summary
-                .branch
-                .as_ref()
-                .map(|v| v.to_lowercase())
-                .unwrap_or_default();
-            if !title.contains(q)
-                && !session_id.contains(q)
-                && !project.contains(q)
-                && !source_name.contains(q)
-                && !branch.contains(q)
-            {
-                continue;
+        for file_ref in files {
+            let summary = build_session_summary(&file_ref);
+            if let Some(q) = &query_lower {
+                let title = summary.title.to_lowercase();
+                let session_id = summary.session_id.to_lowercase();
+                let project = summary.project_key.to_lowercase();
+                let source_name = summary.source.to_lowercase();
+                let branch = summary
+                    .branch
+                    .as_ref()
+                    .map(|v| v.to_lowercase())
+                    .unwrap_or_default();
+                if !title.contains(q)
+                    && !session_id.contains(q)
+                    && !project.contains(q)
+                    && !source_name.contains(q)
+                    && !branch.contains(q)
+                {
+                    continue;
+                }
             }
+            sessions.push(summary);
         }
-        sessions.push(summary);
-    }
 
-    sessions.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
-    if let Some(max) = limit {
-        sessions.truncate(max);
-    }
-    Ok(sessions)
+        sessions.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+        if let Some(max) = limit {
+            sessions.truncate(max);
+        }
+        Ok(sessions)
+    })
+    .await
+    .map_err(|err| err.to_string())?
 }
 
 #[tauri::command]
@@ -281,16 +285,20 @@ pub async fn history_get_session(
     source: String,
     project_key: String,
 ) -> Result<HistorySessionDetail, String> {
-    let path = PathBuf::from(&file_path);
-    if !path.exists() {
-        return Err(format!("Session file not found: {file_path}"));
-    }
-    let file_ref = SessionFileRef {
-        source,
-        project_key,
-        path,
-    };
-    build_session_detail(&file_ref)
+    tokio::task::spawn_blocking(move || {
+        let path = PathBuf::from(&file_path);
+        if !path.exists() {
+            return Err(format!("Session file not found: {file_path}"));
+        }
+        let file_ref = SessionFileRef {
+            source,
+            project_key,
+            path,
+        };
+        build_session_detail(&file_ref)
+    })
+    .await
+    .map_err(|err| err.to_string())?
 }
 
 #[tauri::command]
@@ -299,58 +307,62 @@ pub async fn history_search(
     source: Option<String>,
     limit: Option<usize>,
 ) -> Result<Vec<HistorySearchResult>, String> {
-    let normalized_query = query.trim().to_lowercase();
-    if normalized_query.is_empty() {
-        return Ok(Vec::new());
-    }
+    tokio::task::spawn_blocking(move || {
+        let normalized_query = query.trim().to_lowercase();
+        if normalized_query.is_empty() {
+            return Ok(Vec::new());
+        }
 
-    let max_hits = limit.unwrap_or(100).max(1);
-    let files = collect_session_files(source.as_deref());
-    let mut hits: Vec<HistorySearchResult> = Vec::new();
+        let max_hits = limit.unwrap_or(100).max(1);
+        let files = collect_session_files(source.as_deref());
+        let mut hits: Vec<HistorySearchResult> = Vec::new();
 
-    for file_ref in files {
-        let computed = get_or_scan_session_computation(&file_ref);
-        let file_path_str = file_ref.path.to_string_lossy().to_string();
-        let title = computed.title.clone();
-        let session_id = computed.session_id.clone();
-        let source_name = file_ref.source.clone();
-        let project_key = file_ref.project_key.clone();
-        let mut local_full = false;
+        for file_ref in files {
+            let computed = get_or_scan_session_computation(&file_ref);
+            let file_path_str = file_ref.path.to_string_lossy().to_string();
+            let title = computed.title.clone();
+            let session_id = computed.session_id.clone();
+            let source_name = file_ref.source.clone();
+            let project_key = file_ref.project_key.clone();
+            let mut local_full = false;
 
-        let scan_result = iter_session_messages_filtered(&file_ref.path, &normalized_query, |_, msg| {
-            if !msg.content.to_lowercase().contains(&normalized_query) {
-                return true;
-            }
-            hits.push(HistorySearchResult {
-                session_id: session_id.clone(),
-                source: source_name.clone(),
-                project_key: project_key.clone(),
-                title: title.clone(),
-                file_path: file_path_str.clone(),
-                role: msg.role,
-                snippet: excerpt(&msg.content, 180),
-                timestamp: msg.timestamp,
+            let scan_result = iter_session_messages_filtered(&file_ref.path, &normalized_query, |_, msg| {
+                if !msg.content.to_lowercase().contains(&normalized_query) {
+                    return true;
+                }
+                hits.push(HistorySearchResult {
+                    session_id: session_id.clone(),
+                    source: source_name.clone(),
+                    project_key: project_key.clone(),
+                    title: title.clone(),
+                    file_path: file_path_str.clone(),
+                    role: msg.role,
+                    snippet: excerpt(&msg.content, 180),
+                    timestamp: msg.timestamp,
+                });
+                if hits.len() >= max_hits {
+                    local_full = true;
+                    return false;
+                }
+                true
             });
-            if hits.len() >= max_hits {
-                local_full = true;
-                return false;
+            if let Err(err) = scan_result {
+                debug!(
+                    "history_search skip unreadable file: path={}, err={}",
+                    file_ref.path.to_string_lossy(),
+                    err
+                );
+                continue;
             }
-            true
-        });
-        if let Err(err) = scan_result {
-            debug!(
-                "history_search skip unreadable file: path={}, err={}",
-                file_ref.path.to_string_lossy(),
-                err
-            );
-            continue;
+            if local_full {
+                return Ok(hits);
+            }
         }
-        if local_full {
-            return Ok(hits);
-        }
-    }
 
-    Ok(hits)
+        Ok(hits)
+    })
+    .await
+    .map_err(|err| err.to_string())?
 }
 
 #[tauri::command]

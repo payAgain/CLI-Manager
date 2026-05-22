@@ -39,7 +39,7 @@ export function XTermTerminal({ sessionId, isActive = true, fontSize = 14, fontF
   const lastObservedSizeRef = useRef<{ width: number; height: number } | null>(null);
   const inactiveBufferRef = useRef<string[]>([]);
   const inactiveBufferSizeRef = useRef(0);
-  const INACTIVE_BUFFER_MAX = 1024 * 1024;
+  const INACTIVE_BUFFER_MAX = 256 * 1024;
 
   const scheduleFit = (force = false) => {
     if (fitRafRef.current !== null) {
@@ -368,11 +368,11 @@ export function XTermTerminal({ sessionId, isActive = true, fontSize = 14, fontF
     };
   }, [sessionId]);
 
+  const backgroundColor = getTerminalBackground(terminalThemeName, resolvedTheme, lightThemePalette, darkThemePalette);
+
   return (
-    <div
-      ref={containerRef}
-      className="h-full w-full overflow-hidden"
-      style={{ backgroundColor: getTerminalBackground(terminalThemeName, resolvedTheme, lightThemePalette, darkThemePalette) }}
-    />
+    <div className="h-full w-full overflow-hidden p-2" style={{ backgroundColor }}>
+      <div ref={containerRef} className="h-full w-full overflow-hidden" />
+    </div>
   );
 }
