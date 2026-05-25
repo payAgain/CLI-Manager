@@ -73,7 +73,7 @@ function SortableTab({ id, title, isActive, status, onActivate, onClose, menuCon
           <button
             onClick={(e) => { e.stopPropagation(); onClose(); }}
             onPointerDown={(e) => e.stopPropagation()}
-            className="ml-1 inline-flex h-5 w-5 items-center justify-center rounded text-[16px] leading-none text-on-surface-variant opacity-60 transition-opacity hover:opacity-100"
+            className="ml-1.5 inline-flex h-6 w-6 items-center justify-center rounded text-[16px] leading-none text-on-surface-variant opacity-70 transition-[opacity,background-color] hover:bg-on-surface/10 hover:opacity-100"
             aria-label={`关闭终端 ${title}`}
             title={`关闭终端 ${title}`}
           >
