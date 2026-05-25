@@ -111,10 +111,21 @@ function App() {
   }, [resolvedTheme, lightThemePalette, darkThemePalette]);
 
   useEffect(() => {
+    const root = document.documentElement.style;
     if (uiTextColor) {
-      document.documentElement.style.setProperty("--text-primary", uiTextColor);
+      root.setProperty("--text-primary", uiTextColor);
+      root.setProperty(
+        "--text-secondary",
+        `color-mix(in srgb, ${uiTextColor} 85%, var(--bg-primary))`
+      );
+      root.setProperty(
+        "--text-muted",
+        `color-mix(in srgb, ${uiTextColor} 60%, var(--bg-primary))`
+      );
     } else {
-      document.documentElement.style.removeProperty("--text-primary");
+      root.removeProperty("--text-primary");
+      root.removeProperty("--text-secondary");
+      root.removeProperty("--text-muted");
     }
   }, [uiTextColor]);
 
