@@ -1,6 +1,6 @@
 [package]
 name = "cli-manager"
-version = "0.1.6"
+version = "0.1.7"
 description = "A lightweight desktop app for managing CLI tools across multiple projects"
 authors = ["you"]
 edition = "2021"
