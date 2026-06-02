@@ -765,7 +765,31 @@ samp,
 }
 
 .ui-terminal-tab-scroll {
+  --tab-scroll-left-fade: 0px;
+  --tab-scroll-right-fade: 0px;
   scrollbar-width: none;
+  -webkit-mask-image: linear-gradient(
+    to right,
+    transparent 0,
+    #000 var(--tab-scroll-left-fade),
+    #000 calc(100% - var(--tab-scroll-right-fade)),
+    transparent 100%
+  );
+  mask-image: linear-gradient(
+    to right,
+    transparent 0,
+    #000 var(--tab-scroll-left-fade),
+    #000 calc(100% - var(--tab-scroll-right-fade)),
+    transparent 100%
+  );
+}
+
+.ui-terminal-tab-scroll[data-can-scroll-left="true"] {
+  --tab-scroll-left-fade: 18px;
+}
+
+.ui-terminal-tab-scroll[data-can-scroll-right="true"] {
+  --tab-scroll-right-fade: 18px;
 }
 
 .ui-terminal-tab-scroll::-webkit-scrollbar {
