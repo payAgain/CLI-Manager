@@ -3,6 +3,7 @@
 mod claude_hook;
 mod commands;
 mod pty;
+mod shell_resolver;
 mod sync;
 mod webdav;
 

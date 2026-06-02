@@ -3,6 +3,8 @@ use std::io::ErrorKind;
 use std::path::PathBuf;
 use std::process::Command;
 
+use crate::shell_resolver::{resolve_git_bash_exe, GIT_BASH_NOT_FOUND_MESSAGE};
+
 #[derive(serde::Deserialize)]
 pub struct ExternalTab {
     pub cwd: Option<String>,
@@ -11,17 +13,20 @@ pub struct ExternalTab {
     pub shell: Option<String>,
 }
 
-fn shell_exe(shell: &str) -> (&'static str, Option<&'static str>) {
+fn shell_exe(shell: &str) -> Result<(String, Option<&'static str>), String> {
     match shell {
-        "cmd" => ("cmd", Some("/K")),
-        "pwsh" => ("pwsh", Some("-NoExit")),
-        "wsl" => ("wsl", None),
-        "bash" => ("bash", None),
-        _ => ("powershell", Some("-NoExit")),
+        "cmd" => Ok(("cmd".to_string(), Some("/K"))),
+        "pwsh" => Ok(("pwsh".to_string(), Some("-NoExit"))),
+        "wsl" => Ok(("wsl".to_string(), None)),
+        "gitbash" => resolve_git_bash_exe()
+            .map(|path| (path.to_string_lossy().into_owned(), None))
+            .ok_or_else(|| GIT_BASH_NOT_FOUND_MESSAGE.to_string()),
+        "bash" => Ok(("bash".to_string(), None)),
+        _ => Ok(("powershell".to_string(), Some("-NoExit"))),
     }
 }
 
-fn push_tab_args(args: &mut Vec<String>, tab: &ExternalTab) {
+fn push_tab_args(args: &mut Vec<String>, tab: &ExternalTab) -> Result<(), String> {
     args.push("new-tab".into());
     if let Some(cwd) = &tab.cwd {
         args.push("-d".into());
@@ -32,7 +37,7 @@ fn push_tab_args(args: &mut Vec<String>, tab: &ExternalTab) {
     args.push("--suppressApplicationTitle".into());
 
     let shell_key = tab.shell.as_deref().unwrap_or("powershell");
-    let (exe, no_exit_flag) = shell_exe(shell_key);
+    let (exe, no_exit_flag) = shell_exe(shell_key)?;
 
     if let Some(cmd) = &tab.startup_cmd {
         let cmd = cmd.trim();
@@ -43,14 +48,20 @@ fn push_tab_args(args: &mut Vec<String>, tab: &ExternalTab) {
             }
             if shell_key == "cmd" {
                 args.push(cmd.into());
+            } else if shell_key == "gitbash" {
+                args.push("--login".into());
+                args.push("-i".into());
+                args.push("-c".into());
+                args.push(format!("{}; exec bash --login -i", cmd));
             } else {
                 args.push("-Command".into());
                 args.push(cmd.into());
             }
-            return;
+            return Ok(());
         }
     }
     args.push(exe.into());
+    Ok(())
 }
 
 fn windows_terminal_candidates() -> Vec<PathBuf> {
@@ -99,7 +110,13 @@ pub async fn open_windows_terminal(tabs: Vec<ExternalTab>) -> Result<(), String>
         if i > 0 {
             args.push(";".into());
         }
-        push_tab_args(&mut args, &tab);
+        push_tab_args(&mut args, tab).map_err(|e| {
+            error!(
+                "Failed to resolve shell for Windows Terminal tab: shell={:?}, error={}",
+                tab.shell, e
+            );
+            e
+        })?;
     }
 
     info!("open_windows_terminal: wt {}", args.join(" "));

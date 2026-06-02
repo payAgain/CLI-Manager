@@ -10,6 +10,7 @@ use std::thread::JoinHandle;
 use tauri::{AppHandle, Emitter};
 
 use crate::pty::boundary::safe_emit_boundary;
+use crate::shell_resolver::{resolve_git_bash_exe, GIT_BASH_NOT_FOUND_MESSAGE};
 
 /// Reader 累积阈值：达到该阈值或下游显式没有更多数据时才 emit，避免高吞吐时
 /// 每次 read 都触发一次 IPC + Base64 编码。
@@ -55,13 +56,16 @@ impl PtyManager {
         }
     }
 
-    fn resolve_shell(shell: &str) -> (&'static str, Vec<String>) {
+    fn resolve_shell(shell: &str) -> Result<(String, Vec<String>), String> {
         match shell {
-            "cmd" => ("cmd.exe", vec!["/Q".to_string()]),
-            "pwsh" => ("pwsh.exe", vec!["-NoLogo".to_string()]),
-            "wsl" => ("wsl.exe", Vec::new()),
-            "bash" => ("bash.exe", Vec::new()),
-            _ => ("powershell.exe", vec!["-NoLogo".to_string()]),
+            "cmd" => Ok(("cmd.exe".to_string(), vec!["/Q".to_string()])),
+            "pwsh" => Ok(("pwsh.exe".to_string(), vec!["-NoLogo".to_string()])),
+            "wsl" => Ok(("wsl.exe".to_string(), Vec::new())),
+            "gitbash" => resolve_git_bash_exe()
+                .map(|path| (path.to_string_lossy().into_owned(), Vec::new()))
+                .ok_or_else(|| GIT_BASH_NOT_FOUND_MESSAGE.to_string()),
+            "bash" => Ok(("bash.exe".to_string(), Vec::new())),
+            _ => Ok(("powershell.exe".to_string(), vec!["-NoLogo".to_string()])),
         }
     }
 
@@ -106,7 +110,7 @@ function global:prompt {
     fn build_shell_args(
         shell: &str,
         env_vars: Option<&HashMap<String, String>>,
-    ) -> (&'static str, Vec<String>) {
+    ) -> Result<(String, Vec<String>), String> {
         let monitoring_enabled = Self::shell_runtime_monitoring_enabled(env_vars);
         if monitoring_enabled && (shell == "powershell" || shell == "pwsh") {
             let exe = if shell == "pwsh" {
@@ -114,7 +118,7 @@ function global:prompt {
             } else {
                 "powershell.exe"
             };
-            return (exe, Self::powershell_runtime_monitor_args());
+            return Ok((exe.to_string(), Self::powershell_runtime_monitor_args()));
         }
         Self::resolve_shell(shell)
     }
@@ -146,8 +150,14 @@ function global:prompt {
             })?;
 
         let shell_key = shell.unwrap_or("powershell");
-        let (exe, args) = Self::build_shell_args(shell_key, env_vars.as_ref());
-        let mut cmd = CommandBuilder::new(exe);
+        let (exe, args) = Self::build_shell_args(shell_key, env_vars.as_ref()).map_err(|e| {
+            error!(
+                "pty resolve shell failed: id={}, shell={}, error={}",
+                session_id, shell_key, e
+            );
+            e
+        })?;
+        let mut cmd = CommandBuilder::new(&exe);
         for arg in args {
             cmd.arg(arg);
         }

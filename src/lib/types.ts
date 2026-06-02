@@ -247,5 +247,6 @@ export const SHELL_OPTIONS = [
   { value: "cmd", label: "CMD" },
   { value: "pwsh", label: "PowerShell Core" },
   { value: "wsl", label: "WSL" },
+  { value: "gitbash", label: "Git Bash" },
   { value: "bash", label: "Bash" },
 ] as const;

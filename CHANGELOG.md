@@ -8,6 +8,12 @@
 - Claude Code 与 Codex CLI 的 `UserPromptSubmit` hook 会将对应标签切换为“运行中”，避免 CLI 刚启动就误显示运行中。
 - 新增 PowerShell / pwsh 通用 shell 运行监控，通过会话级私有 OSC marker 更新命令开始、完成与异常退出状态；设置页可关闭该监控。
 
+### 终端 Shell 设置
+
+- 新增项目弹窗与终端设置的默认 Shell 下拉框新增独立 `Git Bash` 选项，保存值为 `gitbash`，不改变现有 `Bash` 行为。
+- `gitbash` 会从 Git for Windows 常见安装路径、Git PATH 目录与可用的 Windows 注册表信息解析 Git Bash。
+- 找不到 Git Bash 时，应用会报告明确错误，不再回退到缺失的 `bash.exe`。
+
 ### Hook 设置增强
 
 - Claude / Codex Hook 设置页新增运行中 Hook 安装状态，展示 `UserPromptSubmit` 是否已写入。
