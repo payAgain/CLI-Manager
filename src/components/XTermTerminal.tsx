@@ -640,7 +640,10 @@ export function XTermTerminal({ sessionId, isActive = true, fontSize = 14, fontF
     const resolveCompositionAnchorCell = () => {
       const buffer = terminal.buffer.active;
       const promptPattern = /^(?:[>$#]|PS(?:\s|>))/;
-      const bottomRow = Math.max(0, terminal.rows - 2);
+      const currentCursor = {
+        x: Math.min(Math.max(0, buffer.cursorX), Math.max(0, terminal.cols - 1)),
+        y: Math.min(Math.max(0, buffer.cursorY), Math.max(0, terminal.rows - 1)),
+      };
       const scanStart = Math.max(0, terminal.rows - 8);
       for (let row = terminal.rows - 1; row >= scanStart; row -= 1) {
         const text = buffer.getLine(buffer.viewportY + row)?.translateToString(true) ?? "";
@@ -652,7 +655,7 @@ export function XTermTerminal({ sessionId, isActive = true, fontSize = 14, fontF
           y: row,
         };
       }
-      return { x: 1, y: bottomRow };
+      return currentCursor;
     };
 
     const applyCompositionAnchorFix = () => {
