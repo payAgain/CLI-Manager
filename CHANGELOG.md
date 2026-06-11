@@ -1,13 +1,13 @@
 # Changelog
 
-## [V1.0.2] - 2026-06-11
+## [V1.0.1] - 2026-06-10
 
-### 中文输入法符号输入修复
+### 终端中文输入法修复
 
 - 修复内置终端在中文输入法下输入中文符号时需要输入两次才能进入终端的问题：非 composition 状态下的 `.xterm-helper-textarea` 继续保持离屏钉住，但最小尺寸从 `0x0` 调整为 `1x1`，避免 IME 的标点输入首次提交被吞掉。
-- 同步更新前端终端组件规范，明确 helper textarea 在非 composition 状态下应保持离屏但可测量，防止后续再次回退到 `0x0`。
-
-## [V1.0.1] - 2026-06-10
+- 修复内置终端偶发的中文输入法候选框错位问题：当真实输入光标位于上方 prompt 行、底部未识别到稳定输入 prompt 时，不再把 `.composition-view` / `.xterm-helper-textarea` 强制锚到底部，而是回退到 xterm 当前光标位置。
+- 保留高频 TUI / `/compact` 场景下的底部 prompt 纠偏逻辑：只有明确识别到底部真实 prompt 时才覆盖到稳定底部输入行，避免候选框跟随 progress cursor 乱跳。
+- 同步更新前端终端组件规范，明确 helper textarea 在非 composition 状态下应保持离屏但可测量，并明确 IME composition 锚点 fallback 规则。
 
 ### Windows 后台进程闪窗修复
 
