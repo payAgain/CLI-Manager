@@ -232,7 +232,7 @@ if (sequence === "\x1b[?25l") {
 
 **Cause**: xterm syncs `.xterm-helper-textarea` to the terminal cursor on cursor moves. This is required for IME composition, but outside composition it can create browser scroll/anchor churn during progress-bar redraws.
 
-**Fix**: In `XTermTerminal`, keep the helper textarea pinned to xterm's offscreen default while not composing, but keep it at least `1x1`; xterm's IME fallback for active-IME punctuation reads textarea diffs after keyCode 229, and some IMEs drop the first character when the helper textarea is `0x0`. During IME composition, do not blindly trust xterm's progress-cursor position: after xterm updates `.composition-view` and `.xterm-helper-textarea`, re-anchor both elements near the stable bottom input row only when a real bottom prompt is positively recognized. If no stable prompt is found, keep the current xterm cursor as the anchor instead of forcing a bottom-row fallback. After `compositionend`, pin the helper textarea offscreen again.
+**Fix**: In `XTermTerminal`, keep the helper textarea pinned to xterm's offscreen default while not composing, but keep it at least `1x1`; xterm's IME fallback for active-IME punctuation reads textarea diffs after keyCode 229, and some IMEs drop the first character when the helper textarea is `0x0`. During IME composition, anchor `.composition-view` and `.xterm-helper-textarea` to xterm's current `buffer.active.cursorX/cursorY` when that cursor is on an input prompt. If a TUI redraw moves the cursor to a status/progress row during composition, fall back to the nearest visible prompt row instead of blindly trusting that redraw cursor. Do not scan only the bottom rows or force a bottom-row fallback: real input can sit above the bottom while the IME candidate window still needs to follow the visible input row. After `compositionend`, pin the helper textarea offscreen again.
 
 **Correct**:
 
@@ -256,7 +256,8 @@ textarea.style.display = "none";
 **Tests / manual checks**:
 
 - [ ] Claude Code `/compact` progress redraw does not make the input anchor jump.
-- [ ] During `/compact`, Chinese/IME composition text and the candidate window stay near the bottom input row, not the progress output.
+- [ ] Chinese/IME composition text and the candidate window stay near the visible input cursor, including when the input row is not at the bottom.
+- [ ] If a TUI status/progress redraw owns the current cursor during composition, the candidate window falls back to the nearest visible prompt row.
 - [ ] Normal keyboard input, Enter, and paste still reach the PTY.
 - [ ] Chinese/IME composition still positions the candidate window correctly.
 

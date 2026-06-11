@@ -640,22 +640,46 @@ export function XTermTerminal({ sessionId, isActive = true, fontSize = 14, fontF
     const resolveCompositionAnchorCell = () => {
       const buffer = terminal.buffer.active;
       const promptPattern = /^(?:[>$#]|PS(?:\s|>))/;
-      const currentCursor = {
-        x: Math.min(Math.max(0, buffer.cursorX), Math.max(0, terminal.cols - 1)),
-        y: Math.min(Math.max(0, buffer.cursorY), Math.max(0, terminal.rows - 1)),
+      const clampX = (x: number) => Math.min(Math.max(0, x), Math.max(0, terminal.cols - 1));
+      const clampY = (y: number) => Math.min(Math.max(0, y), Math.max(0, terminal.rows - 1));
+      const cursor = {
+        x: clampX(buffer.cursorX),
+        y: clampY(buffer.cursorY),
       };
-      const scanStart = Math.max(0, terminal.rows - 8);
-      for (let row = terminal.rows - 1; row >= scanStart; row -= 1) {
-        const text = buffer.getLine(buffer.viewportY + row)?.translateToString(true) ?? "";
+
+      const getPromptAnchorCell = (row: number) => {
+        const line = buffer.getLine(buffer.viewportY + row);
+        if (!line) return null;
+        const text = line.translateToString(true);
         const trimmed = text.trimStart();
-        if (!trimmed || !promptPattern.test(trimmed)) continue;
-        const leadingSpaces = text.length - trimmed.length;
-        return {
-          x: Math.min(Math.max(1, terminal.cols - 1), Math.max(leadingSpaces + 1, text.length + 1)),
-          y: row,
-        };
+        if (!trimmed || !promptPattern.test(trimmed)) return null;
+
+        for (let x = Math.min(terminal.cols, line.length) - 1; x >= 0; x -= 1) {
+          const cell = line.getCell(x);
+          if (!cell || !cell.getChars().trim()) continue;
+          return { x: clampX(x + Math.max(1, cell.getWidth())), y: row };
+        }
+
+        return { x: clampX(text.length + 1), y: row };
+      };
+
+      if (getPromptAnchorCell(cursor.y)) return cursor;
+
+      for (let offset = 1; offset < terminal.rows; offset += 1) {
+        const upperRow = cursor.y - offset;
+        if (upperRow >= 0) {
+          const anchor = getPromptAnchorCell(upperRow);
+          if (anchor) return anchor;
+        }
+
+        const lowerRow = cursor.y + offset;
+        if (lowerRow < terminal.rows) {
+          const anchor = getPromptAnchorCell(lowerRow);
+          if (anchor) return anchor;
+        }
       }
-      return currentCursor;
+
+      return cursor;
     };
 
     const applyCompositionAnchorFix = () => {
