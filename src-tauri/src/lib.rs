@@ -318,7 +318,7 @@ pub fn run() {
             commands::ccswitch::ccswitch_apply_provider,
             commands::ccswitch::ccswitch_reset_project_provider,
             commands::ccswitch::ccswitch_probe_projects,
-            commands::ccswitch::ccswitch_list_config_snippets,
+            commands::ccswitch::ccswitch_list_common_configs,
             commands::git::get_current_git_branch,
         ])
         .run(tauri::generate_context!())

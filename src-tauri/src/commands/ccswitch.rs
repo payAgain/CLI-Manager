@@ -552,36 +552,33 @@ pub async fn ccswitch_probe_projects(
     Ok(badges)
 }
 
-// ---------- Phase 4: Config Snippets ----------
+// ---------- Phase 4: Common Config (from settings table) ----------
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct CcSwitchConfigSnippet {
-    id: String,
-    name: String,
-    description: Option<String>,
+pub struct CcSwitchCommonConfig {
+    app_type: String,
     config_json: String,
-    created_at: Option<i64>,
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct CcSwitchConfigSnippetsResponse {
+pub struct CcSwitchCommonConfigResponse {
     db_path: String,
-    snippets: Vec<CcSwitchConfigSnippet>,
+    common_configs: Vec<CcSwitchCommonConfig>,
 }
 
 #[tauri::command]
-pub async fn ccswitch_list_config_snippets(
+pub async fn ccswitch_list_common_configs(
     app: tauri::AppHandle,
     db_path: Option<String>,
-) -> Result<CcSwitchConfigSnippetsResponse, String> {
+) -> Result<CcSwitchCommonConfigResponse, String> {
     let path = resolve_db_path(&app, db_path)?;
     let mut conn = open_db_readonly(&path).await?;
 
-    // Error tolerance: check if table exists first
+    // Error tolerance: check if settings table exists
     let table_exists = sqlx::query(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name='config_snippets'"
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='settings'"
     )
     .fetch_optional(&mut conn)
     .await
@@ -589,41 +586,45 @@ pub async fn ccswitch_list_config_snippets(
     .is_some();
 
     if !table_exists {
-        // Table doesn't exist, return empty list
         let _ = conn.close().await;
-        return Ok(CcSwitchConfigSnippetsResponse {
+        return Ok(CcSwitchCommonConfigResponse {
             db_path: path.to_string_lossy().into_owned(),
-            snippets: Vec::new(),
+            common_configs: Vec::new(),
         });
     }
 
+    // Query all common_config_* keys from settings table
     let rows = sqlx::query(
-        "SELECT id, name, description, config_json, created_at \
-         FROM config_snippets ORDER BY name",
+        "SELECT key, value FROM settings WHERE key LIKE 'common_config_%' ORDER BY key",
     )
     .fetch_all(&mut conn)
     .await
     .map_err(|err| format!("db_query_failed: {err}"))?;
 
-    let snippets = rows
+    let common_configs = rows
         .iter()
-        .map(|row| -> Result<CcSwitchConfigSnippet, String> {
-            let map_err = |err: sqlx::Error| format!("db_query_failed: {err}");
-            Ok(CcSwitchConfigSnippet {
-                id: row.try_get("id").map_err(map_err)?,
-                name: row.try_get("name").map_err(map_err)?,
-                description: row.try_get("description").map_err(map_err)?,
-                config_json: row.try_get("config_json").map_err(map_err)?,
-                created_at: row.try_get("created_at").map_err(map_err)?,
-            })
+        .filter_map(|row| {
+            let key: Result<String, _> = row.try_get("key");
+            let value: Result<String, _> = row.try_get("value");
+
+            if let (Ok(key), Ok(value)) = (key, value) {
+                // Extract app_type from key: "common_config_claude" -> "claude"
+                if let Some(app_type) = key.strip_prefix("common_config_") {
+                    return Some(CcSwitchCommonConfig {
+                        app_type: app_type.to_string(),
+                        config_json: value,
+                    });
+                }
+            }
+            None
         })
-        .collect::<Result<Vec<_>, _>>()?;
+        .collect();
 
     let _ = conn.close().await;
 
-    Ok(CcSwitchConfigSnippetsResponse {
+    Ok(CcSwitchCommonConfigResponse {
         db_path: path.to_string_lossy().into_owned(),
-        snippets,
+        common_configs,
     })
 }
 

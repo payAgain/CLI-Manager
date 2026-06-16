@@ -20,6 +20,22 @@ import {
 import { AlertTriangle, Copy } from "@/components/icons";
 import { useSettingsStore } from "@/stores/settingsStore";
 
+// 深度合并对象（target 覆盖 source）
+function deepMerge(source: any, target: any): any {
+  if (typeof target !== "object" || target === null) return target;
+  if (typeof source !== "object" || source === null) return target;
+
+  const result = { ...source };
+  for (const key of Object.keys(target)) {
+    if (typeof target[key] === "object" && target[key] !== null && !Array.isArray(target[key])) {
+      result[key] = deepMerge(result[key], target[key]);
+    } else {
+      result[key] = target[key];
+    }
+  }
+  return result;
+}
+
 interface CcSwitchProvider {
   id: string;
   appType: string;
@@ -43,17 +59,14 @@ interface CcSwitchProvidersResponse {
   providers: CcSwitchProvider[];
 }
 
-interface CcSwitchConfigSnippet {
-  id: string;
-  name: string;
-  description: string | null;
+interface CcSwitchCommonConfig {
+  appType: string;
   configJson: string;
-  createdAt: number | null;
 }
 
-interface CcSwitchConfigSnippetsResponse {
+interface CcSwitchCommonConfigResponse {
   dbPath: string;
-  snippets: CcSwitchConfigSnippet[];
+  commonConfigs: CcSwitchCommonConfig[];
 }
 
 const jsonCodeBlockStyles = `
@@ -204,67 +217,59 @@ function ProviderDetailPanel({ provider }: { provider: CcSwitchProvider }) {
   const displayedEnv = envExpanded ? envEntries : envEntries.slice(0, 5);
   const hasMoreEnv = envEntries.length > 5;
 
-  // 配置片段加载
-  const [snippets, setSnippets] = useState<CcSwitchConfigSnippet[]>([]);
-  const [snippetsLoaded, setSnippetsLoaded] = useState(false);
+  // 通用配置加载
+  const [commonConfigs, setCommonConfigs] = useState<CcSwitchCommonConfig[]>([]);
+  const [commonConfigsLoaded, setCommonConfigsLoaded] = useState(false);
 
-  // 加载配置片段
+  // 加载通用配置
   useEffect(() => {
-    const loadSnippets = async () => {
+    const loadCommonConfigs = async () => {
       try {
-        const response = await invoke<CcSwitchConfigSnippetsResponse>(
-          "ccswitch_list_config_snippets",
+        const response = await invoke<CcSwitchCommonConfigResponse>(
+          "ccswitch_list_common_configs",
           { dbPath: ccSwitchDbPath ?? undefined }
         );
-        console.log("🔍 [配置片段调试] 加载到的片段数量:", response.snippets.length);
-        console.log("🔍 [配置片段调试] 片段详情:", response.snippets);
-        setSnippets(response.snippets);
+        console.log("🔍 [通用配置调试] 加载到的配置数量:", response.commonConfigs.length);
+        console.log("🔍 [通用配置调试] 配置详情:", response.commonConfigs);
+        setCommonConfigs(response.commonConfigs);
       } catch (err) {
-        console.error("🔍 [配置片段调试] 加载失败:", err);
-        setSnippets([]);
+        console.error("🔍 [通用配置调试] 加载失败:", err);
+        setCommonConfigs([]);
       } finally {
-        setSnippetsLoaded(true);
+        setCommonConfigsLoaded(true);
       }
     };
-    void loadSnippets();
+    void loadCommonConfigs();
   }, [ccSwitchDbPath]);
 
-  // 解析供应商配置中的片段引用
-  const { providerConfig, referencedSnippets } = useMemo(() => {
+  // 解析供应商配置
+  const providerConfig = useMemo(() => {
     try {
-      const config = JSON.parse(provider.rawSettingsConfig);
-      console.log("🔍 [供应商配置调试] 供应商:", provider.name, "appType:", provider.appType);
-      console.log("🔍 [供应商配置调试] rawSettingsConfig 完整内容:", config);
-      console.log("🔍 [供应商配置调试] 顶层字段:", Object.keys(config));
-      console.log("🔍 [供应商配置调试] config_snippet_refs:", config.config_snippet_refs);
-      const refs = config.config_snippet_refs || [];
-      const referenced = refs
-        .map((refId: string) => snippets.find((s) => s.id === refId))
-        .filter(Boolean);
-      return { providerConfig: config, referencedSnippets: referenced };
-    } catch (err) {
-      console.error("🔍 [供应商配置调试] 解析失败:", err, "原始内容:", provider.rawSettingsConfig);
-      return { providerConfig: null, referencedSnippets: [] };
+      return JSON.parse(provider.rawSettingsConfig);
+    } catch {
+      return null;
     }
-  }, [provider.rawSettingsConfig, provider.name, provider.appType, snippets]);
+  }, [provider.rawSettingsConfig]);
 
-  // 合并配置：片段 → 供应商配置（供应商优先）
+  // 匹配当前 appType 的通用配置（common_config_{appType}）
+  const commonConfig = useMemo(() => {
+    const match = commonConfigs.find((c) => c.appType === provider.appType);
+    if (!match) return null;
+    try {
+      return JSON.parse(match.configJson);
+    } catch {
+      return match.configJson; // 解析失败时保留原始文本
+    }
+  }, [commonConfigs, provider.appType]);
+
+  // 合并配置：通用配置 → 供应商配置（供应商优先覆盖）
   const mergedConfig = useMemo(() => {
-    if (!snippetsLoaded || !providerConfig) return null;
-    if (referencedSnippets.length === 0) return providerConfig;
+    if (!commonConfigsLoaded || !providerConfig) return null;
+    if (!commonConfig || typeof commonConfig === "string") return providerConfig;
 
-    let merged = {};
-    for (const snippet of referencedSnippets) {
-      try {
-        const snippetConfig = JSON.parse(snippet.configJson);
-        merged = { ...merged, ...snippetConfig };
-      } catch {
-        // 片段解析失败，跳过
-      }
-    }
-    merged = { ...merged, ...providerConfig };
-    return merged;
-  }, [providerConfig, referencedSnippets, snippetsLoaded]);
+    // 深度合并：通用配置打底，供应商配置覆盖
+    return deepMerge(commonConfig, providerConfig);
+  }, [providerConfig, commonConfig, commonConfigsLoaded]);
 
   // 切换供应商时重置折叠状态
   useEffect(() => {
@@ -401,8 +406,8 @@ function ProviderDetailPanel({ provider }: { provider: CcSwitchProvider }) {
         <Tabs defaultValue="provider" variant="outline">
           <Tabs.List>
             <Tabs.Tab value="provider">供应商配置</Tabs.Tab>
-            {snippetsLoaded && referencedSnippets.length > 0 && (
-              <Tabs.Tab value="snippets">通用片段 ({referencedSnippets.length})</Tabs.Tab>
+            {commonConfigsLoaded && commonConfig && (
+              <Tabs.Tab value="common">通用配置 ({provider.appType})</Tabs.Tab>
             )}
             <Tabs.Tab value="merged">完整配置</Tabs.Tab>
           </Tabs.List>
@@ -426,38 +431,21 @@ function ProviderDetailPanel({ provider }: { provider: CcSwitchProvider }) {
             )}
           </Tabs.Panel>
 
-          {/* Tab 2: 通用片段 */}
-          {snippetsLoaded && referencedSnippets.length > 0 && (
-            <Tabs.Panel value="snippets" pt="xs">
-              <Stack gap="sm">
-                {referencedSnippets.map((snippet: CcSwitchConfigSnippet) => (
-                  <Box key={snippet.id}>
-                    <Group justify="space-between" mb="xs">
-                      <Box>
-                        <Text size="xs" fw={500} c="var(--on-surface)">
-                          {snippet.name}
-                        </Text>
-                        {snippet.description && (
-                          <Text size="xs" c="var(--text-muted)">
-                            {snippet.description}
-                          </Text>
-                        )}
-                      </Box>
-                      <CopyButton value={snippet.configJson} label="已复制片段" />
-                    </Group>
-                    <JsonCodeBlock
-                      json={(() => {
-                        try {
-                          return JSON.stringify(JSON.parse(snippet.configJson), null, 2);
-                        } catch {
-                          return snippet.configJson;
-                        }
-                      })()}
-                      maxHeight="200px"
-                    />
-                  </Box>
-                ))}
-              </Stack>
+          {/* Tab 2: 通用配置 */}
+          {commonConfigsLoaded && commonConfig && (
+            <Tabs.Panel value="common" pt="xs">
+              <Group justify="space-between" mb="xs">
+                <Text size="xs" c="var(--text-muted)">
+                  common_config_{provider.appType}（来自 settings 表）
+                </Text>
+                <CopyButton
+                  value={typeof commonConfig === "string" ? commonConfig : JSON.stringify(commonConfig, null, 2)}
+                  label="已复制通用配置"
+                />
+              </Group>
+              <JsonCodeBlock
+                json={typeof commonConfig === "string" ? commonConfig : JSON.stringify(commonConfig, null, 2)}
+              />
             </Tabs.Panel>
           )}
 
@@ -465,9 +453,9 @@ function ProviderDetailPanel({ provider }: { provider: CcSwitchProvider }) {
           <Tabs.Panel value="merged" pt="xs">
             <Group justify="space-between" mb="xs">
               <Text size="xs" c="var(--text-muted)">
-                {snippetsLoaded && referencedSnippets.length > 0
-                  ? "供应商配置 + 通用片段合并结果"
-                  : "供应商配置（无片段引用）"}
+                {commonConfigsLoaded && commonConfig
+                  ? "通用配置 + 供应商配置合并结果（供应商优先）"
+                  : "供应商配置（无通用配置）"}
               </Text>
               <CopyButton
                 value={mergedConfig ? JSON.stringify(mergedConfig, null, 2) : provider.rawSettingsConfig}
