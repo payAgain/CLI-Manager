@@ -26,6 +26,7 @@ export function TokenUsageCard({ stats }: { stats: TokenStats }) {
   return (
     <StatCard
       icon={<Coins size={13} />}
+      iconColor={TERM.yellow}
       title="Token 用量"
       headerRight={<HeaderPill>{formatCompactCount(animatedTotal)}</HeaderPill>}
     >
@@ -109,6 +110,7 @@ export function ModelContextCard({
   return (
     <StatCard
       icon={<Cpu size={13} />}
+      iconColor={TERM.magenta}
       title="模型与上下文"
       headerRight={
         usagePercent !== null ? (
@@ -200,6 +202,7 @@ export function TrendCard({ session }: { session: HistorySessionDetail | null })
   return (
     <StatCard
       icon={<Activity size={13} />}
+      iconColor={TERM.cyan}
       title="Token 趋势"
       headerRight={
         hasTrend ? (
@@ -289,6 +292,7 @@ export function ToolsCard({ session }: { session: HistorySessionDetail | null })
   return (
     <StatCard
       icon={<Wrench size={13} />}
+      iconColor={TERM.blue}
       title="工具与扩展"
       headerRight={
         toolCalls > 0 ? (
@@ -327,6 +331,7 @@ export function TodayUsageCard({
   return (
     <StatCard
       icon={<CalendarClock size={13} />}
+      iconColor={TERM.green}
       title="今日项目用量"
       headerRight={
         stats && stats.sessions > 0 ? <HeaderPill>{stats.sessions} 会话</HeaderPill> : undefined

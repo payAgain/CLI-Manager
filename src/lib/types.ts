@@ -53,6 +53,8 @@ export type TreeNode =
   | { type: "group"; group: Group; children: TreeNode[] }
   | { type: "project"; project: Project };
 
+export type TerminalSessionKind = "pty" | "subagent-transcript";
+
 export interface TerminalSession {
   id: string;
   projectId?: string;
@@ -63,6 +65,14 @@ export interface TerminalSession {
   envVars?: Record<string, string>;
   startupCmd?: string;
   cliSessionId?: string;
+  /** 会话类型；缺省视为 "pty"。"subagent-transcript" 为只读转录伪会话（无 PTY、不持久化）。 */
+  kind?: TerminalSessionKind;
+  /** 仅 kind="subagent-transcript" 时存在：子 Agent 元数据。 */
+  subagent?: {
+    parentSessionId: string;
+    agentId?: string;
+    agentType?: string;
+  };
 }
 
 export interface PersistedSplit {

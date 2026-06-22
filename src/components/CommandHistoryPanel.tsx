@@ -12,9 +12,11 @@ import { logError } from "../lib/logger";
 interface CommandHistoryPanelProps {
   compact?: boolean;
   showText?: boolean;
+  popoverSide?: "top" | "right" | "bottom" | "left";
+  toneClassName?: string;
 }
 
-export function CommandHistoryPanel({ compact = false, showText = true }: CommandHistoryPanelProps) {
+export function CommandHistoryPanel({ compact = false, showText = true, popoverSide = "bottom", toneClassName = "" }: CommandHistoryPanelProps) {
   const [open, setOpen] = useState(false);
   const [panelLoading, setPanelLoading] = useState(false);
   const { entries, searchQuery, setSearchQuery, fetchAll } = useCommandHistoryStore();
@@ -75,7 +77,7 @@ export function CommandHistoryPanel({ compact = false, showText = true }: Comman
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
         <button
-          className={triggerClassName}
+          className={`${triggerClassName} ${toneClassName}`.trim()}
           data-active={open ? "true" : "false"}
           title="命令历史"
           aria-label={open ? "关闭命令历史面板" : "打开命令历史面板"}
@@ -84,7 +86,12 @@ export function CommandHistoryPanel({ compact = false, showText = true }: Comman
           {showText && <span>命令历史</span>}
         </button>
       </PopoverTrigger>
-      <PopoverContent id="command-history-panel" align="end" className="w-80">
+      <PopoverContent
+        id="command-history-panel"
+        align={popoverSide === "right" ? "start" : "end"}
+        side={popoverSide}
+        className="w-80"
+      >
         <div className="p-2">
           <div className="ui-search-focus-shell flex items-center gap-2 rounded-lg bg-surface-container-highest px-2 py-1">
             <Search size={12} strokeWidth={1.5} />

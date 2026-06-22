@@ -4,7 +4,7 @@ import { Copy, Search, X } from "lucide-react";
 import { toast } from "sonner";
 import type { HistorySessionView, PromptScope } from "../../lib/types";
 import { useHistoryStore } from "../../stores/historyStore";
-import { HistoryMarkdownContent } from "../history/HistoryMarkdownContent";
+import { MarkdownContent } from "../ui/MarkdownContent";
 
 interface PromptLibraryProps {
   open: boolean;
@@ -250,7 +250,7 @@ export function PromptLibrary({
                     </div>
                   </div>
                   <div className="mt-2 rounded-md border p-2" style={{ borderColor: "var(--border)", backgroundColor: "var(--bg-secondary)" }}>
-                    <HistoryMarkdownContent content={item.prompt} query={query} compact />
+                    <MarkdownContent content={item.prompt} query={query} compact />
                   </div>
                 </div>
               );

@@ -9,9 +9,9 @@ import {
   RotateCw,
 } from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import ReactMarkdown from "react-markdown";
 import { useTerminalStore } from "../../stores/terminalStore";
 import { useUpdateStore } from "../../stores/updateStore";
+import { MarkdownContent } from "../ui/MarkdownContent";
 
 export function AboutSection() {
   const {
@@ -262,9 +262,7 @@ export function AboutSection() {
           {updateInfo.releaseNotes && (
             <div className="mt-3 border-t border-border/50 pt-3">
               <div className="mb-1 text-xs font-medium text-on-surface-variant">更新说明</div>
-              <div className="prose prose-sm prose-invert max-w-none text-xs text-on-surface-variant [&_h1]:text-sm [&_h1]:font-semibold [&_h2]:text-xs [&_h2]:font-semibold [&_h3]:text-xs [&_h3]:font-medium [&_h4]:text-xs [&_h4]:font-medium [&_h5]:text-xs [&_h6]:text-xs [&_li]:my-0.5 [&_p]:my-1 [&_ul]:my-1">
-                <ReactMarkdown>{updateInfo.releaseNotes}</ReactMarkdown>
-              </div>
+              <MarkdownContent content={updateInfo.releaseNotes} linkBehavior="open" />
             </div>
           )}
 

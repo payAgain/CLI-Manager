@@ -160,11 +160,13 @@ export function useCountUp(target: number, duration = 700): number {
 
 export function StatCard({
   icon,
+  iconColor = TERM.green,
   title,
   headerRight,
   children,
 }: {
   icon: React.ReactNode;
+  iconColor?: string;
   title: string;
   headerRight?: React.ReactNode;
   children: React.ReactNode;
@@ -178,7 +180,7 @@ export function StatCard({
         <div className="flex min-w-0 items-center gap-2">
           <span
             className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md"
-            style={{ backgroundColor: `${TERM.green}1A`, color: TERM.green }}
+            style={{ backgroundColor: `${iconColor}1A`, color: iconColor }}
           >
             {icon}
           </span>

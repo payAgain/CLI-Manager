@@ -4,7 +4,7 @@ import { useEffect, useMemo } from "react";
 import { toast } from "sonner";
 import type { HistoryMessage, HistorySessionDetail, HistorySessionView } from "../../lib/types";
 import { EmptyState } from "../ui/EmptyState";
-import { HistoryMarkdownContent } from "./HistoryMarkdownContent";
+import { MarkdownContent } from "../ui/MarkdownContent";
 import { MetaEditor } from "./MetaEditor";
 import { formatTime, makeSessionLabel, roleBadge } from "./historyViewUtils";
 import type { RefObject } from "react";
@@ -267,7 +267,7 @@ export function SessionDetailPane({
                     </span>
                     <span>{msg.timestamp ?? "-"}</span>
                   </div>
-                  <HistoryMarkdownContent content={msg.content} query={sessionQuery} />
+                  <MarkdownContent content={msg.content} query={sessionQuery} />
                 </div>
               );
             })}

@@ -18,8 +18,8 @@ interface TerminalSidePanelProps {
 }
 
 const STORAGE_KEY = "cli-manager:terminal-side-panel-width";
-const DEFAULT_WIDTH = 290;
-const MIN_WIDTH = 220;
+const DEFAULT_WIDTH = 243;
+const MIN_WIDTH = 243;
 const MAX_WIDTH = 500;
 
 function clampWidth(width: number): number {

@@ -10,4 +10,5 @@ pub mod hook_settings;
 pub mod ccusage;
 pub mod ccswitch;
 pub mod git;
+pub mod subagent_transcript;
 pub mod model_pricing;

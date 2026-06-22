@@ -16,7 +16,7 @@ import {
   type DragOverEvent,
   type DragStartEvent,
 } from "@dnd-kit/core";
-import { SortableContext, arrayMove, horizontalListSortingStrategy, useSortable } from "@dnd-kit/sortable";
+import { SortableContext, arrayMove, horizontalListSortingStrategy, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { useTerminalStore, type SplitTerminalOptions, type TabNotificationState } from "../stores/terminalStore";
 import { useSettingsStore } from "../stores/settingsStore";
@@ -30,8 +30,9 @@ import { CommandTemplatePanel } from "./CommandTemplatePanel";
 import { CommandHistoryPanel } from "./CommandHistoryPanel";
 import { TerminalStatsPanel } from "./terminal/TerminalStatsPanel";
 import { TerminalSidePanel, type TerminalSidePanelTab } from "./terminal/TerminalSidePanel";
+import { SubagentTranscriptView } from "./terminal/SubagentTranscriptView";
 import { openWindowsTerminal } from "../lib/externalTerminal";
-import { Terminal, Plus, ListClockIcon, X, Maximize2, Minimize2, ChevronDown, ChevronRight, BarChart3, GitBranch } from "./icons";
+import { Terminal, Plus, ListClockIcon, X, Maximize2, Minimize2, ChevronDown, ChevronRight, BarChart3, GitBranch, Sparkles } from "./icons";
 import { VendorIcon, inferVendor, type VendorKey } from "./VendorIcon";
 import { EmptyState } from "./ui/EmptyState";
 import { useHistoryStore } from "../stores/historyStore";
@@ -101,6 +102,15 @@ type SplitPickerState = {
   y: number;
 } | null;
 
+type AgentSplitKind = "claude" | "codex";
+
+type AgentSplitOption = {
+  kind: AgentSplitKind;
+  label: string;
+  command: string;
+  options: SplitTerminalOptions;
+};
+
 type PaneDropTarget =
   | { type: "center"; paneId: string }
   | { type: "edge"; paneId: string; edge: TerminalPaneDropEdge };
@@ -155,6 +165,38 @@ function inferSessionVendor(session: TerminalSession): VendorKey | null {
   return inferVendor(`${session.startupCmd ?? ""} ${session.title}`);
 }
 
+function inferAgentSplitKind(raw: string | null | undefined): AgentSplitKind | null {
+  const normalized = raw?.trim().toLowerCase();
+  if (!normalized) return null;
+  if (normalized.includes("claude")) return "claude";
+  if (normalized.includes("codex") || normalized === "code") return "codex";
+  return null;
+}
+
+function createAgentSplitOption(session: TerminalSession, project?: Project): AgentSplitOption | null {
+  const kind =
+    inferAgentSplitKind(session.startupCmd) ??
+    inferAgentSplitKind(project?.startup_cmd) ??
+    inferAgentSplitKind(project?.cli_tool) ??
+    inferAgentSplitKind(session.title);
+  if (!kind) return null;
+
+  const label = kind === "claude" ? "Claude" : "Codex";
+  return {
+    kind,
+    label,
+    command: kind,
+    options: {
+      projectId: session.projectId ?? project?.id,
+      cwd: session.cwd ?? project?.path,
+      title: `${label} 子 Agent`,
+      startupCmd: kind,
+      envVars: session.envVars ? { ...session.envVars } : parseProjectEnvVars(project),
+      shell: session.shell ?? (project?.shell && project.shell !== "powershell" ? project.shell : undefined),
+    },
+  };
+}
+
 function formatTabStatusUpdatedAt(value: string | null | undefined): string {
   if (!value) return "无";
   const date = new Date(value);
@@ -162,26 +204,30 @@ function formatTabStatusUpdatedAt(value: string | null | undefined): string {
   return date.toLocaleString();
 }
 
-function buildProjectSplitOptions(project: Project): SplitTerminalOptions {
-  const cmd = project.startup_cmd || project.cli_tool || undefined;
-  const shell = project.shell && project.shell !== "powershell" ? project.shell : undefined;
-  let envVars: Record<string, string> | undefined;
+function parseProjectEnvVars(project?: Project): Record<string, string> | undefined {
+  if (!project) return undefined;
   try {
     const parsed = JSON.parse(project.env_vars || "{}");
     if (typeof parsed === "object" && parsed !== null) {
       const entries = Object.entries(parsed).filter((entry): entry is [string, string] => typeof entry[1] === "string");
-      if (entries.length > 0) envVars = Object.fromEntries(entries);
+      if (entries.length > 0) return Object.fromEntries(entries);
     }
   } catch {
     // ignore invalid env json
   }
+  return undefined;
+}
+
+function buildProjectSplitOptions(project: Project): SplitTerminalOptions {
+  const cmd = project.startup_cmd || project.cli_tool || undefined;
+  const shell = project.shell && project.shell !== "powershell" ? project.shell : undefined;
 
   return {
     projectId: project.id,
     cwd: project.path,
     title: project.cli_tool ? `${project.name} (${project.cli_tool})` : project.name,
     startupCmd: cmd,
-    envVars,
+    envVars: parseProjectEnvVars(project),
     shell,
   };
 }
@@ -413,7 +459,6 @@ interface PaneTabBarProps {
   onMoveToPane: (sessionId: string, paneId: string) => void;
   onHideBackground: (sessionId: string) => void;
   onShowBackground: (sessionId: string) => void;
-  toolbarActions?: ReactNode;
   variant?: "global" | "pane";
 }
 
@@ -440,7 +485,6 @@ function PaneTabBar({
   onMoveToPane,
   onHideBackground,
   onShowBackground,
-  toolbarActions,
   variant = "pane",
   resolvedTheme,
   terminalThemeName,
@@ -792,7 +836,6 @@ function PaneTabBar({
           </Popover>
         </>
       )}
-      {toolbarActions}
     </div>
   );
 }
@@ -828,7 +871,6 @@ interface PaneLeafViewProps {
   onMoveToPane: (sessionId: string, paneId: string) => void;
   onHideBackground: (sessionId: string) => void;
   onShowBackground: (sessionId: string) => void;
-  toolbarActions?: ReactNode;
   hideTabBar?: boolean;
 }
 
@@ -863,7 +905,6 @@ function PaneLeafView({
   onMoveToPane,
   onHideBackground,
   onShowBackground,
-  toolbarActions,
   hideTabBar = false,
 }: PaneLeafViewProps) {
   const paneSessions = pane.sessionIds
@@ -896,7 +937,6 @@ function PaneLeafView({
           onMoveToPane={onMoveToPane}
           onHideBackground={onHideBackground}
           onShowBackground={onShowBackground}
-          toolbarActions={toolbarActions}
           resolvedTheme={resolvedTheme}
           terminalThemeName={terminalThemeName}
           lightThemePalette={lightThemePalette}
@@ -915,36 +955,40 @@ function PaneLeafView({
             className="absolute inset-0"
             style={{ display: session.id === pane.activeSessionId ? "block" : "none" }}
           >
-            <XTermTerminal
-              sessionId={session.id}
-              isActive={!historyActive && session.id === activeSessionId}
-              isVisible={!historyActive && session.id === pane.activeSessionId}
-              fontSize={fontSize}
-              fontFamily={fontFamily}
-              resolvedTheme={resolvedTheme}
-              terminalThemeName={terminalThemeName}
-              lightThemePalette={lightThemePalette}
-              darkThemePalette={darkThemePalette}
-              onNewTab={onNewTab}
-              onCloseSession={() => onCloseSession(session.id)}
-              onCloseOthers={
-                pane.sessionIds.length > 1
-                  ? () => pane.sessionIds.filter((id) => id !== session.id).forEach(onCloseSession)
-                  : undefined
-              }
-              onCloseToLeft={
-                pane.sessionIds.indexOf(session.id) > 0
-                  ? () => pane.sessionIds.slice(0, pane.sessionIds.indexOf(session.id)).forEach(onCloseSession)
-                  : undefined
-              }
-              onCloseToRight={
-                pane.sessionIds.indexOf(session.id) < pane.sessionIds.length - 1
-                  ? () => pane.sessionIds.slice(pane.sessionIds.indexOf(session.id) + 1).forEach(onCloseSession)
-                  : undefined
-              }
-              onSplitRight={() => onOpenSplitPicker(session.id, "horizontal")}
-              onSplitDown={() => onOpenSplitPicker(session.id, "vertical")}
-            />
+            {session.kind === "subagent-transcript" ? (
+              <SubagentTranscriptView sessionId={session.id} title={session.title} />
+            ) : (
+              <XTermTerminal
+                sessionId={session.id}
+                isActive={!historyActive && session.id === activeSessionId}
+                isVisible={!historyActive && session.id === pane.activeSessionId}
+                fontSize={fontSize}
+                fontFamily={fontFamily}
+                resolvedTheme={resolvedTheme}
+                terminalThemeName={terminalThemeName}
+                lightThemePalette={lightThemePalette}
+                darkThemePalette={darkThemePalette}
+                onNewTab={onNewTab}
+                onCloseSession={() => onCloseSession(session.id)}
+                onCloseOthers={
+                  pane.sessionIds.length > 1
+                    ? () => pane.sessionIds.filter((id) => id !== session.id).forEach(onCloseSession)
+                    : undefined
+                }
+                onCloseToLeft={
+                  pane.sessionIds.indexOf(session.id) > 0
+                    ? () => pane.sessionIds.slice(0, pane.sessionIds.indexOf(session.id)).forEach(onCloseSession)
+                    : undefined
+                }
+                onCloseToRight={
+                  pane.sessionIds.indexOf(session.id) < pane.sessionIds.length - 1
+                    ? () => pane.sessionIds.slice(pane.sessionIds.indexOf(session.id) + 1).forEach(onCloseSession)
+                    : undefined
+                }
+                onSplitRight={() => onOpenSplitPicker(session.id, "horizontal")}
+                onSplitDown={() => onOpenSplitPicker(session.id, "vertical")}
+              />
+            )}
           </div>
         ))}
         <PaneContentDropZones paneId={pane.id} activeDropPreview={activeDropPreview} />
@@ -976,13 +1020,15 @@ function PaneContentDropZones({ paneId, activeDropPreview }: { paneId: string; a
 interface SplitProjectPickerProps {
   picker: SplitPickerState;
   projects: Project[];
+  agentOption: AgentSplitOption | null;
   onSelectEmpty: () => void;
+  onSelectAgent: () => void;
   onSelectProject: (project: Project) => void;
   onClose: () => void;
   shouldIgnoreOutsideInteraction: () => boolean;
 }
 
-function SplitProjectPicker({ picker, projects, onSelectEmpty, onSelectProject, onClose, shouldIgnoreOutsideInteraction }: SplitProjectPickerProps) {
+function SplitProjectPicker({ picker, projects, agentOption, onSelectEmpty, onSelectAgent, onSelectProject, onClose, shouldIgnoreOutsideInteraction }: SplitProjectPickerProps) {
   const anchorStyle: CSSProperties = picker
     ? { position: "fixed", left: picker.x, top: picker.y, width: 1, height: 1 }
     : { position: "fixed", left: 0, top: 0, width: 1, height: 1 };
@@ -1010,6 +1056,18 @@ function SplitProjectPicker({ picker, projects, onSelectEmpty, onSelectProject, 
           <Terminal size={13} strokeWidth={1.8} />
           <span>空终端</span>
         </button>
+        {agentOption && (
+          <button
+            type="button"
+            onClick={onSelectAgent}
+            className="ui-interactive mt-1 flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs text-on-surface"
+            title={`启动 ${agentOption.label} 子 Agent：${agentOption.command}`}
+          >
+            <Sparkles size={13} strokeWidth={1.8} />
+            <span className="min-w-0 flex-1 truncate">启动 {agentOption.label} 子 Agent</span>
+            <span className="shrink-0 text-[10px] text-text-muted">{agentOption.command}</span>
+          </button>
+        )}
         <div className="mt-1 max-h-72 overflow-y-auto">
           {projects.map((project) => (
             <button
@@ -1047,7 +1105,7 @@ function SortableToolbarButton({
   };
 
   return (
-    <div ref={setNodeRef} style={style} className="flex h-full items-center" {...attributes} {...listeners}>
+    <div ref={setNodeRef} style={style} className="ui-terminal-action-sort-item flex w-full justify-center" {...attributes} {...listeners}>
       {children}
     </div>
   );
@@ -1123,9 +1181,30 @@ export function TerminalTabs({ fullscreen = false, onToggleFullscreen }: Termina
     () => activeSessionId ? sessions.find((session) => session.id === activeSessionId) ?? null : null,
     [activeSessionId, sessions]
   );
+  // 子 Agent 转录伪会话没有自己的 CLI 会话/项目：实时统计与 Git 面板落到其父终端，
+  // 避免聚焦转录 Tab 时面板被清空/错位。
+  const panelSession = useMemo(() => {
+    if (activeSession?.kind === "subagent-transcript" && activeSession.subagent) {
+      return sessions.find((session) => session.id === activeSession.subagent!.parentSessionId) ?? activeSession;
+    }
+    return activeSession;
+  }, [activeSession, sessions]);
+  const panelSessionId = panelSession?.id ?? null;
   const activeDragSession = useMemo(
     () => activeDragSessionId ? sessions.find((session) => session.id === activeDragSessionId) ?? null : null,
     [activeDragSessionId, sessions]
+  );
+  const splitPickerSession = useMemo(
+    () => splitPicker ? sessions.find((session) => session.id === splitPicker.sessionId) ?? null : null,
+    [sessions, splitPicker]
+  );
+  const splitPickerProject = useMemo(
+    () => splitPickerSession?.projectId ? projects.find((project) => project.id === splitPickerSession.projectId) : undefined,
+    [projects, splitPickerSession]
+  );
+  const splitPickerAgentOption = useMemo(
+    () => splitPickerSession ? createAgentSplitOption(splitPickerSession, splitPickerProject) : null,
+    [splitPickerProject, splitPickerSession]
   );
   const effectiveTerminalThemeName = terminalThemeMode === "follow-app" ? "auto" : terminalThemeName;
   const terminalTheme = useMemo(
@@ -1322,6 +1401,13 @@ export function TerminalTabs({ fullscreen = false, onToggleFullscreen }: Termina
     setActiveWorkspaceTab("terminal");
   }, [handleCloseSplitPicker, splitPicker, splitTerminal]);
 
+  const handleSplitAgent = useCallback(() => {
+    if (!splitPicker || !splitPickerAgentOption) return;
+    void splitTerminal(splitPicker.sessionId, splitPicker.direction, splitPickerAgentOption.options);
+    handleCloseSplitPicker();
+    setActiveWorkspaceTab("terminal");
+  }, [handleCloseSplitPicker, splitPicker, splitPickerAgentOption, splitTerminal]);
+
   const handleSplitProject = useCallback((project: Project) => {
     if (!splitPicker) return;
     void splitTerminal(splitPicker.sessionId, splitPicker.direction, buildProjectSplitOptions(project));
@@ -1432,21 +1518,20 @@ export function TerminalTabs({ fullscreen = false, onToggleFullscreen }: Termina
       new: (
         <button
           onClick={handleNewTab}
-          className="ui-flat-action ui-toolbar-button ui-primary-action"
+          className={showToolbarText ? "ui-flat-action ui-toolbar-button ui-primary-action ui-action-new" : "ui-focus-ring ui-icon-action ui-primary-action ui-action-new"}
           title="新建终端"
           aria-label="新建终端"
         >
-          <Plus size={12} strokeWidth={2} />
-          <Terminal size={14} strokeWidth={1.5} />
-          <span>新建</span>
+          {showToolbarText ? <Terminal size={14} strokeWidth={1.5} /> : <Plus size={15} strokeWidth={2} />}
+          {showToolbarText && <span>新建</span>}
         </button>
       ),
-      templates: <CommandTemplatePanel showText={showToolbarText} />,
-      commandHistory: <CommandHistoryPanel compact showText={showToolbarText} />,
+      templates: <CommandTemplatePanel showText={showToolbarText} popoverSide="left" toneClassName="ui-action-template" />,
+      commandHistory: <CommandHistoryPanel compact showText={showToolbarText} popoverSide="left" toneClassName="ui-action-command-history" />,
       fullscreen: onToggleFullscreen ? (
         <button
           onClick={onToggleFullscreen}
-          className={showToolbarText ? "ui-flat-action ui-toolbar-button" : "ui-focus-ring ui-icon-action"}
+          className={showToolbarText ? "ui-flat-action ui-toolbar-button ui-action-fullscreen" : "ui-focus-ring ui-icon-action ui-action-fullscreen"}
           data-active={fullscreen ? "true" : "false"}
           title={fullscreen ? "退出沉浸式全屏" : "沉浸式全屏"}
           aria-label={fullscreen ? "退出沉浸式全屏" : "进入沉浸式全屏"}
@@ -1461,8 +1546,8 @@ export function TerminalTabs({ fullscreen = false, onToggleFullscreen }: Termina
           onClick={handleOpenHistoryTab}
           className={
             showToolbarText
-              ? `ui-flat-action ui-toolbar-button ${historyOpen ? "ui-primary-action" : "ui-history-primary"}`
-              : "ui-focus-ring ui-icon-action"
+              ? `ui-flat-action ui-toolbar-button ui-action-session-history ${historyOpen ? "ui-primary-action" : "ui-history-primary"}`
+              : "ui-focus-ring ui-icon-action ui-action-session-history"
           }
           data-active={historyOpen ? "true" : "false"}
           title={`会话历史（${sessionHistoryShortcutHint}）`}
@@ -1479,8 +1564,8 @@ export function TerminalTabs({ fullscreen = false, onToggleFullscreen }: Termina
           onClick={handleToggleGitChangesPanel}
           className={
             showToolbarText
-              ? `ui-flat-action ui-toolbar-button ${gitPanelActive ? "ui-primary-action" : ""}`
-              : "ui-focus-ring ui-icon-action"
+              ? `ui-flat-action ui-toolbar-button ui-action-git ${gitPanelActive ? "ui-primary-action" : ""}`
+              : "ui-focus-ring ui-icon-action ui-action-git"
           }
           data-active={gitPanelActive ? "true" : "false"}
           title={gitPanelActive ? "关闭 Git 变更" : "打开 Git 变更"}
@@ -1496,8 +1581,8 @@ export function TerminalTabs({ fullscreen = false, onToggleFullscreen }: Termina
           onClick={handleToggleStatsPanel}
           className={
             showToolbarText
-              ? `ui-flat-action ui-toolbar-button ${statsPanelActive ? "ui-primary-action" : ""}`
-              : "ui-focus-ring ui-icon-action"
+              ? `ui-flat-action ui-toolbar-button ui-action-stats ${statsPanelActive ? "ui-primary-action" : ""}`
+              : "ui-focus-ring ui-icon-action ui-action-stats"
           }
           data-active={statsPanelActive ? "true" : "false"}
           title={statsPanelActive ? "关闭统计面板" : "打开统计面板"}
@@ -1517,7 +1602,7 @@ export function TerminalTabs({ fullscreen = false, onToggleFullscreen }: Termina
         return terminalToolbarVisibility[key as keyof typeof terminalToolbarVisibility] === true;
       })
       .map((key) => ({ id: key, element: buttonMap[key] }))
-      .filter((btn) => btn.element !== null);
+      .filter((btn): btn is { id: string; element: ReactNode } => btn.element != null);
 
     return (
       <DndContext
@@ -1527,18 +1612,22 @@ export function TerminalTabs({ fullscreen = false, onToggleFullscreen }: Termina
         onDragEnd={handleToolbarDragEnd}
         onDragCancel={handleToolbarDragCancel}
       >
-        <div className="ui-terminal-actions flex h-full shrink-0 items-center gap-2 px-2.5">
-          <SortableContext items={visibleButtons.map((b) => b.id)} strategy={horizontalListSortingStrategy}>
+        <nav
+          className="ui-terminal-actions ui-terminal-action-sidebar flex shrink-0 flex-col items-center gap-2"
+          data-show-text={showToolbarText ? "true" : "false"}
+          aria-label="终端操作侧边栏"
+        >
+          <SortableContext items={visibleButtons.map((b) => b.id)} strategy={verticalListSortingStrategy}>
             {visibleButtons.map((btn) => (
               <SortableToolbarButton key={btn.id} id={btn.id} isDragging={activeToolbarDragId === btn.id}>
                 {btn.element}
               </SortableToolbarButton>
             ))}
           </SortableContext>
-        </div>
+        </nav>
         <DragOverlay dropAnimation={null}>
           {activeToolbarDragId && buttonMap[activeToolbarDragId] ? (
-            <div className="cursor-grabbing" style={{ opacity: 1 }}>
+            <div className="ui-terminal-action-drag-overlay cursor-grabbing" style={{ opacity: 1 }}>
               {buttonMap[activeToolbarDragId]}
             </div>
           ) : null}
@@ -1602,7 +1691,6 @@ export function TerminalTabs({ fullscreen = false, onToggleFullscreen }: Termina
       onMoveToPane={moveSessionToPane}
       onHideBackground={hideBackgroundForSession}
       onShowBackground={showBackgroundForSession}
-      toolbarActions={renderToolbarActions()}
       hideTabBar={false}
     />
   ), [
@@ -1625,7 +1713,6 @@ export function TerminalTabs({ fullscreen = false, onToggleFullscreen }: Termina
     lightThemePalette,
     moveSessionToPane,
     renameSession,
-    renderToolbarActions,
     resolvedTheme,
     sessions,
     showBackgroundForSession,
@@ -1645,7 +1732,9 @@ export function TerminalTabs({ fullscreen = false, onToggleFullscreen }: Termina
       <SplitProjectPicker
         picker={splitPicker}
         projects={projects}
+        agentOption={splitPickerAgentOption}
         onSelectEmpty={handleSplitEmpty}
+        onSelectAgent={handleSplitAgent}
         onSelectProject={handleSplitProject}
         onClose={handleCloseSplitPicker}
         shouldIgnoreOutsideInteraction={shouldIgnoreSplitPickerOutsideInteraction}
@@ -1706,20 +1795,21 @@ export function TerminalTabs({ fullscreen = false, onToggleFullscreen }: Termina
             <TerminalSidePanel
               open={sidePanelOpen}
               activeTab={sidePanelTab}
-              activeSessionId={activeSessionId}
-              projectPath={activeSession?.cwd ?? null}
+              activeSessionId={panelSessionId}
+              projectPath={panelSession?.cwd ?? null}
               onTabChange={handleSidePanelTabChange}
             />
           ) : (
             <>
-              <TerminalStatsPanel activeSessionId={activeSessionId} open={statsOpen} />
+              <TerminalStatsPanel activeSessionId={panelSessionId} open={statsOpen} />
               {gitOpen && (
                 <Suspense fallback={null}>
-                  <GitChangesPanel open={gitOpen} projectPath={activeSession?.cwd ?? null} />
+                  <GitChangesPanel open={gitOpen} projectPath={panelSession?.cwd ?? null} />
                 </Suspense>
               )}
             </>
           )}
+          {renderToolbarActions()}
         </div>
       </div>
     </div>

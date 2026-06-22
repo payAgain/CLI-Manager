@@ -143,6 +143,7 @@ function SessionInfoCard({ session, statsSession, projectName, projectPath, curr
   return (
     <StatCard
       icon={<FolderGit2 size={13} />}
+      iconColor={TERM.cyan}
       title="会话"
       headerRight={
         <SourcePill source={session.source} />
@@ -360,7 +361,7 @@ export function TerminalStatsPanel({ activeSessionId, open, visible = true, embe
 
   const containerClassName = embedded
     ? "flex h-full min-h-0 flex-col gap-2 overflow-y-auto p-2 font-mono ui-thin-scroll"
-    : "relative z-[1] flex w-[290px] shrink-0 flex-col gap-2 overflow-y-auto border-l border-border p-2 font-mono ui-thin-scroll";
+    : "relative z-[1] flex w-[203px] shrink-0 flex-col gap-2 overflow-y-auto border-l border-border p-2 font-mono ui-thin-scroll";
   const Container = embedded ? "div" : "aside";
 
   return (

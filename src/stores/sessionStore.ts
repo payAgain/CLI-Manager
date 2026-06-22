@@ -45,8 +45,10 @@ export const useSessionStore = create<SessionStore>(() => ({
 
   saveSessions: async (sessions) => {
     const s = await getStore();
-    await s.set("sessions", sessions);
-    useSessionStore.setState({ sessions });
+    // 转录伪会话（子 Agent）是临时只读视图，绝不持久化/恢复。
+    const persistable = sessions.filter((session) => session.kind !== "subagent-transcript");
+    await s.set("sessions", persistable);
+    useSessionStore.setState({ sessions: persistable });
   },
 
   saveSplits: async (splits) => {

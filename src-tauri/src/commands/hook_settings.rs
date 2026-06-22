@@ -41,6 +41,7 @@ pub struct ToolHookSettingsStatus {
     attention_hook_installed: bool,
     stop_hook_installed: bool,
     failure_hook_installed: bool,
+    subagent_start_hook_installed: bool,
     hooks_feature_installed: bool,
 }
 
@@ -149,7 +150,15 @@ fn install_claude_hooks(claude_dir: &Path) -> Result<(), String> {
     // 先清掉旧版本注册的条目（含历史 .ps1 命令与本应用 __hook 命令），保证安装即升级
     remove_hook_commands(
         &mut settings,
-        &["SessionStart", "UserPromptSubmit", "Notification", "Stop", "StopFailure"],
+        &[
+            "SessionStart",
+            "UserPromptSubmit",
+            "Notification",
+            "Stop",
+            "StopFailure",
+            "SubagentStart",
+            "SubagentStop",
+        ],
         &CLAUDE_LEGACY_SCRIPTS,
     );
     // SessionStart：会话启动/恢复即回传 sessionId，绑定终端 Tab（不改 Tab 状态），
@@ -178,6 +187,18 @@ fn install_claude_hooks(claude_dir: &Path) -> Result<(), String> {
         "StopFailure",
         build_command(&exe, "claude", "StopFailure"),
     );
+    // SubagentStart：Claude 内部子 Agent 启动即上报（空 matcher 匹配全部 agent 类型），
+    // 携带 agentId/agentTranscriptPath，供前端定位并实时呈现子 Agent 转录。
+    add_hook_command(
+        &mut settings,
+        "SubagentStart",
+        build_command(&exe, "claude", "SubagentStart"),
+    );
+    add_hook_command(
+        &mut settings,
+        "SubagentStop",
+        build_command(&exe, "claude", "SubagentStop"),
+    );
     // 清理历史 .ps1 脚本文件（若存在），新方案不再依赖脚本文件
     cleanup_legacy_scripts(&claude_dir.join("hooks"), &CLAUDE_LEGACY_SCRIPTS);
     write_json(&settings_path, &settings)
@@ -191,7 +212,15 @@ fn uninstall_claude_hooks(claude_dir: &Path) -> Result<(), String> {
     ensure_root_object(&settings, "settings.json")?;
     remove_hook_commands(
         &mut settings,
-        &["SessionStart", "UserPromptSubmit", "Notification", "Stop", "StopFailure"],
+        &[
+            "SessionStart",
+            "UserPromptSubmit",
+            "Notification",
+            "Stop",
+            "StopFailure",
+            "SubagentStart",
+            "SubagentStop",
+        ],
         &CLAUDE_LEGACY_SCRIPTS,
     );
     write_json(&settings_path, &settings)
@@ -205,7 +234,7 @@ fn install_codex_hooks(codex_dir: &Path) -> Result<(), String> {
     // 先清掉旧版本注册的条目（含历史 .ps1 命令与本应用 __hook 命令），保证安装即升级
     remove_hook_commands(
         &mut settings,
-        &["SessionStart", "UserPromptSubmit", "PermissionRequest", "Stop"],
+        &["SessionStart", "UserPromptSubmit", "PermissionRequest", "Stop", "SubagentStart", "SubagentStop"],
         &CODEX_LEGACY_SCRIPTS,
     );
     // SessionStart：会话启动/恢复即回传 sessionId 绑定终端 Tab（不改 Tab 状态）
@@ -225,6 +254,16 @@ fn install_codex_hooks(codex_dir: &Path) -> Result<(), String> {
         build_command(&exe, "codex", "PermissionRequest"),
     );
     add_hook_command(&mut settings, "Stop", build_command(&exe, "codex", "Stop"));
+    add_hook_command(
+        &mut settings,
+        "SubagentStart",
+        build_command(&exe, "codex", "SubagentStart"),
+    );
+    add_hook_command(
+        &mut settings,
+        "SubagentStop",
+        build_command(&exe, "codex", "SubagentStop"),
+    );
     ensure_codex_hooks_feature(codex_dir)?;
     // 清理历史 .ps1 脚本文件（若存在），新方案不再依赖脚本文件
     cleanup_legacy_scripts(&codex_dir.join("hooks"), &CODEX_LEGACY_SCRIPTS);
@@ -314,7 +353,7 @@ fn uninstall_codex_hooks(codex_dir: &Path) -> Result<(), String> {
     ensure_root_object(&settings, "hooks.json")?;
     remove_hook_commands(
         &mut settings,
-        &["SessionStart", "UserPromptSubmit", "PermissionRequest", "Stop"],
+        &["SessionStart", "UserPromptSubmit", "PermissionRequest", "Stop", "SubagentStart", "SubagentStop"],
         &CODEX_LEGACY_SCRIPTS,
     );
     write_json(&hooks_path, &settings)
@@ -413,6 +452,8 @@ fn build_claude_status(claude_dir: Option<PathBuf>) -> Result<ToolHookSettingsSt
         stop_hook_installed: registered("Stop"),
         failure_hook_installed: registered("StopFailure"),
         failure_hook_required: true,
+        subagent_start_hook_installed: registered("SubagentStart") && registered("SubagentStop"),
+        subagent_start_hook_required: true,
         hooks_feature_installed: true,
     };
 
@@ -449,6 +490,8 @@ fn build_codex_status(codex_dir: Option<PathBuf>) -> Result<ToolHookSettingsStat
         stop_hook_installed: registered("Stop"),
         failure_hook_installed: false,
         failure_hook_required: false,
+        subagent_start_hook_installed: registered("SubagentStart") && registered("SubagentStop"),
+        subagent_start_hook_required: true,
         hooks_feature_installed: codex_hooks_feature_installed(&config_path)?,
     };
 
@@ -470,6 +513,8 @@ struct ToolChecks {
     stop_hook_installed: bool,
     failure_hook_installed: bool,
     failure_hook_required: bool,
+    subagent_start_hook_installed: bool,
+    subagent_start_hook_required: bool,
     hooks_feature_installed: bool,
 }
 
@@ -487,6 +532,7 @@ fn missing_status() -> Result<ToolHookSettingsStatus, String> {
         attention_hook_installed: false,
         stop_hook_installed: false,
         failure_hook_installed: false,
+        subagent_start_hook_installed: false,
         hooks_feature_installed: false,
     })
 }
@@ -510,6 +556,9 @@ fn status_from_checks(
     if checks.failure_hook_required {
         values.push(checks.failure_hook_installed);
     }
+    if checks.subagent_start_hook_required {
+        values.push(checks.subagent_start_hook_installed);
+    }
     let status = if values.iter().all(|installed| *installed) {
         HookInstallStatus::Installed
     } else if values.iter().any(|installed| *installed) {
@@ -531,6 +580,7 @@ fn status_from_checks(
         attention_hook_installed: checks.attention_hook_installed,
         stop_hook_installed: checks.stop_hook_installed,
         failure_hook_installed: checks.failure_hook_installed,
+        subagent_start_hook_installed: checks.subagent_start_hook_installed,
         hooks_feature_installed: checks.hooks_feature_installed,
     }
 }
@@ -798,11 +848,40 @@ mod tests {
         let hooks_json = fs::read_to_string(codex_dir.join(CODEX_HOOKS_FILE_NAME)).unwrap();
         assert!(hooks_json.contains(HOOK_COMMAND_MARKER));
         assert!(hooks_json.contains("--source codex"));
+        assert!(hooks_json.contains("--event SubagentStart"));
+        assert!(hooks_json.contains("--event SubagentStop"));
         assert!(!hooks_json.contains(".ps1"));
         assert!(!codex_dir
             .join("hooks")
             .join(CODEX_ATTENTION_SCRIPT_NAME)
             .is_file());
+    }
+
+    #[tokio::test]
+    async fn install_codex_registers_and_uninstall_removes_subagent_start() {
+        let tmp = TempDir::new().unwrap();
+        let claude_dir = tmp.path().join("claude");
+        let codex_dir = tmp.path().join("codex");
+        fs::create_dir_all(&claude_dir).unwrap();
+        fs::create_dir_all(&codex_dir).unwrap();
+
+        let status = hook_settings_install_codex(
+            Some(path_to_string(&claude_dir)),
+            Some(path_to_string(&codex_dir)),
+        )
+        .await
+        .unwrap();
+        assert!(status.codex.subagent_start_hook_installed);
+        let after_install = fs::read_to_string(codex_dir.join(CODEX_HOOKS_FILE_NAME)).unwrap();
+        assert!(after_install.contains("--event SubagentStart"));
+        assert!(after_install.contains("--event SubagentStop"));
+
+        hook_settings_uninstall_codex(Some(path_to_string(&claude_dir)), Some(path_to_string(&codex_dir)))
+            .await
+            .unwrap();
+        let after_uninstall = fs::read_to_string(codex_dir.join(CODEX_HOOKS_FILE_NAME)).unwrap();
+        assert!(!after_uninstall.contains("--event SubagentStart"));
+        assert!(!after_uninstall.contains("--event SubagentStop"));
     }
 
     #[tokio::test]
@@ -824,6 +903,28 @@ mod tests {
             .unwrap();
         let after_uninstall = fs::read_to_string(&settings_path).unwrap();
         assert!(!after_uninstall.contains(HOOK_COMMAND_MARKER));
+    }
+
+    #[tokio::test]
+    async fn install_claude_registers_and_uninstall_removes_subagent_start() {
+        let tmp = TempDir::new().unwrap();
+        let claude_dir = tmp.path().join("claude");
+        fs::create_dir_all(&claude_dir).unwrap();
+
+        let status = hook_settings_install(Some(path_to_string(&claude_dir)), None)
+            .await
+            .unwrap();
+        assert!(status.claude.subagent_start_hook_installed);
+        let after_install = fs::read_to_string(claude_dir.join(CLAUDE_SETTINGS_FILE_NAME)).unwrap();
+        assert!(after_install.contains("--event SubagentStart"));
+        assert!(after_install.contains("--event SubagentStop"));
+
+        hook_settings_uninstall(Some(path_to_string(&claude_dir)), None)
+            .await
+            .unwrap();
+        let after_uninstall = fs::read_to_string(claude_dir.join(CLAUDE_SETTINGS_FILE_NAME)).unwrap();
+        assert!(!after_uninstall.contains("--event SubagentStart"));
+        assert!(!after_uninstall.contains("--event SubagentStop"));
     }
 
     #[tokio::test]

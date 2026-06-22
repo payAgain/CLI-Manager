@@ -34,6 +34,11 @@ fn try_notify(source: &str, event: &str) -> Option<()> {
         .get("session_id")
         .and_then(Value::as_str)
         .map(str::to_string);
+    // 子 Agent 事件（SubagentStart 等）字段；hook stdin 为 snake_case。
+    let agent_id = first_string(&hook_input, &["agent_id"]);
+    let agent_type = first_string(&hook_input, &["agent_type"]);
+    let agent_transcript_path = first_string(&hook_input, &["agent_transcript_path"]);
+    let transcript_path = first_string(&hook_input, &["transcript_path"]);
     let cwd = env::current_dir()
         .ok()
         .map(|path| path.to_string_lossy().to_string());
@@ -48,6 +53,10 @@ fn try_notify(source: &str, event: &str) -> Option<()> {
         "sessionId": session_id,
         "cwd": cwd,
         "timestamp": chrono::Utc::now().to_rfc3339(),
+        "agentId": agent_id,
+        "agentType": agent_type,
+        "agentTranscriptPath": agent_transcript_path,
+        "transcriptPath": transcript_path,
     });
     let body = serde_json::to_vec(&payload).ok()?;
 
@@ -94,11 +103,15 @@ fn title_for(source: &str, event: &str) -> &'static str {
         ("codex", "SessionStart") => "Codex CLI session started",
         ("codex", "UserPromptSubmit") => "Codex CLI running",
         ("codex", "Stop") => "Codex CLI done",
+        ("codex", "SubagentStart") => "Codex CLI subagent started",
+        ("codex", "SubagentStop") => "Codex CLI subagent done",
         ("codex", _) => "Codex CLI needs attention", // PermissionRequest
         (_, "SessionStart") => "Claude Code session started",
         (_, "UserPromptSubmit") => "Claude Code running",
         (_, "Stop") => "Claude Code done",
         (_, "StopFailure") => "Claude Code failed",
+        (_, "SubagentStart") => "Claude Code subagent started",
+        (_, "SubagentStop") => "Claude Code subagent done",
         (_, _) => "Claude Code needs attention", // Notification
     }
 }

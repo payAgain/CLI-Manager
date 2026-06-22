@@ -14,7 +14,7 @@ export function SidebarFooter({ collapsed, onOpenSettings, onOpenStats, toolbarV
   const statsButton = toolbarVisibility.stats ? (
     <button
       onClick={onOpenStats}
-      className="ui-focus-ring ui-icon-action"
+      className="ui-focus-ring ui-icon-action ui-sidebar-action-stats"
       title="历史用量统计"
       aria-label="打开历史用量统计看板"
     >
@@ -25,7 +25,7 @@ export function SidebarFooter({ collapsed, onOpenSettings, onOpenStats, toolbarV
   const settingsButton = (
     <button
       onClick={() => onOpenSettings()}
-      className="ui-focus-ring ui-icon-action"
+      className="ui-focus-ring ui-icon-action ui-sidebar-action-settings"
       title="设置"
       aria-label="打开设置"
     >

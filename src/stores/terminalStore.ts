@@ -30,7 +30,15 @@ import {
 
 export type SessionStatus = "running" | "exited" | "error";
 export type CliHookSource = "claude" | "codex";
-export type CliHookEventName = "SessionStart" | "UserPromptSubmit" | "Notification" | "Stop" | "StopFailure" | "PermissionRequest";
+export type CliHookEventName =
+  | "SessionStart"
+  | "UserPromptSubmit"
+  | "Notification"
+  | "Stop"
+  | "StopFailure"
+  | "PermissionRequest"
+  | "SubagentStart"
+  | "SubagentStop";
 export type TabNotificationState = "none" | "running" | "attention" | "done" | "failed";
 export type ShellRuntimeEventName = "command_started" | "command_finished" | "prompt_shown";
 
@@ -75,6 +83,17 @@ export interface CliHookPayload {
   sessionId?: string | null;
   cwd?: string | null;
   timestamp?: string | null;
+  // 仅 SubagentStart 携带：定位子 Agent 转录 jsonl。
+  agentId?: string | null;
+  agentType?: string | null;
+  agentTranscriptPath?: string | null;
+  transcriptPath?: string | null;
+}
+
+/** 子 Agent 转录面板的实时内容（按订阅 key=伪会话 id 存放）。 */
+export interface SubagentTranscriptContent {
+  content: string;
+  ended: boolean;
 }
 
 export interface SplitState {
@@ -118,6 +137,7 @@ interface TerminalStore {
   tabStatusDetails: Record<string, TabStatusDetails>;
   splits: Record<string, SplitState>;
   hiddenBackgroundSessionIds: Set<string>;
+  subagentTranscripts: Record<string, SubagentTranscriptContent>;
   createSession: (projectId?: string, cwd?: string, title?: string, startupCmd?: string, envVars?: Record<string, string>, shell?: string) => Promise<string>;
   closeSession: (id: string) => Promise<void>;
   setActive: (id: string) => void;
@@ -135,6 +155,12 @@ interface TerminalStore {
   restoreSessions: (projectMap: Map<string, Project>, projectHealth: Record<string, boolean>) => Promise<void>;
   hideBackgroundForSession: (sessionId: string) => void;
   showBackgroundForSession: (sessionId: string) => void;
+  /** 收到 CLI SubagentStart：在发起 Tab 所在 pane 分屏出只读转录面板并开始 tail。 */
+  openSubagentTranscript: (payload: CliHookPayload) => Promise<void>;
+  /** 收到 CLI SubagentStop：标记完成并延迟关闭对应子 Agent 转录面板。 */
+  finishSubagentTranscript: (payload: CliHookPayload) => void;
+  /** tail 增量推送：追加（reset=true 时替换）某转录面板内容。 */
+  appendSubagentTranscript: (key: string, content: string, reset: boolean) => void;
 }
 
 // 防止 StrictMode 双重调用
@@ -143,6 +169,9 @@ let restoreInProgress = false;
 // setActive 防抖：高频切换标签时合并持久化写入
 let saveActiveIdTimer: ReturnType<typeof setTimeout> | null = null;
 let paneIdSeq = 0;
+let subagentSeq = 0;
+const subagentCloseTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const SUBAGENT_CLOSE_DELAY_MS = 1500;
 
 function createPaneId() {
   paneIdSeq += 1;
@@ -159,6 +188,23 @@ function scheduleSaveActiveId(id: string | null) {
     saveActiveIdTimer = null;
     useSessionStore.getState().saveActiveSessionId(id).catch(() => {});
   }, 200);
+}
+
+function findSubagentSessionId(sessions: TerminalSession[], payload: CliHookPayload): string | null {
+  const agentId = payload.agentId?.trim() || null;
+  if (agentId) {
+    const byAgent = sessions.find(
+      (session) =>
+        session.kind === "subagent-transcript" &&
+        (session.subagent?.agentId === agentId || session.id === `subagent:${agentId}`)
+    );
+    if (byAgent) return byAgent.id;
+  }
+
+  const candidates = sessions.filter(
+    (session) => session.kind === "subagent-transcript" && session.subagent?.parentSessionId === payload.tabId
+  );
+  return candidates.length === 1 ? candidates[0].id : null;
 }
 
 function summarizeStartupCmd(startupCmd?: string): string | null {
@@ -341,6 +387,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
   tabStatusDetails: {},
   splits: {},
   hiddenBackgroundSessionIds: new Set<string>(),
+  subagentTranscripts: {},
 
   createSession: async (projectId, cwd, title, startupCmd, envVars, shell) => {
     const normalizedInputShell = normalizeShellKey(shell);
@@ -419,6 +466,12 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
 
   closeSession: async (id) => {
     const ptySessionIds = [id];
+    const isTranscript = get().sessions.find((s) => s.id === id)?.kind === "subagent-transcript";
+    const closeTimer = subagentCloseTimers.get(id);
+    if (closeTimer) {
+      clearTimeout(closeTimer);
+      subagentCloseTimers.delete(id);
+    }
 
     // 必须在 set sessions 之前记录原索引，否则后续 findIndex 永远返回 -1，
     // 导致 persistedSplits 永远清不掉（历史 bug）。
@@ -429,6 +482,8 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     const newNotifications = { ...get().tabNotifications };
     const newTabStatuses = { ...get().tabStatuses };
     const newTabStatusDetails = { ...get().tabStatusDetails };
+    const newSubagentTranscripts = { ...get().subagentTranscripts };
+    delete newSubagentTranscripts[id];
     const nextPaneTree = removeSessionFromPaneTree(get().paneTree, id);
     const nextActiveId =
       get().activeSessionId === id
@@ -462,6 +517,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
       tabNotifications: newNotifications,
       tabStatuses: newTabStatuses,
       tabStatusDetails: newTabStatusDetails,
+      subagentTranscripts: newSubagentTranscripts,
       splits: {},
       ...(newHidden !== prevHidden ? { hiddenBackgroundSessionIds: newHidden } : {}),
     });
@@ -478,10 +534,16 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
         await useSessionStore.getState().saveSplits(persistedSplits);
       }
     } finally {
-      for (const sessionId of ptySessionIds) {
-        void invoke("pty_close", { sessionId }).catch((err) => {
-          logError("pty_close invoke failed while closing terminal tab", { sessionId, err });
+      if (isTranscript) {
+        void invoke("subagent_transcript_unsubscribe", { key: id }).catch((err) => {
+          logError("subagent_transcript_unsubscribe failed while closing tab", { key: id, err });
         });
+      } else {
+        for (const sessionId of ptySessionIds) {
+          void invoke("pty_close", { sessionId }).catch((err) => {
+            logError("pty_close invoke failed while closing terminal tab", { sessionId, err });
+          });
+        }
       }
     }
   },
@@ -700,6 +762,11 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     const behavior = useSettingsStore.getState().unsplitBehavior;
     const result = unsplitPaneLeaf(get().paneTree, pane.id, behavior);
     const closedSessionIds = result.closedSessionIds;
+    const transcriptClosedIds = new Set(
+      get().sessions
+        .filter((s) => closedSessionIds.includes(s.id) && s.kind === "subagent-transcript")
+        .map((s) => s.id)
+    );
 
     for (const closedSessionId of closedSessionIds) {
       get().statusListeners[closedSessionId]?.();
@@ -710,6 +777,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     const newNotifications = { ...get().tabNotifications };
     const newTabStatuses = { ...get().tabStatuses };
     const newTabStatusDetails = { ...get().tabStatusDetails };
+    const newSubagentTranscripts = { ...get().subagentTranscripts };
     const newHidden = new Set(get().hiddenBackgroundSessionIds);
     for (const closedSessionId of closedSessionIds) {
       delete newStatuses[closedSessionId];
@@ -717,6 +785,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
       delete newNotifications[closedSessionId];
       delete newTabStatuses[closedSessionId];
       delete newTabStatusDetails[closedSessionId];
+      delete newSubagentTranscripts[closedSessionId];
       newHidden.delete(closedSessionId);
     }
 
@@ -734,6 +803,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
       tabStatusDetails: newTabStatusDetails,
       splits: {},
       hiddenBackgroundSessionIds: newHidden,
+      subagentTranscripts: newSubagentTranscripts,
     });
 
     await useSessionStore.getState().saveSessions(remaining);
@@ -741,9 +811,15 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     await useSessionStore.getState().saveSplits([]);
 
     for (const closedSessionId of closedSessionIds) {
-      void invoke("pty_close", { sessionId: closedSessionId }).catch((err) => {
-        logError("pty_close invoke failed while unsplitting pane", { sessionId: closedSessionId, err });
-      });
+      if (transcriptClosedIds.has(closedSessionId)) {
+        void invoke("subagent_transcript_unsubscribe", { key: closedSessionId }).catch((err) => {
+          logError("subagent_transcript_unsubscribe failed while unsplitting pane", { key: closedSessionId, err });
+        });
+      } else {
+        void invoke("pty_close", { sessionId: closedSessionId }).catch((err) => {
+          logError("pty_close invoke failed while unsplitting pane", { sessionId: closedSessionId, err });
+        });
+      }
     }
   },
 
@@ -917,5 +993,108 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     const next = new Set(current);
     next.delete(sessionId);
     set({ hiddenBackgroundSessionIds: next });
+  },
+
+  openSubagentTranscript: async (payload) => {
+    const parentTabId = payload.tabId;
+    const sessions = get().sessions;
+    // 多窗口隔离：hook 事件广播到所有窗口，仅拥有该 Tab 的窗口处理。
+    if (!sessions.some((session) => session.id === parentTabId)) return;
+
+    const tree = get().paneTree;
+    if (!tree) return;
+
+    const agentId = payload.agentId?.trim() || null;
+    const pseudoId = agentId ? `subagent:${agentId}` : `subagent:${parentTabId}:${(subagentSeq += 1)}`;
+
+    const subscribe = () => {
+      void invoke<string>("subagent_transcript_subscribe", {
+        key: pseudoId,
+        transcriptPath: payload.agentTranscriptPath ?? payload.transcriptPath ?? null,
+        cwd: payload.cwd ?? null,
+        sessionId: payload.sessionId ?? null,
+        agentId,
+      }).catch((err) => logError("subagent_transcript_subscribe failed", { pseudoId, err }));
+    };
+
+    // 去重：同一子 Agent 已有面板则只确保订阅（幂等）。
+    if (sessions.some((session) => session.id === pseudoId)) {
+      subscribe();
+      return;
+    }
+
+    const agentType = payload.agentType?.trim() || null;
+    const pseudoSession: TerminalSession = {
+      id: pseudoId,
+      title: agentType ?? "子 Agent",
+      kind: "subagent-transcript",
+      subagent: {
+        parentSessionId: parentTabId,
+        agentId: agentId ?? undefined,
+        agentType: agentType ?? undefined,
+      },
+    };
+
+    // 并行多子 Agent：同父已有转录面板则作为该 pane 内的 Tab 追加，避免布局被多 pane 撑爆；
+    // 否则从父 Tab 所在 pane 分屏出新面板。
+    const existingTranscript = sessions.find(
+      (session) => session.kind === "subagent-transcript" && session.subagent?.parentSessionId === parentTabId
+    );
+    const existingPane = existingTranscript ? findPaneLeafBySession(tree, existingTranscript.id) : null;
+    let nextTree: TerminalPaneNode | null;
+    if (existingPane) {
+      nextTree = addSessionToPaneTree(tree, existingPane.id, pseudoId, createPaneId).tree;
+    } else {
+      const parentPane = findPaneLeafBySession(tree, parentTabId);
+      if (!parentPane) return;
+      nextTree = splitPaneLeaf(tree, parentPane.id, "horizontal", pseudoId, createPaneId).tree;
+    }
+
+    const newSessions = [...sessions, pseudoSession];
+    // 不抢焦点：保留当前 activeSessionId（终端），转录在其分屏 pane 中即时可见。
+    set((state) => ({
+      sessions: newSessions,
+      paneTree: nextTree,
+      subagentTranscripts: { ...state.subagentTranscripts, [pseudoId]: { content: "", ended: false } },
+    }));
+
+    // 持久化（sessionStore 会过滤掉转录伪会话）。
+    void useSessionStore.getState().saveSessions(newSessions).catch(() => {});
+
+    subscribe();
+  },
+
+  finishSubagentTranscript: (payload) => {
+    const sessionId = findSubagentSessionId(get().sessions, payload);
+    if (!sessionId) return;
+    set((state) => {
+      const prev = state.subagentTranscripts[sessionId];
+      if (!prev) return state;
+      return {
+        subagentTranscripts: { ...state.subagentTranscripts, [sessionId]: { ...prev, ended: true } },
+      };
+    });
+
+    const existingTimer = subagentCloseTimers.get(sessionId);
+    if (existingTimer) clearTimeout(existingTimer);
+    const timer = setTimeout(() => {
+      subagentCloseTimers.delete(sessionId);
+      const store = useTerminalStore.getState();
+      if (!store.sessions.some((session) => session.id === sessionId)) return;
+      void store.closeSession(sessionId);
+    }, SUBAGENT_CLOSE_DELAY_MS);
+    subagentCloseTimers.set(sessionId, timer);
+  },
+
+  appendSubagentTranscript: (key, content, reset) => {
+    set((state) => {
+      const prev = state.subagentTranscripts[key];
+      // 仅更新已存在的订阅（本窗口 openSubagentTranscript 预置）；未知 key 忽略（多窗口广播）。
+      if (!prev) return state;
+      const nextContent = (reset ? "" : prev.content) + content;
+      return {
+        subagentTranscripts: { ...state.subagentTranscripts, [key]: { ...prev, content: nextContent } },
+      };
+    });
   },
 }));

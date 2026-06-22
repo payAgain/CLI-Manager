@@ -35,6 +35,7 @@ function SessionInfoCard({
   return (
     <StatCard
       icon={<FolderGit2 size={13} />}
+      iconColor={TERM.cyan}
       title="会话"
       headerRight={
         <SourcePill source={view.source} />

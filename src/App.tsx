@@ -54,6 +54,12 @@ interface HookSettingsStatusPayload {
   codex: { status: HookInstallStatus };
 }
 
+interface SubagentTranscriptAppendPayload {
+  key: string;
+  content: string;
+  reset: boolean;
+}
+
 async function hasInstalledCliHook(): Promise<boolean> {
   const settings = useSettingsStore.getState();
   const status = await invoke<HookSettingsStatusPayload>("hook_settings_get_status", {
@@ -316,16 +322,31 @@ function App() {
 
   useEffect(() => {
     if (!IN_TAURI) return;
-    const unlistenPromise = listen<CliHookPayload>("claude-hook-notification", (event) => {
+    const unlistenHook = listen<CliHookPayload>("claude-hook-notification", (event) => {
+      // SubagentStart：开/更新子 Agent 转录分屏，独立于 Tab 状态机与 toast。
+      if (event.payload.event === "SubagentStart") {
+        void useTerminalStore.getState().openSubagentTranscript(event.payload);
+        return;
+      }
+      if (event.payload.event === "SubagentStop") {
+        useTerminalStore.getState().finishSubagentTranscript(event.payload);
+        return;
+      }
       const tabId = useTerminalStore.getState().handleCliHookEvent(event.payload);
       // SessionStart 仅用于绑定 sessionId（无需用户介入），与 UserPromptSubmit 一样不弹 toast
       if (tabId && event.payload.event !== "UserPromptSubmit" && event.payload.event !== "SessionStart") {
         showClaudeHookToast(event.payload, tabId);
       }
     });
+    // 子 Agent 转录 tail 增量：路由到对应转录面板。
+    const unlistenTranscript = listen<SubagentTranscriptAppendPayload>("subagent-transcript-append", (event) => {
+      const { key, content, reset } = event.payload;
+      useTerminalStore.getState().appendSubagentTranscript(key, content, reset);
+    });
 
     return () => {
-      void unlistenPromise.then((unlisten) => unlisten());
+      void unlistenHook.then((unlisten) => unlisten());
+      void unlistenTranscript.then((unlisten) => unlisten());
     };
   }, []);
 

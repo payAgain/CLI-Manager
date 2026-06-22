@@ -29,6 +29,11 @@ struct ClaudeHookRequest {
     session_id: Option<String>,
     cwd: Option<String>,
     timestamp: Option<String>,
+    // 仅 SubagentStart 等子 Agent 事件携带：用于定位子 Agent 转录 jsonl。
+    agent_id: Option<String>,
+    agent_type: Option<String>,
+    agent_transcript_path: Option<String>,
+    transcript_path: Option<String>,
 }
 
 #[derive(Clone, Serialize)]
@@ -42,6 +47,10 @@ pub struct ClaudeHookPayload {
     session_id: Option<String>,
     cwd: Option<String>,
     timestamp: Option<String>,
+    agent_id: Option<String>,
+    agent_type: Option<String>,
+    agent_transcript_path: Option<String>,
+    transcript_path: Option<String>,
 }
 
 impl ClaudeHookBridge {
@@ -141,6 +150,10 @@ fn handle_stream(mut stream: TcpStream, app_handle: AppHandle, token: &str) {
         session_id: payload.session_id,
         cwd: payload.cwd,
         timestamp: payload.timestamp,
+        agent_id: payload.agent_id,
+        agent_type: payload.agent_type,
+        agent_transcript_path: payload.agent_transcript_path,
+        transcript_path: payload.transcript_path,
     };
 
     if let Err(err) = app_handle.emit(EVENT_NAME, payload) {
@@ -239,11 +252,22 @@ fn is_valid_payload(payload: &ClaudeHookRequest) -> bool {
     match normalize_source(payload.source.as_deref()) {
         "claude" => matches!(
             payload.event.as_str(),
-            "SessionStart" | "UserPromptSubmit" | "Notification" | "Stop" | "StopFailure"
+            "SessionStart"
+                | "UserPromptSubmit"
+                | "Notification"
+                | "Stop"
+                | "StopFailure"
+                | "SubagentStart"
+                | "SubagentStop"
         ),
         "codex" => matches!(
             payload.event.as_str(),
-            "SessionStart" | "UserPromptSubmit" | "PermissionRequest" | "Stop"
+            "SessionStart"
+                | "UserPromptSubmit"
+                | "PermissionRequest"
+                | "Stop"
+                | "SubagentStart"
+                | "SubagentStop"
         ),
         _ => false,
     }

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { toast } from "sonner";
@@ -21,6 +21,7 @@ interface GitChangesPanelProps {
 
 // 降级慢轮询间隔：仅当 fs-watcher 初始化失败（网络盘/WSL 等 notify 不可用）时启用。
 const FALLBACK_POLL_INTERVAL_MS = 15000;
+const FILTER_LABEL_HIDE_WIDTH = 260;
 
 // 把后端 git 网络错误码（形如 "auth_failed: <原文>"）映射为可读中文 toast。
 function formatGitNetError(prefix: string, raw: string): string {
@@ -90,6 +91,8 @@ export function GitChangesPanel({ open, projectPath, visible = true, embedded = 
   const [discardTarget, setDiscardTarget] = useState<{ path: string; name: string; status: string } | null>(null);
   const [commitMsg, setCommitMsg] = useState("");
   const [pullMenuOpen, setPullMenuOpen] = useState(false);
+  const [hideFilterLabels, setHideFilterLabels] = useState(false);
+  const filterRowRef = useRef<HTMLDivElement | null>(null);
   const panelActive = open && visible;
 
   useEffect(() => {
@@ -99,6 +102,27 @@ export function GitChangesPanel({ open, projectPath, visible = true, embedded = 
       reset();
     }
   }, [panelActive, open, projectPath, fetchChanges, reset]);
+
+  useEffect(() => {
+    const filterRow = filterRowRef.current;
+    if (!filterRow) return;
+
+    const updateLabelVisibility = (width: number) => {
+      setHideFilterLabels(width < FILTER_LABEL_HIDE_WIDTH);
+    };
+
+    updateLabelVisibility(filterRow.getBoundingClientRect().width);
+
+    if (typeof ResizeObserver === "undefined") return;
+
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[0];
+      if (entry) updateLabelVisibility(entry.contentRect.width);
+    });
+    observer.observe(filterRow);
+
+    return () => observer.disconnect();
+  }, [changes.length]);
 
   // fs-watcher 驱动刷新：后端监听项目目录，命中当前项目且窗口活跃时静默刷新。
   // 替代旧的固定轮询；watcher 初始化失败时降级为慢轮询。失焦/隐藏不刷新，重新聚焦立即刷新一次。
@@ -340,7 +364,7 @@ export function GitChangesPanel({ open, projectPath, visible = true, embedded = 
 
   const panelClassName = embedded
     ? "flex h-full min-h-0 flex-col overflow-hidden font-mono"
-    : "relative z-[1] flex w-[290px] shrink-0 flex-col overflow-hidden border-l border-border font-mono";
+    : "relative z-[1] flex w-[196px] shrink-0 flex-col overflow-hidden border-l border-border font-mono";
   const Container = embedded ? "div" : "aside";
 
   return (
@@ -402,16 +426,20 @@ export function GitChangesPanel({ open, projectPath, visible = true, embedded = 
 
       {/* Filter */}
       {changes.length > 0 && (
-        <div className="flex shrink-0 gap-1 border-b px-2 py-1.5" style={{ borderColor: TERM.dim }}>
+        <div ref={filterRowRef} className="flex shrink-0 gap-1 border-b px-2 py-1.5" style={{ borderColor: TERM.dim }}>
           {filterButtons.map((btn) => {
             const Icon = btn.icon;
             const active = statusFilter === btn.value;
+            const title = `${btn.label} ${btn.count}`;
             return (
               <button
                 key={btn.value}
                 type="button"
                 onClick={() => setStatusFilter(btn.value)}
-                className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] transition-colors"
+                className="ui-focus-ring flex items-center gap-1 whitespace-nowrap rounded px-1.5 py-0.5 text-[10px] transition-colors"
+                title={title}
+                aria-label={title}
+                aria-pressed={active}
                 style={{
                   backgroundColor: active ? `${btn.color}30` : "transparent",
                   color: active ? btn.color : TERM.dim,
@@ -419,7 +447,7 @@ export function GitChangesPanel({ open, projectPath, visible = true, embedded = 
                 }}
               >
                 <Icon size={11} strokeWidth={2} style={{ color: btn.color }} />
-                <span>{btn.label}</span>
+                {!hideFilterLabels && <span>{btn.label}</span>}
                 <span className="font-bold">{btn.count}</span>
               </button>
             );
