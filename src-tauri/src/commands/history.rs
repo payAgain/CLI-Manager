@@ -2321,10 +2321,14 @@ fn wsl_find_session_files(
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_else(|| "wsl.exe".to_string());
 
+    // wsl.exe 将参数拼成命令传入 WSL shell（zsh）。
+    // zsh 默认开启 nomatch，未引用的 glob（如 *.jsonl）若无匹配文件会报错退出，
+    // 导致 find 无法执行。转义 glob 通配符避免 shell 展开。
+    let escaped_pattern = name_pattern.replace('*', "\\*");
     let args = [
         "-d", distro,
         "find", linux_dir,
-        "-name", name_pattern,
+        "-name", &escaped_pattern,
         "-type", "f",
     ];
     info!(
