@@ -32,6 +32,7 @@ import {
   TERMINAL_SCROLLBACK_ROWS_MAX,
   TERMINAL_SCROLLBACK_ROWS_MIN,
   useSettingsStore,
+  type BatchLaunchPaneDirection,
   type UnsplitBehavior,
 } from "../../../stores/settingsStore";
 import { TerminalBackgroundSection } from "./TerminalBackgroundSection";
@@ -84,6 +85,8 @@ export function ThemeSettingsPage() {
   const useExternalTerminal = useSettingsStore((s) => s.useExternalTerminal);
   const unsplitBehavior = useSettingsStore((s) => s.unsplitBehavior);
   const shellRuntimeMonitoringEnabled = useSettingsStore((s) => s.shellRuntimeMonitoringEnabled);
+  const batchLaunchGroupInPane = useSettingsStore((s) => s.batchLaunchGroupInPane);
+  const batchLaunchPaneDirection = useSettingsStore((s) => s.batchLaunchPaneDirection);
   const setTerminalThemeMode = useSettingsStore((s) => s.setTerminalThemeMode);
   const update = useSettingsStore((s) => s.update);
   const [query, setQuery] = useState("");
@@ -435,6 +438,43 @@ export function ThemeSettingsPage() {
                   aria-label={shellRuntimeMonitoringEnabled ? "关闭通用 Shell 运行监控" : "开启通用 Shell 运行监控"}
                 />
               </Group>
+            </Card>
+
+            <Card className="border border-border bg-surface-container-lowest" p="sm" radius="lg">
+              <Group justify="space-between" align="center" gap="md" wrap="nowrap">
+                <Box>
+                  <Text size="xs" c="var(--on-surface-variant)">
+                    批量启动分组 Pane
+                  </Text>
+                  <Text mt={4} size="xs" c="var(--text-muted)">
+                    启用后，点击分组启动按钮时，同一分组的终端将放在同个 Pane 中（多标签），不同分组会创建到不同 Pane。嵌套分组按根目录区分。
+                  </Text>
+                </Box>
+                <Switch
+                  color="cliPrimary"
+                  checked={batchLaunchGroupInPane}
+                  onChange={(event) => void update("batchLaunchGroupInPane", event.currentTarget.checked)}
+                  aria-label={batchLaunchGroupInPane ? "关闭批量启动分组 Pane" : "开启批量启动分组 Pane"}
+                />
+              </Group>
+              {batchLaunchGroupInPane && (
+                <Group mt="sm" justify="space-between" align="center">
+                  <Text size="xs" c="var(--on-surface-variant)">
+                    分屏方向
+                  </Text>
+                  <SegmentedControl<BatchLaunchPaneDirection>
+                    value={batchLaunchPaneDirection}
+                    onChange={(value) => void update("batchLaunchPaneDirection", value)}
+                    data={[
+                      { value: "vertical", label: "上下" },
+                      { value: "horizontal", label: "左右" },
+                    ]}
+                    color="cliPrimary"
+                    size="xs"
+                    aria-label="批量启动分屏方向"
+                  />
+                </Group>
+              )}
             </Card>
           </Stack>
         </section>

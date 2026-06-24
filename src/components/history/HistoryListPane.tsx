@@ -54,6 +54,7 @@ interface HistoryListPaneProps {
   searchHits: HistorySearchHit[];
   globalSearchRef: RefObject<HTMLInputElement | null>;
   onRefresh: () => void;
+  onClose: () => void;
   onSourceFilterChange: (value: HistorySourceFilter) => void;
   onProjectPathFilterChange: (value: string | null) => void;
   onGlobalQueryChange: (value: string) => void;
@@ -73,7 +74,8 @@ const SOURCE_FILTER_OPTIONS: { value: HistorySourceFilter; label: string }[] = [
 
 function rowHeight(row: HistoryListRow): number {
   if (row.type === "group" || row.type === "searchHeader" || row.type === "searching") return 32;
-  if (row.type === "loading" || row.type === "empty" || row.type === "loadMore") return 56;
+  if (row.type === "empty") return 88;
+  if (row.type === "loading" || row.type === "loadMore") return 56;
   if (row.type === "searchHit") return 72;
   return 96;
 }
@@ -125,6 +127,49 @@ function ProjectFilterIcon({ project, size = 13 }: { project: Project; size?: nu
   return vendor ? <VendorIcon vendor={vendor} size={size} /> : <Terminal size={size} strokeWidth={1.5} />;
 }
 
+function collectGroupIds(nodes: HistoryProjectTreeNode[], out: string[] = []): string[] {
+  for (const node of nodes) {
+    if (node.type !== "group") continue;
+    out.push(node.group.id);
+    collectGroupIds(node.children, out);
+  }
+  return out;
+}
+
+function normalizeProjectSearch(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function projectMatchesSearch(project: Project, query: string): boolean {
+  if (!query) return true;
+  return (
+    project.name.toLowerCase().includes(query) ||
+    project.path.toLowerCase().includes(query) ||
+    project.cli_tool.toLowerCase().includes(query)
+  );
+}
+
+function filterHistoryProjectTree(nodes: HistoryProjectTreeNode[], query: string): HistoryProjectTreeNode[] {
+  if (!query) return nodes;
+
+  const result: HistoryProjectTreeNode[] = [];
+  for (const node of nodes) {
+    if (node.type === "project") {
+      if (projectMatchesSearch(node.project, query)) result.push(node);
+      continue;
+    }
+
+    const groupMatches = node.group.name.toLowerCase().includes(query);
+    const children = groupMatches
+      ? node.children
+      : filterHistoryProjectTree(node.children, query);
+    if (groupMatches || children.length > 0) {
+      result.push({ ...node, children });
+    }
+  }
+  return result;
+}
+
 export function HistoryListPane({
   historySidebarWidth,
   sidebarRef,
@@ -147,6 +192,7 @@ export function HistoryListPane({
   searchHits,
   globalSearchRef,
   onRefresh,
+  onClose,
   onSourceFilterChange,
   onProjectPathFilterChange,
   onGlobalQueryChange,
@@ -162,6 +208,7 @@ export function HistoryListPane({
   const [contextMenu, setContextMenu] = useState<SessionContextMenu | null>(null);
   const [collapsedFilterGroups, setCollapsedFilterGroups] = useState<Set<string>>(new Set());
   const [projectMenuOpen, setProjectMenuOpen] = useState(false);
+  const [projectSearchQuery, setProjectSearchQuery] = useState("");
   const contextMenuRef = useRef<HTMLDivElement | null>(null);
   const projectDropdownRef = useRef<HTMLDivElement | null>(null);
 
@@ -170,11 +217,41 @@ export function HistoryListPane({
     () => projects.find((project) => project.path === projectPathFilter) ?? null,
     [projectPathFilter, projects]
   );
+  const projectGroupIds = useMemo(() => collectGroupIds(projectTree), [projectTree]);
+  const normalizedProjectSearch = useMemo(() => normalizeProjectSearch(projectSearchQuery), [projectSearchQuery]);
+  const filteredProjectTree = useMemo(
+    () => filterHistoryProjectTree(projectTree, normalizedProjectSearch),
+    [normalizedProjectSearch, projectTree]
+  );
+  const filteredProjectCount = useMemo(
+    () => filteredProjectTree.reduce((sum, node) => sum + countProjects(node), 0),
+    [filteredProjectTree]
+  );
   const selectedProjectLabel = useMemo(() => {
     if (selectedProject) return selectedProject.name;
     if (!projectPathFilter) return "全部项目";
     return projectPathFilter.split(/[\\/]/).pop() || projectPathFilter;
   }, [projectPathFilter, selectedProject]);
+
+  const emptySessionCopy = useMemo(() => {
+    const sourceLabel = sourceFilter === "all" ? "Claude/Codex" : sourceFilter === "claude" ? "Claude" : "Codex";
+    if (normalizedGlobal) {
+      return {
+        title: "未找到匹配会话",
+        description: "换个关键词，或清空搜索后再看当前筛选范围",
+      };
+    }
+    if (projectPathFilter) {
+      return {
+        title: "暂无历史会话",
+        description: `${selectedProjectLabel} 下暂无 ${sourceLabel} 会话`,
+      };
+    }
+    return {
+      title: "暂无历史会话",
+      description: `当前来源暂无 ${sourceLabel} 会话`,
+    };
+  }, [normalizedGlobal, projectPathFilter, selectedProjectLabel, sourceFilter]);
 
   const toggleFilterGroup = useCallback((groupId: string) => {
     setCollapsedFilterGroups((prev) => {
@@ -225,6 +302,14 @@ export function HistoryListPane({
       window.removeEventListener("keydown", keyHandler);
     };
   }, [contextMenu]);
+
+  useEffect(() => {
+    if (!projectMenuOpen) {
+      setProjectSearchQuery("");
+      return;
+    }
+    setCollapsedFilterGroups(new Set(projectGroupIds));
+  }, [projectGroupIds, projectMenuOpen]);
 
   useEffect(() => {
     if (!projectMenuOpen) return;
@@ -287,7 +372,7 @@ export function HistoryListPane({
   const renderProjectNode = (node: HistoryProjectTreeNode, depth = 0): ReactNode => {
     const paddingLeft = 8 + depth * 14;
     if (node.type === "group") {
-      const isOpen = !collapsedFilterGroups.has(node.group.id);
+      const isOpen = Boolean(normalizedProjectSearch) || !collapsedFilterGroups.has(node.group.id);
       return (
         <div key={`group:${node.group.id}`}>
           <button
@@ -367,6 +452,15 @@ export function HistoryListPane({
           >
             <RefreshCw size={12} />
           </button>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="关闭历史会话"
+            className="ui-flat-action ui-toolbar-button-compact h-8 w-8 shrink-0 px-0"
+            title="关闭历史会话"
+          >
+            <X size={13} />
+          </button>
         </div>
 
         <div className="ui-history-search-shell mt-2 gap-2 px-2.5 py-1.5 text-text-secondary">
@@ -410,6 +504,27 @@ export function HistoryListPane({
 
           {projectMenuOpen && (
             <div className="absolute left-0 right-0 top-full z-30 mt-1 rounded-xl border border-border/70 bg-surface-container-lowest p-1 shadow-lg">
+              <div className="ui-history-search-shell mb-1 gap-2 px-2 py-1.5 text-text-secondary">
+                <Search size={13} />
+                <input
+                  value={projectSearchQuery}
+                  onChange={(e) => setProjectSearchQuery(e.target.value)}
+                  aria-label="搜索项目来源"
+                  placeholder="输入项目名、路径或 CLI"
+                  className="flex-1 bg-transparent text-[12px] outline-none"
+                />
+                {projectSearchQuery && (
+                  <button
+                    type="button"
+                    onClick={() => setProjectSearchQuery("")}
+                    className="ui-flat-action inline-flex h-5 w-5 items-center justify-center rounded-md px-0 text-text-muted"
+                    aria-label="清空项目来源搜索"
+                    title="清空搜索"
+                  >
+                    <X size={12} />
+                  </button>
+                )}
+              </div>
               <div className="ui-thin-scroll max-h-52 space-y-0.5 overflow-y-auto pr-1" role="tree" aria-label="历史项目过滤树">
                 <button
                   type="button"
@@ -421,10 +536,15 @@ export function HistoryListPane({
                   <span className="min-w-0 flex-1 truncate font-medium">全部项目</span>
                   <span className="ui-tree-count-badge rounded-full px-1.5 text-[10px] font-medium">{projects.length}</span>
                 </button>
-                {projectTree.length > 0 ? (
-                  projectTree.map((node) => renderProjectNode(node))
+                {filteredProjectTree.length > 0 ? (
+                  filteredProjectTree.map((node) => renderProjectNode(node))
                 ) : (
-                  <div className="px-2 py-1.5 text-[11px] text-text-muted">暂无项目</div>
+                  <div className="px-2 py-1.5 text-[11px] text-text-muted">
+                    {normalizedProjectSearch ? "未找到匹配项目" : "暂无项目"}
+                  </div>
+                )}
+                {normalizedProjectSearch && filteredProjectTree.length > 0 && (
+                  <div className="px-2 py-1 text-[10px] text-text-muted">匹配 {filteredProjectCount} 个项目</div>
                 )}
               </div>
             </div>
@@ -514,7 +634,10 @@ export function HistoryListPane({
                 )}
 
                 {row.type === "empty" && (
-                  <div className="px-3 py-6 text-center text-xs text-text-muted">未找到匹配会话</div>
+                  <div className="px-3 py-5 text-center">
+                    <div className="text-xs font-semibold text-text-secondary">{emptySessionCopy.title}</div>
+                    <div className="mt-1 text-[11px] leading-relaxed text-text-muted">{emptySessionCopy.description}</div>
+                  </div>
                 )}
 
                 {row.type === "loadMore" && (

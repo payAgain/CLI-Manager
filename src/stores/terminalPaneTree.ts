@@ -96,6 +96,37 @@ export function addSessionToPaneTree(
   return { tree: update(tree), activePaneId: targetPaneId };
 }
 
+/**
+ * Split a pane leaf into two, creating a new empty leaf (no sessions).
+ * Unlike splitPaneLeaf, this does not require a new session — the new leaf
+ * starts empty, ready for sessions to be added via addSessionToPaneTree.
+ */
+export function splitPaneEmpty(
+  tree: TerminalPaneNode,
+  paneId: string,
+  direction: TerminalPaneSplitDirection,
+  createId: IdFactory
+): { tree: TerminalPaneNode; activePaneId: string } {
+  const newPane = createPaneLeaf(createId(), [], null);
+
+  const update = (node: TerminalPaneNode): TerminalPaneNode => {
+    if (node.type === "leaf") {
+      if (node.id !== paneId) return node;
+      return {
+        type: "split",
+        id: createId(),
+        direction,
+        ratio: 0.5,
+        first: node,
+        second: newPane,
+      };
+    }
+    return { ...node, first: update(node.first), second: update(node.second) };
+  };
+
+  return { tree: update(tree), activePaneId: newPane.id };
+}
+
 export function splitPaneLeaf(
   tree: TerminalPaneNode,
   paneId: string,

@@ -33,7 +33,6 @@ import {
   MIN_APPLY_CONTRAST_RATIO,
   MIN_READABLE_CONTRAST_RATIO,
 } from "../../../lib/contrast";
-import { AboutSection } from "../AboutSection";
 import {
   listSystemFonts,
   mergeFontFamilyOptions,
@@ -923,8 +922,6 @@ export function GeneralSettingsPage() {
             </Card>
         </Stack>
       </section>
-
-      <AboutSection />
     </Stack>
   );
 }

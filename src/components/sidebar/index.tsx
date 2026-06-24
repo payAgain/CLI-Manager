@@ -4,9 +4,10 @@ import type { DragEndEvent } from "@dnd-kit/core";
 import { useProjectStore } from "../../stores/projectStore";
 import { useTerminalStore, type SessionStatus, type SplitTerminalOptions } from "../../stores/terminalStore";
 import { isProjectFileDirty, useFileExplorerStore } from "../../stores/fileExplorerStore";
+import { useHistoryStore } from "../../stores/historyStore";
 import { useSettingsStore } from "../../stores/settingsStore";
 import type { TerminalPaneSplitDirection } from "../../stores/terminalPaneTree";
-import type { Project, TreeNode as TNode, Group } from "../../lib/types";
+import type { HistorySourceFilter, Project, TreeNode as TNode, Group } from "../../lib/types";
 import { ConfigModal } from "../ConfigModal";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { ProviderSwitchModal } from "../ProviderSwitchModal";
@@ -27,6 +28,7 @@ import {
   FileCode,
   FolderOpen,
   FolderPlus,
+  ListClockIcon,
   Pencil,
   Play,
   Plus,
@@ -57,6 +59,14 @@ function clampExpandedSidebarWidth(width: number): number {
 function normalizePersistedSidebarWidth(width: number): number {
   if (width <= SIDEBAR_COLLAPSED_WIDTH) return SIDEBAR_COLLAPSED_WIDTH;
   return clampExpandedSidebarWidth(width === 280 ? 248 : width);
+}
+
+function resolveHistorySourceFilter(cliTool: string | null | undefined): HistorySourceFilter {
+  const normalized = cliTool?.trim().toLowerCase();
+  if (!normalized) return "all";
+  if (normalized.includes("claude")) return "claude";
+  if (normalized.includes("codex") || normalized === "code") return "codex";
+  return "all";
 }
 
 function buildProjectSplitOptions(project: Project): SplitTerminalOptions {
@@ -105,7 +115,6 @@ export function Sidebar({ onOpenSettings, onOpenStats, compactMode = false }: Si
   const moveProjectToGroup = useProjectStore((s) => s.moveProjectToGroup);
   const createSession = useTerminalStore((s) => s.createSession);
   const splitTerminal = useTerminalStore((s) => s.splitTerminal);
-  const openFileEditorPane = useTerminalStore((s) => s.openFileEditorPane);
   const sessions = useTerminalStore((s) => s.sessions);
   const activeSessionId = useTerminalStore((s) => s.activeSessionId);
   const setActiveSession = useTerminalStore((s) => s.setActive);
@@ -117,6 +126,9 @@ export function Sidebar({ onOpenSettings, onOpenStats, compactMode = false }: Si
   const persistedSidebarWidth = useSettingsStore((s) => s.sidebarWidth);
   const openFileProject = useFileExplorerStore((s) => s.openProject);
   const fileProject = useFileExplorerStore((s) => s.project);
+  const closeHistory = useHistoryStore((s) => s.closeHistory);
+  const openHistory = useHistoryStore((s) => s.openHistory);
+  const triggerGlobalSearchFocus = useHistoryStore((s) => s.triggerGlobalSearchFocus);
 
   const initialSidebarWidth = normalizePersistedSidebarWidth(persistedSidebarWidth);
   const [sidebarWidth, setSidebarWidth] = useState(initialSidebarWidth);
@@ -566,11 +578,13 @@ export function Sidebar({ onOpenSettings, onOpenStats, compactMode = false }: Si
         shell: project.shell || undefined,
       }))
     );
-  }, []);
+    closeHistory();
+  }, [closeHistory]);
 
-  const openProjectInternal = async (project: Project) => {
+  const openProjectInternal = async (project: Project, targetPaneId?: string) => {
     const options = buildProjectSplitOptions(project);
-    await createSession(options.projectId, options.cwd, options.title, options.startupCmd, options.envVars, options.shell);
+    await createSession(options.projectId, options.cwd, options.title, options.startupCmd, options.envVars, options.shell, targetPaneId);
+    closeHistory();
   };
 
   const openProjects = async (items: Project[]) => {
@@ -596,8 +610,9 @@ export function Sidebar({ onOpenSettings, onOpenStats, compactMode = false }: Si
     async (project: Project, direction: TerminalPaneSplitDirection) => {
       if (!activeSessionId || compactMode || useExternalTerminal) return;
       await splitTerminal(activeSessionId, direction, buildProjectSplitOptions(project));
+      closeHistory();
     },
-    [activeSessionId, compactMode, splitTerminal, useExternalTerminal]
+    [activeSessionId, closeHistory, compactMode, splitTerminal, useExternalTerminal]
   );
 
   const handleCloneProject = useCallback((project: Project) => {
@@ -620,13 +635,25 @@ export function Sidebar({ onOpenSettings, onOpenStats, compactMode = false }: Si
         if (!confirmed) return;
       }
       await openFileProject(project);
-      openFileEditorPane(project);
     } catch (err) {
       logError("Failed to open project file browser", err);
       toast.error("打开项目文件失败", { description: String(err) });
     }
-  }, [fileProject?.id, openFileEditorPane, openFileProject]);
+  }, [fileProject?.id, openFileProject]);
 
+  const handleOpenProjectHistory = useCallback(
+    (project: Project) => {
+      void openHistory({
+        sourceFilter: resolveHistorySourceFilter(project.cli_tool),
+        projectPath: project.path,
+      }).then(() => {
+        triggerGlobalSearchFocus();
+      }).catch((err) => {
+        toast.error("打开会话历史失败", { description: String(err) });
+      });
+    },
+    [openHistory, triggerGlobalSearchFocus]
+  );
   const handleRequestDeleteProject = useCallback((project: Project) => {
     setConfirmAction({ kind: "delete-project", project });
   }, []);
@@ -673,15 +700,19 @@ export function Sidebar({ onOpenSettings, onOpenStats, compactMode = false }: Si
 
     setSelectedProjectIds(new Set([project.id]));
     selectionAnchorRef.current = project.id;
-    activateFirstProjectSession(project.id);
-  }, [activateFirstProjectSession, visibleProjectIds]);
+    if (activateFirstProjectSession(project.id)) {
+      closeHistory();
+    }
+  }, [activateFirstProjectSession, closeHistory, visibleProjectIds]);
 
   const handleSelectProjectByKeyboard = useCallback((project: Project) => {
     setSelectedId(project.id);
     setSelectedProjectIds(new Set([project.id]));
     selectionAnchorRef.current = project.id;
-    activateFirstProjectSession(project.id);
-  }, [activateFirstProjectSession]);
+    if (activateFirstProjectSession(project.id)) {
+      closeHistory();
+    }
+  }, [activateFirstProjectSession, closeHistory]);
 
   const handleToggleSelection = useCallback((project: Project) => {
     setSelectedProjectIds((prev) => {
@@ -751,7 +782,29 @@ export function Sidebar({ onOpenSettings, onOpenStats, compactMode = false }: Si
         (childMap.get(id) ?? []).forEach((child) => walk(child.id));
       };
       walk(groupId);
-      await openProjects(projects.filter((p) => p.group_id && groupIds.has(p.group_id)));
+      const matchedProjects = projects.filter((p) => p.group_id && groupIds.has(p.group_id));
+
+      const batchMode = useSettingsStore.getState().batchLaunchGroupInPane;
+      if (!batchMode) {
+        await openProjects(matchedProjects);
+        return;
+      }
+
+      // Batch mode: each group click creates a new pane
+      // Split the current active pane to create a new empty pane,
+      // then launch all projects under this group into that new pane (multi-tab).
+      const currentPaneId = useTerminalStore.getState().activePaneId;
+      let targetPaneId: string | undefined;
+      if (currentPaneId) {
+        useTerminalStore.getState().splitPaneEmpty(currentPaneId, useSettingsStore.getState().batchLaunchPaneDirection);
+        const newPaneId = useTerminalStore.getState().activePaneId;
+        if (newPaneId) targetPaneId = newPaneId;
+      }
+
+      // Launch all projects into the same target pane (multi-tab)
+      for (const project of matchedProjects) {
+        await openProjectInternal(project, targetPaneId);
+      }
     },
     // 依赖只列函数体真正读取的值，避免无关 selector 变化引起整树重建。
     [groups, projects]  // eslint-disable-line react-hooks/exhaustive-deps
@@ -1025,6 +1078,17 @@ export function Sidebar({ onOpenSettings, onOpenStats, compactMode = false }: Si
                 >
                   <FileCode size={14} strokeWidth={1.5} />
                   浏览文件
+                </button>
+                <button
+                  className="context-menu-item"
+                  role="menuitem"
+                  onClick={() => {
+                    handleOpenProjectHistory(contextMenu.project);
+                    setContextMenu(null);
+                  }}
+                >
+                  <ListClockIcon size={14} />
+                  会话历史
                 </button>
                 {contextMenu.project.cli_tool.toLowerCase().includes("claude") && (
                   <button

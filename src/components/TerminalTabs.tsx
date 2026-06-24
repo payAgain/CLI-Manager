@@ -42,7 +42,7 @@ import { SubagentTranscriptView } from "./terminal/SubagentTranscriptView";
 import { FileEditorPane } from "./files/FileEditorPane";
 import { openWindowsTerminal } from "../lib/externalTerminal";
 import { resolveProjectStartupCommand } from "../lib/projectStartupCommand";
-import { Terminal, Plus, ListClockIcon, X, Maximize2, Minimize2, ChevronDown, ChevronRight, BarChart3, GitBranch, Folder, Check } from "./icons";
+import { Terminal, Plus, ListClockIcon, X, Copy, Maximize2, Minimize2, ChevronDown, ChevronRight, BarChart3, GitBranch, Folder, Check } from "./icons";
 import { VendorIcon, inferVendor, type VendorKey } from "./VendorIcon";
 import { EmptyState } from "./ui/EmptyState";
 import { useHistoryStore } from "../stores/historyStore";
@@ -64,6 +64,7 @@ import {
 } from "./ui/context-menu";
 import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from "./ui/popover";
 import { Button } from "./ui/button";
+import { Portal } from "./ui/Portal";
 import { getTerminalTheme } from "../lib/terminalThemes";
 
 const HistoryWorkspace = lazy(() =>
@@ -134,6 +135,20 @@ type PaneDropTarget =
 
 type PaneDropPreview = { paneId: string; edge: TerminalPaneDropEdge } | null;
 
+const TERMINAL_TAB_HOVER_DELAY_MS = 260;
+const TERMINAL_TAB_HOVER_CLOSE_DELAY_MS = 320;
+const TERMINAL_TAB_HOVER_CARD_WIDTH = 320;
+const TERMINAL_TAB_HOVER_CARD_ESTIMATED_HEIGHT = 190;
+
+interface TerminalTabHoverInfo {
+  name: string;
+  cli: string;
+  shell: string;
+  project: string;
+  path: string;
+  sessionId: string;
+}
+
 function isTerminalPaneDropEdge(value: string): value is TerminalPaneDropEdge {
   return PANE_DROP_EDGES.includes(value as TerminalPaneDropEdge);
 }
@@ -151,6 +166,62 @@ function parsePaneDropTarget(id: string): PaneDropTarget | null {
 
 function isPaneDropCollisionId(id: string): boolean {
   return id.startsWith(PANE_EDGE_DROP_PREFIX) || id.startsWith(PANE_CENTER_DROP_PREFIX) || id.startsWith(PANE_DROP_PREFIX);
+}
+
+function clampNumber(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max);
+}
+
+function formatCliToolLabel(value: string | null | undefined): string {
+  const trimmed = value?.trim();
+  if (!trimmed) return "Terminal";
+
+  const normalized = trimmed.toLowerCase();
+  if (normalized.includes("claude")) return "Claude";
+  if (normalized.includes("codex") || normalized === "code") return "Codex";
+  return trimmed;
+}
+
+function formatShellLabel(value: string | null | undefined): string {
+  const trimmed = value?.trim();
+  if (!trimmed) return "PowerShell";
+
+  const normalized = trimmed.toLowerCase();
+  if (normalized === "powershell") return "PowerShell";
+  if (normalized === "pwsh") return "PowerShell 7";
+  if (normalized === "cmd") return "CMD";
+  if (normalized === "wsl") return "WSL";
+  if (normalized === "git-bash" || normalized === "git bash" || normalized === "gitbash") return "Git Bash";
+  if (normalized === "bash") return "Bash";
+  return trimmed;
+}
+
+function formatSessionIdPreview(value: string): string {
+  const trimmed = value.trim();
+  if (trimmed.length <= 18) return trimmed;
+  return `${trimmed.slice(0, 8)}...${trimmed.slice(-6)}`;
+}
+
+function buildTerminalTabHoverInfo(session: TerminalSession, project?: Project): TerminalTabHoverInfo {
+  if (session.kind === "subagent-transcript") {
+    return {
+      name: session.title.trim() || "Terminal",
+      cli: "Subagent",
+      shell: "Transcript",
+      project: project?.name.trim() || "\u672a\u7ed1\u5b9a\u9879\u76ee",
+      path: session.cwd?.trim() || project?.path.trim() || "-",
+      sessionId: session.cliSessionId?.trim() || session.id,
+    };
+  }
+
+  return {
+    name: session.title.trim() || "Terminal",
+    cli: formatCliToolLabel(project?.cli_tool),
+    shell: formatShellLabel(session.shell ?? project?.shell ?? "powershell"),
+    project: project?.name.trim() || "\u672a\u7ed1\u5b9a\u9879\u76ee",
+    path: session.cwd?.trim() || project?.path.trim() || "-",
+    sessionId: session.cliSessionId?.trim() || session.id,
+  };
 }
 
 const terminalTabCollisionDetection: CollisionDetection = (args) => {
@@ -219,6 +290,7 @@ interface SortableTabProps {
   isEditing: boolean;
   notification: TabNotificationState;
   vendor?: VendorKey | null;
+  hoverInfo: TerminalTabHoverInfo;
   onActivate: () => void;
   onClose: (anchor?: SplitPickerAnchor) => void;
   onStartEdit: () => void;
@@ -238,6 +310,7 @@ function SortableTab({
   isEditing,
   notification,
   vendor,
+  hoverInfo,
   onActivate,
   onClose,
   onStartEdit,
@@ -255,6 +328,74 @@ function SortableTab({
   const skipNextBlurSubmitRef = useRef(false);
   const statusLabel = TAB_NOTIFICATION_LABELS[notification];
   const tabMinWidthClass = "min-w-[92px]";
+  const [hoverCardPosition, setHoverCardPosition] = useState<{ left: number; top: number } | null>(null);
+  const hoverOpenTimerRef = useRef<number | null>(null);
+  const hoverCloseTimerRef = useRef<number | null>(null);
+
+  const clearHoverOpenTimer = useCallback(() => {
+    if (hoverOpenTimerRef.current === null) return;
+    window.clearTimeout(hoverOpenTimerRef.current);
+    hoverOpenTimerRef.current = null;
+  }, []);
+
+  const clearHoverCloseTimer = useCallback(() => {
+    if (hoverCloseTimerRef.current === null) return;
+    window.clearTimeout(hoverCloseTimerRef.current);
+    hoverCloseTimerRef.current = null;
+  }, []);
+
+  const hideHoverCard = useCallback(() => {
+    clearHoverOpenTimer();
+    clearHoverCloseTimer();
+    setHoverCardPosition(null);
+  }, [clearHoverCloseTimer, clearHoverOpenTimer]);
+
+  const keepHoverCardOpen = useCallback(() => {
+    clearHoverCloseTimer();
+  }, [clearHoverCloseTimer]);
+
+  const scheduleHideHoverCard = useCallback(() => {
+    clearHoverOpenTimer();
+    clearHoverCloseTimer();
+    hoverCloseTimerRef.current = window.setTimeout(() => {
+      hoverCloseTimerRef.current = null;
+      setHoverCardPosition(null);
+    }, TERMINAL_TAB_HOVER_CLOSE_DELAY_MS);
+  }, [clearHoverCloseTimer, clearHoverOpenTimer]);
+
+  const scheduleHoverCard = useCallback(() => {
+    if (isEditing || isDragging) return;
+    clearHoverOpenTimer();
+    clearHoverCloseTimer();
+    hoverOpenTimerRef.current = window.setTimeout(() => {
+      hoverOpenTimerRef.current = null;
+      const rect = tabElementRef.current?.getBoundingClientRect();
+      if (!rect) return;
+
+      const maxLeft = Math.max(8, window.innerWidth - TERMINAL_TAB_HOVER_CARD_WIDTH - 8);
+      const maxTop = Math.max(8, window.innerHeight - TERMINAL_TAB_HOVER_CARD_ESTIMATED_HEIGHT - 8);
+      setHoverCardPosition({
+        left: clampNumber(rect.left, 8, maxLeft),
+        top: clampNumber(rect.bottom + 6, 8, maxTop),
+      });
+    }, TERMINAL_TAB_HOVER_DELAY_MS);
+  }, [clearHoverCloseTimer, clearHoverOpenTimer, isDragging, isEditing]);
+
+  const copySessionId = useCallback(() => {
+    void navigator.clipboard
+      .writeText(hoverInfo.sessionId)
+      .then(() => toast.success("Session ID \u5df2\u590d\u5236"))
+      .catch((err) => toast.error("\u590d\u5236\u5931\u8d25", { description: String(err) }));
+  }, [hoverInfo.sessionId]);
+
+  useEffect(() => () => {
+    clearHoverOpenTimer();
+    clearHoverCloseTimer();
+  }, [clearHoverCloseTimer, clearHoverOpenTimer]);
+
+  useEffect(() => {
+    if (isEditing || isDragging) hideHoverCard();
+  }, [hideHoverCard, isDragging, isEditing]);
 
   const submitEdit = useCallback(() => {
     const trimmed = editValue.trim();
@@ -292,7 +433,8 @@ function SortableTab({
   const getTabAnchor = useCallback(() => contextMenuPointRef.current ?? tabElementRef.current?.getBoundingClientRect(), []);
 
   return (
-    <ContextMenu>
+    <>
+      <ContextMenu>
       <ContextMenuTrigger asChild>
         <div
           ref={setTabNodeRef}
@@ -302,8 +444,14 @@ function SortableTab({
           data-session-kind={sessionKind}
           data-selected={isActive ? "true" : "false"}
           onClick={onActivate}
-          onDoubleClick={onStartEdit}
+          onPointerEnter={scheduleHoverCard}
+          onPointerLeave={scheduleHideHoverCard}
+          onDoubleClick={() => {
+            hideHoverCard();
+            onStartEdit();
+          }}
           onContextMenu={(event) => {
+            hideHoverCard();
             contextMenuPointRef.current = { x: event.clientX, y: event.clientY };
           }}
           aria-selected={isActive}
@@ -372,10 +520,74 @@ function SortableTab({
         </div>
       </ContextMenuTrigger>
       <ContextMenuContent className={menuClassName} style={menuStyle}>{menuContent(getTabAnchor)}</ContextMenuContent>
-    </ContextMenu>
+      </ContextMenu>
+      {hoverCardPosition && !isEditing && !isDragging && (
+        <Portal>
+          <TerminalTabHoverCard info={hoverInfo} position={hoverCardPosition} onPointerEnter={keepHoverCardOpen} onPointerLeave={scheduleHideHoverCard} onCopySessionId={copySessionId} />
+        </Portal>
+      )}
+    </>
   );
 }
 
+function TerminalTabHoverCard({
+  info,
+  position,
+  onPointerEnter,
+  onPointerLeave,
+  onCopySessionId,
+}: {
+  info: TerminalTabHoverInfo;
+  position: { left: number; top: number };
+  onPointerEnter: () => void;
+  onPointerLeave: () => void;
+  onCopySessionId: () => void;
+}) {
+  const rows = [
+    { label: "CLI", value: info.cli },
+    { label: "Shell", value: info.shell },
+    { label: "\u9879\u76ee", value: info.project },
+    { label: "\u8def\u5f84", value: info.path },
+  ];
+  const sessionIdPreview = formatSessionIdPreview(info.sessionId);
+
+  return (
+    <div
+      className="ui-terminal-tab-hover-card"
+      style={{ left: position.left, top: position.top }}
+      role="tooltip"
+      onPointerEnter={onPointerEnter}
+      onPointerLeave={onPointerLeave}
+    >
+      <div className="ui-terminal-tab-hover-title">{info.name}</div>
+      <div className="ui-terminal-tab-hover-rows">
+        {rows.map((row) => (
+          <div key={row.label} className="ui-terminal-tab-hover-row">
+            <span>{row.label}</span>
+            <strong>{row.value}</strong>
+          </div>
+        ))}
+        <div className="ui-terminal-tab-hover-row ui-terminal-tab-hover-row-action">
+          <span>Session ID</span>
+          <strong>{sessionIdPreview}</strong>
+          <button
+            type="button"
+            className="ui-terminal-tab-hover-copy"
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={(event) => {
+              event.stopPropagation();
+              onCopySessionId();
+            }}
+            aria-label="Copy Session ID"
+            title="Copy Session ID"
+          >
+            <Copy size={12} strokeWidth={2} aria-hidden="true" />
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
 function DragOverlayTab({
   title,
   notification,
@@ -411,6 +623,7 @@ function DragOverlayTab({
 interface PaneTabBarProps {
   pane: TerminalPaneLeaf;
   sessions: TerminalSession[];
+  projects: Project[];
   allPanes: TerminalPaneLeaf[];
   activeSessionId: string | null;
   editingSessionId: string | null;
@@ -440,6 +653,7 @@ interface PaneTabBarProps {
 function PaneTabBar({
   pane,
   sessions,
+  projects,
   allPanes,
   activeSessionId,
   editingSessionId,
@@ -483,6 +697,11 @@ function PaneTabBar({
     canScrollLeft: false,
     canScrollRight: false,
   });
+  const projectById = useMemo(() => {
+    const next = new Map<string, Project>();
+    for (const project of projects) next.set(project.id, project);
+    return next;
+  }, [projects]);
   const paneSessions = pane.sessionIds
     .map((id) => sessions.find((session) => session.id === id))
     .filter((session): session is TerminalSession => Boolean(session));
@@ -700,6 +919,7 @@ function PaneTabBar({
               isEditing={editingSessionId === session.id}
               notification={tabNotifications[session.id] ?? "none"}
               vendor={inferSessionVendor(session)}
+              hoverInfo={buildTerminalTabHoverInfo(session, session.projectId ? projectById.get(session.projectId) : undefined)}
               onActivate={() => onActivateSession(session.id)}
               onClose={(anchor) => closePaneSessions([session.id], anchor)}
               onStartEdit={() => onStartEdit(session.id)}
@@ -816,6 +1036,7 @@ function PaneTabBar({
 interface PaneLeafViewProps {
   pane: TerminalPaneLeaf;
   sessions: TerminalSession[];
+  projects: Project[];
   allPanes: TerminalPaneLeaf[];
   activeSessionId: string | null;
   historyActive: boolean;
@@ -849,6 +1070,7 @@ interface PaneLeafViewProps {
 function PaneLeafView({
   pane,
   sessions,
+  projects,
   allPanes,
   activeSessionId,
   historyActive,
@@ -888,6 +1110,7 @@ function PaneLeafView({
         <PaneTabBar
           pane={pane}
           sessions={sessions}
+          projects={projects}
           allPanes={allPanes}
           activeSessionId={activeSessionId}
           editingSessionId={editingSessionId}
@@ -1345,11 +1568,14 @@ export function TerminalTabs({ fullscreen = false, onToggleFullscreen }: Termina
           : { cwd: activeSession?.cwd, title: activeSession?.title ?? "Terminal" };
     if (useExternalTerminal) {
       await openWindowsTerminal([{ title: newTerminalContext.title, cwd: newTerminalContext.cwd ?? undefined }]);
+      closeHistory();
+      setActiveWorkspaceTab("terminal");
       return;
     }
     await createSession(undefined, newTerminalContext.cwd ?? undefined, newTerminalContext.title);
+    closeHistory();
     setActiveWorkspaceTab("terminal");
-  }, [activeSession, useExternalTerminal, createSession]);
+  }, [activeSession, closeHistory, createSession, useExternalTerminal]);
 
   const handleDuplicateSession = useCallback((session: TerminalSession) => {
     void createSession(
@@ -1360,14 +1586,16 @@ export function TerminalTabs({ fullscreen = false, onToggleFullscreen }: Termina
       session.envVars ? { ...session.envVars } : undefined,
       session.shell ?? undefined,
     ).then(() => {
+      closeHistory();
       setActiveWorkspaceTab("terminal");
     }).catch(() => {});
-  }, [createSession]);
+  }, [closeHistory, createSession]);
 
   const handleActivateSession = useCallback((sessionId: string) => {
+    closeHistory();
     setActiveWorkspaceTab("terminal");
     setActive(sessionId);
-  }, [setActive]);
+  }, [closeHistory, setActive]);
 
   const resolveCloseConfirmAnchor = useCallback((anchor?: SplitPickerAnchor) => {
     const rawX = anchor ? ("right" in anchor ? anchor.right : anchor.x) : window.innerWidth - 72;
@@ -1553,15 +1781,17 @@ export function TerminalTabs({ fullscreen = false, onToggleFullscreen }: Termina
     if (!splitPicker) return;
     void splitTerminal(splitPicker.sessionId, splitPicker.direction, { title: "Terminal" });
     handleCloseSplitPicker();
+    closeHistory();
     setActiveWorkspaceTab("terminal");
-  }, [handleCloseSplitPicker, splitPicker, splitTerminal]);
+  }, [closeHistory, handleCloseSplitPicker, splitPicker, splitTerminal]);
 
   const handleSplitProject = useCallback((project: Project) => {
     if (!splitPicker) return;
     void splitTerminal(splitPicker.sessionId, splitPicker.direction, buildProjectSplitOptions(project));
     handleCloseSplitPicker();
+    closeHistory();
     setActiveWorkspaceTab("terminal");
-  }, [handleCloseSplitPicker, splitPicker, splitTerminal]);
+  }, [closeHistory, handleCloseSplitPicker, splitPicker, splitTerminal]);
 
   const findPaneForSession = useCallback((sessionId: string) => {
     return allPanes.find((pane) => pane.sessionIds.includes(sessionId)) ?? null;
@@ -1790,6 +2020,7 @@ export function TerminalTabs({ fullscreen = false, onToggleFullscreen }: Termina
       key={pane.id}
       pane={pane}
       sessions={sessions}
+      projects={projects}
       allPanes={allPanes}
       activeSessionId={activeSessionId}
       historyActive={historyActive}
@@ -1841,6 +2072,7 @@ export function TerminalTabs({ fullscreen = false, onToggleFullscreen }: Termina
     historyActive,
     lightThemePalette,
     moveSessionToPane,
+    projects,
     renameSession,
     resolvedTheme,
     sessions,

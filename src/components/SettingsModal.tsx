@@ -11,9 +11,19 @@ import { SyncSettingsPage } from "./settings/pages/SyncSettingsPage";
 import { HookSettingsPage } from "./settings/pages/HookSettingsPage";
 import { ProviderSettingsPage } from "./settings/pages/ProviderSettingsPage";
 import { ModelPricingSettingsPage } from "./settings/pages/ModelPricingSettingsPage";
+import { AboutSettingsPage } from "./settings/pages/AboutSettingsPage";
 import { useSettingsStore } from "../stores/settingsStore";
 
-export type SettingsTab = "general" | "terminal-theme" | "shortcuts" | "templates" | "providers" | "model-pricing" | "sync" | "hooks";
+export type SettingsTab =
+  | "general"
+  | "terminal-theme"
+  | "shortcuts"
+  | "templates"
+  | "providers"
+  | "model-pricing"
+  | "sync"
+  | "hooks"
+  | "about";
 
 interface SettingsTabConfig {
   label: string;
@@ -22,7 +32,17 @@ interface SettingsTabConfig {
   searchPlaceholder?: string;
 }
 
-const SETTINGS_TAB_ORDER: SettingsTab[] = ["general", "terminal-theme", "shortcuts", "templates", "providers", "model-pricing", "sync", "hooks"];
+const SETTINGS_TAB_ORDER: SettingsTab[] = [
+  "general",
+  "terminal-theme",
+  "shortcuts",
+  "templates",
+  "providers",
+  "model-pricing",
+  "sync",
+  "hooks",
+  "about",
+];
 
 const SETTINGS_TAB_CONFIG: Record<SettingsTab, SettingsTabConfig> = {
   general: {
@@ -68,6 +88,11 @@ const SETTINGS_TAB_CONFIG: Record<SettingsTab, SettingsTabConfig> = {
     label: "Hook 设置",
     title: "Hook 设置",
     description: "安装或移除 Claude Code 到 CLI-Manager 标签通知的桥接脚本。",
+  },
+  about: {
+    label: "关于",
+    title: "关于 CLI-Manager",
+    description: "查看应用更新、项目介绍、开源地址、操作手册与作者信息。",
   },
 };
 
@@ -130,6 +155,7 @@ export function SettingsModal({ open, onClose, initialTab }: Props) {
     if (activeTab === "model-pricing") return <ModelPricingSettingsPage searchValue={searchValue} />;
     if (activeTab === "sync") return <SyncSettingsPage />;
     if (activeTab === "hooks") return <HookSettingsPage />;
+    if (activeTab === "about") return <AboutSettingsPage />;
     return null;
   })();
 
