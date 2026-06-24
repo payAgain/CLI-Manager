@@ -91,6 +91,7 @@ export interface CliHookPayload {
   agentType?: string | null;
   agentTranscriptPath?: string | null;
   transcriptPath?: string | null;
+  wslDistroName?: string | null;
 }
 
 /** 子 Agent 转录面板的实时内容（按订阅 key=伪会话 id 存放）。 */
@@ -153,6 +154,7 @@ interface TerminalStore {
   splitSessionToPaneEdge: (sessionId: string, targetPaneId: string, edge: TerminalPaneDropEdge) => void;
   renameSession: (id: string, title: string) => void;
   splitTerminal: (sessionId: string, direction: TerminalPaneSplitDirection, options?: SplitTerminalOptions) => Promise<string | null>;
+  openFileEditorPane: (project: Project) => string;
   unsplitTerminal: (sessionId: string) => Promise<void>;
   setSplitRatio: (splitId: string, ratio: number) => void;
   getNextSessionIdForShortcut: (delta: 1 | -1) => string | null;
@@ -177,12 +179,21 @@ let subagentSeq = 0;
 const subagentCloseTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const subagentDiscoveryTimers = new Map<string, ReturnType<typeof setInterval>>();
 const SUBAGENT_CLOSE_DELAY_MS = 1500;
+const SUBAGENT_CHILD_JSONL_CLOSE_DELAY_MS = 10_000;
 const SUBAGENT_DISCOVERY_INTERVAL_MS = 1000;
 const SUBAGENT_DISCOVERY_TTL_MS = 15000;
 
 function createPaneId() {
   paneIdSeq += 1;
   return `pane-${Date.now().toString(36)}-${paneIdSeq.toString(36)}`;
+}
+
+function createFileEditorSessionId(projectId: string): string {
+  return `file-editor:${projectId}`;
+}
+
+function isPersistableSession(session: TerminalSession | undefined): boolean {
+  return !!session && session.kind !== "subagent-transcript" && session.kind !== "file-editor";
 }
 
 function createSplitSessionTitle(options?: SplitTerminalOptions) {
@@ -193,7 +204,8 @@ function scheduleSaveActiveId(id: string | null) {
   if (saveActiveIdTimer !== null) clearTimeout(saveActiveIdTimer);
   saveActiveIdTimer = setTimeout(() => {
     saveActiveIdTimer = null;
-    useSessionStore.getState().saveActiveSessionId(id).catch(() => {});
+    const session = id ? useTerminalStore.getState().sessions.find((item) => item.id === id) : undefined;
+    useSessionStore.getState().saveActiveSessionId(isPersistableSession(session) ? id : null).catch(() => {});
   }, 200);
 }
 
@@ -309,11 +321,18 @@ function shouldAttemptDerivedChildTranscript(payload: CliHookPayload, source: Su
 function startSubagentDiscovery(
   parentTabId: string,
   parentSessionId: string | null,
-  cwd: string | null
+  cwd: string | null,
+  wslDistroName: string | null
 ) {
-  if (!cwd || !parentSessionId) return;
+  if (!cwd || !parentSessionId) {
+    logWarn("[subagent_discovery] skipped: missing cwd/sessionId", { parentTabId, cwd, parentSessionId, wslDistroName });
+    return;
+  }
   const key = `${parentTabId}:${parentSessionId}`;
-  if (subagentDiscoveryTimers.has(key)) return;
+  if (subagentDiscoveryTimers.has(key)) {
+    logInfo("[subagent_discovery] already running", { parentTabId, parentSessionId, wslDistroName });
+    return;
+  }
 
   const startTime = Date.now();
   let knownAgents = new Set<string>();
@@ -327,8 +346,10 @@ function startSubagentDiscovery(
       return;
     }
 
-    void invoke<string[]>("subagent_transcript_discover", { cwd, sessionId: parentSessionId })
+    logInfo("[subagent_discovery] scan tick", { parentTabId, cwd, sessionId: parentSessionId, wslDistroName, elapsed });
+    void invoke<string[]>("subagent_transcript_discover", { cwd, sessionId: parentSessionId, wslDistroName })
       .then((files) => {
+        logInfo("[subagent_discovery] scan result", { parentTabId, count: files.length, files });
         for (const filename of files) {
           if (knownAgents.has(filename)) continue;
           knownAgents.add(filename);
@@ -349,12 +370,21 @@ function startSubagentDiscovery(
 
           if (existingSession) {
             // 推导 child JSONL 路径并升级 pane
+            logInfo("[subagent_discovery] subscribing discovered child", {
+              parentTabId,
+              existingSessionId: existingSession.id,
+              cwd,
+              sessionId: parentSessionId,
+              discoveredAgentId,
+              wslDistroName,
+            });
             void invoke<string>("subagent_transcript_subscribe", {
               key: existingSession.id,
               transcriptPath: null,
               cwd,
               sessionId: parentSessionId,
               agentId: discoveredAgentId,
+              wslDistroName,
             })
               .then((derivedPath) => {
                 const childSource: SubagentTranscriptSource = {
@@ -393,7 +423,7 @@ function startSubagentDiscovery(
   }, SUBAGENT_DISCOVERY_INTERVAL_MS);
 
   subagentDiscoveryTimers.set(key, intervalId);
-  logInfo("[subagent_discovery] started", { parentTabId, cwd, sessionId: parentSessionId, ttlMs: SUBAGENT_DISCOVERY_TTL_MS });
+  logInfo("[subagent_discovery] started", { parentTabId, cwd, sessionId: parentSessionId, wslDistroName, ttlMs: SUBAGENT_DISCOVERY_TTL_MS });
 }
 
 function findSubagentSessionId(sessions: TerminalSession[], payload: CliHookPayload): string | null {
@@ -687,7 +717,9 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
 
   closeSession: async (id) => {
     const ptySessionIds = [id];
-    const isTranscript = get().sessions.find((s) => s.id === id)?.kind === "subagent-transcript";
+    const closingSession = get().sessions.find((s) => s.id === id);
+    const isTranscript = closingSession?.kind === "subagent-transcript";
+    const isFileEditor = closingSession?.kind === "file-editor";
     const closeTimer = subagentCloseTimers.get(id);
     if (closeTimer) {
       clearTimeout(closeTimer);
@@ -745,7 +777,8 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
 
     try {
       await useSessionStore.getState().saveSessions(remaining);
-      await useSessionStore.getState().saveActiveSessionId(nextActiveId);
+      const nextActiveSession = nextActiveId ? remaining.find((session) => session.id === nextActiveId) : undefined;
+      await useSessionStore.getState().saveActiveSessionId(isPersistableSession(nextActiveSession) ? nextActiveId : null);
 
       // 更新 splits（移除已关闭主会话对应的 split），使用关闭前记录的索引
       if (closedIndex >= 0) {
@@ -755,6 +788,9 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
         await useSessionStore.getState().saveSplits(persistedSplits);
       }
     } finally {
+      if (isFileEditor) {
+        return;
+      }
       if (isTranscript) {
         void invoke("subagent_transcript_unsubscribe", { key: id }).catch((err) => {
           logError("subagent_transcript_unsubscribe failed while closing tab", { key: id, err });
@@ -977,6 +1013,47 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     return splitSessionId;
   },
 
+  openFileEditorPane: (project) => {
+    const editorSessionId = createFileEditorSessionId(project.id);
+    const existing = get().sessions.find((session) => session.id === editorSessionId);
+    if (existing) {
+      const paneResult = setPaneActiveSession(get().paneTree, editorSessionId);
+      set({
+        activeSessionId: editorSessionId,
+        activePaneId: paneResult.activePaneId ?? get().activePaneId,
+        paneTree: paneResult.tree,
+      });
+      return editorSessionId;
+    }
+
+    const editorSession: TerminalSession = {
+      id: editorSessionId,
+      projectId: project.id,
+      title: `文件：${project.name}`,
+      kind: "file-editor",
+      fileEditor: {
+        projectId: project.id,
+        projectPath: project.path,
+        projectName: project.name,
+        project,
+      },
+    };
+    const sessions = [...get().sessions, editorSession];
+    const tree = get().paneTree;
+    const activePaneId = get().activePaneId;
+    const paneResult = addSessionToPaneTree(tree, activePaneId, editorSessionId, createPaneId);
+
+    set({
+      sessions,
+      activeSessionId: editorSessionId,
+      activePaneId: paneResult.activePaneId,
+      paneTree: paneResult.tree,
+      splits: {},
+    });
+    void useSessionStore.getState().saveSessions(sessions).catch(() => {});
+    return editorSessionId;
+  },
+
   unsplitTerminal: async (sessionId) => {
     const pane = findPaneLeafBySession(get().paneTree, sessionId);
     if (!pane) return;
@@ -986,6 +1063,11 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     const transcriptClosedIds = new Set(
       get().sessions
         .filter((s) => closedSessionIds.includes(s.id) && s.kind === "subagent-transcript")
+        .map((s) => s.id)
+    );
+    const fileEditorClosedIds = new Set(
+      get().sessions
+        .filter((s) => closedSessionIds.includes(s.id) && s.kind === "file-editor")
         .map((s) => s.id)
     );
 
@@ -1028,10 +1110,18 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     });
 
     await useSessionStore.getState().saveSessions(remaining);
-    await useSessionStore.getState().saveActiveSessionId(result.activeSessionId);
+    const nextActiveSession = result.activeSessionId
+      ? remaining.find((session) => session.id === result.activeSessionId)
+      : undefined;
+    await useSessionStore.getState().saveActiveSessionId(
+      isPersistableSession(nextActiveSession) ? result.activeSessionId : null
+    );
     await useSessionStore.getState().saveSplits([]);
 
     for (const closedSessionId of closedSessionIds) {
+      if (fileEditorClosedIds.has(closedSessionId)) {
+        continue;
+      }
       if (transcriptClosedIds.has(closedSessionId)) {
         void invoke("subagent_transcript_unsubscribe", { key: closedSessionId }).catch((err) => {
           logError("subagent_transcript_unsubscribe failed while unsplitting pane", { key: closedSessionId, err });
@@ -1248,11 +1338,19 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
       pseudoId,
       agentId,
       toolUseId,
+      sessionId: payload.sessionId ?? null,
+      cwd: payload.cwd ?? null,
+      wslDistroName: payload.wslDistroName ?? null,
       sourceKind: source.kind,
+      transcriptPath: source.transcriptPath ?? null,
+      parentTranscriptPath: source.parentTranscriptPath ?? null,
       hasAgentTranscriptPath: Boolean(trimOptional(payload.agentTranscriptPath)),
       hasParentTranscriptPath: Boolean(trimOptional(payload.transcriptPath)),
+      agentTranscriptPath: trimOptional(payload.agentTranscriptPath),
+      payloadTranscriptPath: trimOptional(payload.transcriptPath),
       samePath: isSameTranscriptPath(trimOptional(payload.agentTranscriptPath), trimOptional(payload.transcriptPath)),
       reason: source.reason,
+      shouldSubscribe,
     });
 
     const subscribeChild = () => {
@@ -1264,26 +1362,55 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
           toolUseId,
           sourceKind: source.kind,
           reason: source.reason,
+          wslDistroName: payload.wslDistroName ?? null,
         });
         return;
       }
+      logInfo("[subagent_transcript] subscribing child source", {
+        pseudoId,
+        agentId,
+        sourcePath: source.transcriptPath,
+        cwd: payload.cwd ?? null,
+        sessionId: payload.sessionId ?? null,
+        wslDistroName: payload.wslDistroName ?? null,
+      });
       void invoke<string>("subagent_transcript_subscribe", {
         key: pseudoId,
         transcriptPath: source.transcriptPath,
         cwd: payload.cwd ?? null,
         sessionId: payload.sessionId ?? null,
         agentId,
-      }).catch((err) => logError("subagent_transcript_subscribe failed", { pseudoId, err }));
+        wslDistroName: payload.wslDistroName ?? null,
+      })
+        .then((resolvedPath) => logInfo("[subagent_transcript] child subscription active", { pseudoId, resolvedPath }))
+        .catch((err) => logError("subagent_transcript_subscribe failed", { pseudoId, err }));
     };
 
     const subscribeDerivedChild = () => {
-      if (!shouldAttemptDerivedChildTranscript(payload, source)) return false;
+      if (!shouldAttemptDerivedChildTranscript(payload, source)) {
+        logInfo("[subagent_transcript] derived subscription not attempted", {
+          event: payload.event,
+          pseudoId,
+          agentId,
+          sourceKind: source.kind,
+          wslDistroName: payload.wslDistroName ?? null,
+        });
+        return false;
+      }
+      logInfo("[subagent_transcript] subscribing derived child source", {
+        pseudoId,
+        agentId,
+        cwd: payload.cwd ?? null,
+        sessionId: payload.sessionId ?? null,
+        wslDistroName: payload.wslDistroName ?? null,
+      });
       void invoke<string>("subagent_transcript_subscribe", {
         key: pseudoId,
         transcriptPath: null,
         cwd: payload.cwd ?? null,
         sessionId: payload.sessionId ?? null,
         agentId,
+        wslDistroName: payload.wslDistroName ?? null,
       })
         .then((derivedPath) => {
           const childSource: SubagentTranscriptSource = {
@@ -1357,7 +1484,15 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     // 策略：这两个事件只触发 discovery，不创建 UI；SubagentStart 创建真实 Tab，discovery 负责升级内容源。
     if (payload.event === "AgentToolStart" || payload.event === "AgentToolStop") {
       if (!agentId && (resolvedSource.kind === "pending" || resolvedSource.kind === "lifecycle-only")) {
-        startSubagentDiscovery(parentTabId, payload.sessionId ?? null, payload.cwd ?? null);
+        startSubagentDiscovery(parentTabId, payload.sessionId ?? null, payload.cwd ?? null, payload.wslDistroName ?? null);
+      } else {
+        logInfo("[subagent_discovery] not started for AgentTool event", {
+          event: payload.event,
+          parentTabId,
+          agentId,
+          resolvedSourceKind: resolvedSource.kind,
+          wslDistroName: payload.wslDistroName ?? null,
+        });
       }
       return;
     }
@@ -1451,12 +1586,15 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
 
     const existingTimer = subagentCloseTimers.get(sessionId);
     if (existingTimer) clearTimeout(existingTimer);
+    const currentTranscript = get().subagentTranscripts[sessionId];
+    const closeDelayMs = currentTranscript?.source.kind === "child-jsonl" ? SUBAGENT_CHILD_JSONL_CLOSE_DELAY_MS : SUBAGENT_CLOSE_DELAY_MS;
+    logInfo("[subagent_transcript] schedule transcript close", { sessionId, closeDelayMs, sourceKind: currentTranscript?.source.kind });
     const timer = setTimeout(() => {
       subagentCloseTimers.delete(sessionId);
       const store = useTerminalStore.getState();
       if (!store.sessions.some((session) => session.id === sessionId)) return;
       void store.closeSession(sessionId);
-    }, SUBAGENT_CLOSE_DELAY_MS);
+    }, closeDelayMs);
     subagentCloseTimers.set(sessionId, timer);
   },
 

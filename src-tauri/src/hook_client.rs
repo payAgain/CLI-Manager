@@ -92,6 +92,7 @@ fn try_notify(source: &str, event: &str) -> Option<()> {
             )
         });
     let transcript_path = first_string(&hook_input, &["transcript_path"]);
+    let wsl_distro_name = non_empty_env("WSL_DISTRO_NAME");
     let cwd = env::current_dir()
         .ok()
         .map(|path| path.to_string_lossy().to_string());
@@ -111,6 +112,7 @@ fn try_notify(source: &str, event: &str) -> Option<()> {
         "agentType": agent_type,
         "agentTranscriptPath": agent_transcript_path,
         "transcriptPath": transcript_path,
+        "wslDistroName": wsl_distro_name,
     });
     let body = serde_json::to_vec(&payload).ok()?;
 

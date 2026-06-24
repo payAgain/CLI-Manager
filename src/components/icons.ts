@@ -40,6 +40,7 @@ export {
   Play,
   Plus,
   RefreshCw,
+  Save,
   ScanLine,
   Search,
   Settings,

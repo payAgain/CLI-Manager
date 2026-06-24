@@ -430,7 +430,6 @@ export function GeneralSettingsPage() {
   const ccusageAnalyticsEnabled = useSettingsStore((s) => s.ccusageAnalyticsEnabled);
   const terminalToolbarVisibility = useSettingsStore((s) => s.terminalToolbarVisibility);
   const sidebarToolbarVisibility = useSettingsStore((s) => s.sidebarToolbarVisibility);
-  const showProjectTreeBadges = useSettingsStore((s) => s.showProjectTreeBadges);
   const terminalSidePanelMerged = useSettingsStore((s) => s.terminalSidePanelMerged);
   const setTheme = useSettingsStore((s) => s.setTheme);
   const update = useSettingsStore((s) => s.update);
@@ -781,25 +780,6 @@ export function GeneralSettingsPage() {
                 })}
               </SimpleGrid>
             </Stack>
-
-            <Card className="border border-border bg-surface-container-lowest" p="sm" radius="lg">
-              <Group justify="space-between" align="center" gap="md" wrap="nowrap">
-                <Box>
-                  <Text size="xs" c="var(--on-surface-variant)">
-                    项目树徽章
-                  </Text>
-                  <Text mt={4} size="xs" c="var(--text-muted)">
-                    显示供应商徽标、路径异常和分组数量标记。
-                  </Text>
-                </Box>
-                <Switch
-                  color="cliPrimary"
-                  checked={showProjectTreeBadges}
-                  onChange={(event) => void update("showProjectTreeBadges", event.currentTarget.checked)}
-                  aria-label={showProjectTreeBadges ? "隐藏项目树徽章" : "显示项目树徽章"}
-                />
-              </Group>
-            </Card>
 
             <Card className="border border-border bg-surface-container-lowest" p="sm" radius="lg">
               <Group justify="space-between" align="center" gap="md" wrap="nowrap">

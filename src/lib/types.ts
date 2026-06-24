@@ -53,7 +53,7 @@ export type TreeNode =
   | { type: "group"; group: Group; children: TreeNode[] }
   | { type: "project"; project: Project };
 
-export type TerminalSessionKind = "pty" | "subagent-transcript";
+export type TerminalSessionKind = "pty" | "subagent-transcript" | "file-editor";
 
 export type SubagentTranscriptSourceKind = "pending" | "child-jsonl" | "parent-jsonl" | "lifecycle-only";
 
@@ -84,7 +84,36 @@ export interface TerminalSession {
     agentType?: string;
     source?: SubagentTranscriptSource;
   };
+  /** 仅 kind="file-editor" 时存在：项目文件编辑器伪会话（无 PTY、不持久化）。 */
+  fileEditor?: {
+    projectId: string;
+    projectPath: string;
+    projectName: string;
+    project: Project;
+  };
 }
+
+export interface ProjectFileEntry {
+  name: string;
+  path: string;
+  kind: "file" | "directory";
+  sizeBytes: number;
+  modifiedMs?: number | null;
+  children?: ProjectFileEntry[];
+}
+
+export interface ProjectTextFilePayload {
+  content: string;
+  sizeBytes: number;
+}
+
+export interface ProjectImageFilePayload {
+  dataBase64: string;
+  mimeType: string;
+  sizeBytes: number;
+}
+
+export type ProjectFilePreviewKind = "empty" | "text" | "markdown" | "image" | "unsupported";
 
 export interface PersistedSplit {
   primarySessionIndex: number;

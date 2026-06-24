@@ -3,6 +3,7 @@ import { useShallow } from "zustand/shallow";
 import type { DragEndEvent } from "@dnd-kit/core";
 import { useProjectStore } from "../../stores/projectStore";
 import { useTerminalStore, type SessionStatus, type SplitTerminalOptions } from "../../stores/terminalStore";
+import { isProjectFileDirty, useFileExplorerStore } from "../../stores/fileExplorerStore";
 import { useSettingsStore } from "../../stores/settingsStore";
 import type { TerminalPaneSplitDirection } from "../../stores/terminalPaneTree";
 import type { Project, TreeNode as TNode, Group } from "../../lib/types";
@@ -18,10 +19,12 @@ import { logError } from "../../lib/logger";
 import { SidebarHeader } from "./SidebarHeader";
 import { ProjectTree } from "./ProjectTree";
 import { SidebarFooter } from "./SidebarFooter";
+import { FileExplorerSidebar } from "../files/FileExplorerSidebar";
 import {
   ArrowLeftRight,
   Check,
   Copy,
+  FileCode,
   FolderOpen,
   FolderPlus,
   Pencil,
@@ -102,6 +105,7 @@ export function Sidebar({ onOpenSettings, onOpenStats, compactMode = false }: Si
   const moveProjectToGroup = useProjectStore((s) => s.moveProjectToGroup);
   const createSession = useTerminalStore((s) => s.createSession);
   const splitTerminal = useTerminalStore((s) => s.splitTerminal);
+  const openFileEditorPane = useTerminalStore((s) => s.openFileEditorPane);
   const sessions = useTerminalStore((s) => s.sessions);
   const activeSessionId = useTerminalStore((s) => s.activeSessionId);
   const setActiveSession = useTerminalStore((s) => s.setActive);
@@ -111,6 +115,8 @@ export function Sidebar({ onOpenSettings, onOpenStats, compactMode = false }: Si
   const sidebarToolbarVisibility = useSettingsStore((s) => s.sidebarToolbarVisibility);
   const updateSetting = useSettingsStore((s) => s.update);
   const persistedSidebarWidth = useSettingsStore((s) => s.sidebarWidth);
+  const openFileProject = useFileExplorerStore((s) => s.openProject);
+  const fileProject = useFileExplorerStore((s) => s.project);
 
   const initialSidebarWidth = normalizePersistedSidebarWidth(persistedSidebarWidth);
   const [sidebarWidth, setSidebarWidth] = useState(initialSidebarWidth);
@@ -607,6 +613,20 @@ export function Sidebar({ onOpenSettings, onOpenStats, compactMode = false }: Si
     }
   }, []);
 
+  const handleOpenProjectFiles = useCallback(async (project: Project) => {
+    try {
+      if (fileProject?.id !== project.id && isProjectFileDirty()) {
+        const confirmed = window.confirm("当前文件有未保存修改，切换项目会丢弃这些修改。是否继续？");
+        if (!confirmed) return;
+      }
+      await openFileProject(project);
+      openFileEditorPane(project);
+    } catch (err) {
+      logError("Failed to open project file browser", err);
+      toast.error("打开项目文件失败", { description: String(err) });
+    }
+  }, [fileProject?.id, openFileEditorPane, openFileProject]);
+
   const handleRequestDeleteProject = useCallback((project: Project) => {
     setConfirmAction({ kind: "delete-project", project });
   }, []);
@@ -855,28 +875,32 @@ export function Sidebar({ onOpenSettings, onOpenStats, compactMode = false }: Si
       </div>
 
       <div className={`${compactMode ? "min-h-[220px]" : "min-h-0"} flex-1 overflow-hidden`}>
-        <TreeContext.Provider value={treeActions}>
-          <ProjectTree
-            tree={tree}
-            initialLoading={initialLoading}
-            loadError={loadError}
-            collapsed={compactMode ? false : sidebarCollapsed}
-            density={sidebarDensity}
-            newGroupParentId={newGroupParentId}
-            onCreateRootGroup={(name) => handleCreateGroup(null, name)}
-            onCancelRootGroup={handleCancelNewGroup}
-            onQuickAddProject={() => {
-              ensureSidebarExpanded();
-              setAddToGroupId(null);
-              setShowAdd(true);
-            }}
-            onRetry={() => {
-              setInitialLoading(true);
-              void loadProjects();
-            }}
-            onExpandSidebar={expandSidebar}
-          />
-        </TreeContext.Provider>
+        {fileProject && !sidebarCollapsed ? (
+          <FileExplorerSidebar />
+        ) : (
+          <TreeContext.Provider value={treeActions}>
+            <ProjectTree
+              tree={tree}
+              initialLoading={initialLoading}
+              loadError={loadError}
+              collapsed={compactMode ? false : sidebarCollapsed}
+              density={sidebarDensity}
+              newGroupParentId={newGroupParentId}
+              onCreateRootGroup={(name) => handleCreateGroup(null, name)}
+              onCancelRootGroup={handleCancelNewGroup}
+              onQuickAddProject={() => {
+                ensureSidebarExpanded();
+                setAddToGroupId(null);
+                setShowAdd(true);
+              }}
+              onRetry={() => {
+                setInitialLoading(true);
+                void loadProjects();
+              }}
+              onExpandSidebar={expandSidebar}
+            />
+          </TreeContext.Provider>
+        )}
       </div>
 
       <div className="ui-sidebar-footer shrink-0">
@@ -990,6 +1014,17 @@ export function Sidebar({ onOpenSettings, onOpenStats, compactMode = false }: Si
                 >
                   <FolderOpen size={14} strokeWidth={1.5} />
                   打开所在目录
+                </button>
+                <button
+                  className="context-menu-item"
+                  role="menuitem"
+                  onClick={() => {
+                    void handleOpenProjectFiles(contextMenu.project);
+                    setContextMenu(null);
+                  }}
+                >
+                  <FileCode size={14} strokeWidth={1.5} />
+                  浏览文件
                 </button>
                 {contextMenu.project.cli_tool.toLowerCase().includes("claude") && (
                   <button

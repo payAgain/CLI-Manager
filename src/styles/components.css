@@ -3587,3 +3587,30 @@
 .ui-terminal-bg-layer[data-bg-enabled="true"] .xterm-screen {
   background-color: transparent !important;
 }
+
+.ui-file-tree-row {
+  color: var(--on-surface);
+}
+
+.ui-file-tree-row:hover,
+.ui-file-tree-row[data-selected="true"] {
+  background: var(--interactive-hover-bg);
+}
+
+.ui-file-tree-row[data-selected="true"] {
+  color: var(--primary);
+}
+
+.ui-file-editor-pane {
+  background: var(--surface);
+  color: var(--on-surface);
+}
+
+.ui-file-editor-segment button {
+  color: var(--text-muted);
+}
+
+.ui-file-editor-segment button[data-active="true"] {
+  background: var(--interactive-selected-bg);
+  color: var(--on-surface);
+}

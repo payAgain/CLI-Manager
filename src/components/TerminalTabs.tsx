@@ -39,6 +39,7 @@ import {
   type TerminalSidePanelTab,
 } from "./terminal/TerminalSidePanel";
 import { SubagentTranscriptView } from "./terminal/SubagentTranscriptView";
+import { FileEditorPane } from "./files/FileEditorPane";
 import { openWindowsTerminal } from "../lib/externalTerminal";
 import { resolveProjectStartupCommand } from "../lib/projectStartupCommand";
 import { Terminal, Plus, ListClockIcon, X, Maximize2, Minimize2, ChevronDown, ChevronRight, BarChart3, GitBranch, Folder, Check } from "./icons";
@@ -419,7 +420,7 @@ interface PaneTabBarProps {
   terminalBackgroundImagePath: string | null;
   hiddenBackgroundSessionIds: Set<string>;
   onActivateSession: (sessionId: string) => void;
-  onCloseSessions: (sessionIds: string[]) => void;
+  onCloseSessions: (sessionIds: string[], anchor?: SplitPickerAnchor) => void;
   onStartEdit: (sessionId: string) => void;
   onSubmitEdit: (sessionId: string, title: string) => void;
   onCancelEdit: () => void;
@@ -827,7 +828,7 @@ interface PaneLeafViewProps {
   hiddenBackgroundSessionIds: Set<string>;
   activeDropPreview?: PaneDropPreview;
   onActivateSession: (sessionId: string) => void;
-  onCloseSessions: (sessionIds: string[]) => void;
+  onCloseSessions: (sessionIds: string[], anchor?: SplitPickerAnchor) => void;
   onStartEdit: (sessionId: string) => void;
   onSubmitEdit: (sessionId: string, title: string) => void;
   onCancelEdit: () => void;
@@ -920,7 +921,13 @@ function PaneLeafView({
             className="absolute inset-0"
             style={{ display: session.id === pane.activeSessionId ? "block" : "none" }}
           >
-            {session.kind === "subagent-transcript" ? (
+            {session.kind === "file-editor" ? (
+              <FileEditorPane
+                session={session}
+                isActive={session.id === activeSessionId}
+                onClose={() => onCloseSessions([session.id])}
+              />
+            ) : session.kind === "subagent-transcript" ? (
               <SubagentTranscriptView sessionId={session.id} title={session.title} />
             ) : (
               <XTermTerminal
@@ -988,7 +995,7 @@ interface SplitProjectPickerProps {
   menuStyle: CSSProperties;
   onSelectEmpty: () => void;
   onSelectProject: (project: Project) => void;
-  onClose: (anchor?: SplitPickerAnchor) => void;
+  onClose: () => void;
   shouldIgnoreOutsideInteraction: () => boolean;
 }
 
@@ -1253,6 +1260,9 @@ export function TerminalTabs({ fullscreen = false, onToggleFullscreen }: Termina
     if (activeSession?.kind === "subagent-transcript" && activeSession.subagent) {
       return sessions.find((session) => session.id === activeSession.subagent!.parentSessionId) ?? activeSession;
     }
+    if (activeSession?.kind === "file-editor") {
+      return null;
+    }
     return activeSession;
   }, [activeSession, sessions]);
   const panelSessionId = panelSession?.id ?? null;
@@ -1323,9 +1333,12 @@ export function TerminalTabs({ fullscreen = false, onToggleFullscreen }: Termina
   }, []);
 
   const handleNewTab = useCallback(async () => {
-    const newTerminalContext = activeSession?.kind === "subagent-transcript"
-      ? { cwd: undefined, title: "Terminal" }
-      : { cwd: activeSession?.cwd, title: activeSession?.title ?? "Terminal" };
+    const newTerminalContext =
+      activeSession?.kind === "subagent-transcript"
+        ? { cwd: undefined, title: "Terminal" }
+        : activeSession?.kind === "file-editor"
+          ? { cwd: activeSession.fileEditor?.projectPath, title: "Terminal" }
+          : { cwd: activeSession?.cwd, title: activeSession?.title ?? "Terminal" };
     if (useExternalTerminal) {
       await openWindowsTerminal([{ title: newTerminalContext.title, cwd: newTerminalContext.cwd ?? undefined }]);
       return;
@@ -1379,7 +1392,12 @@ export function TerminalTabs({ fullscreen = false, onToggleFullscreen }: Termina
     const uniqueSessionIds = Array.from(new Set(sessionIds)).filter((sessionId) => sessions.some((session) => session.id === sessionId));
     if (uniqueSessionIds.length === 0) return;
 
-    if (!shouldConfirmTerminalTabClose(uniqueSessionIds.length)) {
+    const terminalSessionCount = uniqueSessionIds.filter((sessionId) => {
+      const session = sessions.find((item) => item.id === sessionId);
+      return session?.kind !== "file-editor";
+    }).length;
+
+    if (!shouldConfirmTerminalTabClose(terminalSessionCount)) {
       closeSessionIds(uniqueSessionIds);
       return;
     }

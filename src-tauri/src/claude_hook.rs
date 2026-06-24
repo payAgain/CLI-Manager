@@ -35,6 +35,7 @@ struct ClaudeHookRequest {
     agent_type: Option<String>,
     agent_transcript_path: Option<String>,
     transcript_path: Option<String>,
+    wsl_distro_name: Option<String>,
 }
 
 #[derive(Clone, Serialize)]
@@ -53,6 +54,7 @@ pub struct ClaudeHookPayload {
     agent_type: Option<String>,
     agent_transcript_path: Option<String>,
     transcript_path: Option<String>,
+    wsl_distro_name: Option<String>,
 }
 
 impl ClaudeHookBridge {
@@ -159,6 +161,7 @@ fn handle_stream(mut stream: TcpStream, app_handle: AppHandle, token: &str) {
         agent_type: payload.agent_type,
         agent_transcript_path: payload.agent_transcript_path,
         transcript_path: payload.transcript_path,
+        wsl_distro_name: payload.wsl_distro_name,
     };
 
     if let Err(err) = app_handle.emit(EVENT_NAME, payload) {
@@ -289,7 +292,7 @@ fn log_hook_payload_diagnostic(payload: &ClaudeHookRequest) {
     }
 
     info!(
-        "cli hook payload diagnostic: source={} event={} tabId={} sessionId={:?} agentId={:?} toolUseId={:?} agentType={:?} hasAgentTranscriptPath={} hasTranscriptPath={} cwd={:?}",
+        "cli hook payload diagnostic: source={} event={} tabId={} sessionId={:?} agentId={:?} toolUseId={:?} agentType={:?} hasAgentTranscriptPath={} hasTranscriptPath={} wslDistro={:?} cwd={:?}",
         normalize_source(payload.source.as_deref()),
         payload.event,
         payload.tab_id,
@@ -305,6 +308,7 @@ fn log_hook_payload_diagnostic(payload: &ClaudeHookRequest) {
             .transcript_path
             .as_deref()
             .is_some_and(|value| !value.trim().is_empty()),
+        payload.wsl_distro_name,
         payload.cwd,
     );
 

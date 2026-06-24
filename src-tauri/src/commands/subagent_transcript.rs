@@ -6,9 +6,10 @@
 //!
 //! 路径定位：优先用 hook 负载里的 `agentTranscriptPath`；否则由 `cwd + 父 sessionId + agentId`
 //! 推导 `<home>/.claude/projects/<slug(cwd)>/<sessionId>/subagents/agent-<agentId>.jsonl`。
-//! WSL（Claude 跑在 Linux、上报 Linux 路径）暂不在本版支持：解析不出 Windows 可访问路径时
-//! 优雅降级（订阅失败/不 tail），不影响 CLI 与既有功能。
+//! WSL 下 Claude 上报 Linux 路径时，先转为 `\\wsl.localhost\<distro>\...` 供 Windows
+//! 端 tail；目录发现走 `wsl.exe find`，绕过 Plan 9 目录枚举限制。
 
+use crate::shell_resolver::silent_command;
 use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{Read, Seek, SeekFrom};
@@ -18,7 +19,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use log::info;
+use log::{info, warn};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
 
@@ -70,8 +71,8 @@ impl SubagentTranscriptBridge {
         }
 
         let thread_key = key.clone();
+        info!("[subagent_transcript] subscribe: key={key} path={path}");
         thread::spawn(move || tail_loop(app_handle, thread_key, path, stop));
-        info!("[subagent_transcript] subscribe: {key}");
         Ok(())
     }
 
@@ -91,12 +92,29 @@ fn tail_loop(app_handle: AppHandle, key: String, path: String, stop: Arc<AtomicB
     let path = PathBuf::from(path);
     let mut offset: u64 = 0;
     let mut started = false;
+    let mut missing_logged = false;
+    info!(
+        "[subagent_transcript] tail started: key={key} path={}",
+        path.to_string_lossy()
+    );
 
     while !stop.load(Ordering::Relaxed) {
+        if !missing_logged && !path.exists() {
+            missing_logged = true;
+            warn!(
+                "[subagent_transcript] tail waiting for file: key={key} path={}",
+                path.to_string_lossy()
+            );
+        }
         if let Some((content, new_offset, shrank)) = read_new_lines(&path, offset) {
             let reset = shrank || !started;
             started = true;
             offset = new_offset;
+            info!(
+                "[subagent_transcript] tail read lines: key={key} bytes={} offset={} reset={reset}",
+                content.len(),
+                offset
+            );
             let payload = AppendPayload {
                 key: key.clone(),
                 content,
@@ -151,6 +169,43 @@ fn slug_for_cwd(cwd: &str) -> String {
         .collect()
 }
 
+fn trimmed(value: Option<String>) -> Option<String> {
+    value
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+}
+
+fn is_linux_absolute_path(path: &str) -> bool {
+    path.trim().starts_with('/')
+}
+
+fn normalize_explicit_transcript_path(path: String, wsl_distro_name: Option<&str>) -> String {
+    let path = path.trim().to_string();
+    if is_linux_absolute_path(&path) {
+        if let Some(distro) = wsl_distro_name.map(str::trim).filter(|v| !v.is_empty()) {
+            let unc = crate::wsl::linux_to_unc_wsl_path(&path, distro);
+            info!(
+                "[subagent_transcript] explicit linux path resolved via WSL: distro={distro} linux={path} unc={unc}"
+            );
+            return unc;
+        }
+        warn!(
+            "[subagent_transcript] explicit linux path without WSL distro, using raw path: {path}"
+        );
+    }
+    path
+}
+
+fn cwd_for_wsl_slug(cwd: &str) -> String {
+    if is_linux_absolute_path(cwd) {
+        return cwd.trim().to_string();
+    }
+    if let Some((_distro, linux_path)) = crate::wsl::parse_wsl_unc_path(cwd) {
+        return linux_path;
+    }
+    crate::wsl::windows_path_to_wsl(cwd).unwrap_or_else(|| cwd.trim().to_string())
+}
+
 /// 由 home + cwd + 父 sessionId + agentId 推导子 Agent 转录 jsonl 路径。
 fn derive_transcript_path(home: &Path, cwd: &str, session_id: &str, agent_id: &str) -> String {
     home.join(".claude")
@@ -161,6 +216,120 @@ fn derive_transcript_path(home: &Path, cwd: &str, session_id: &str, agent_id: &s
         .join(format!("agent-{agent_id}.jsonl"))
         .to_string_lossy()
         .to_string()
+}
+
+fn derive_wsl_linux_transcript_path(
+    linux_home: &str,
+    cwd: &str,
+    session_id: &str,
+    agent_id: &str,
+) -> String {
+    let home = linux_home.trim().trim_end_matches('/');
+    let cwd = cwd_for_wsl_slug(cwd);
+    format!(
+        "{home}/.claude/projects/{}/{session_id}/subagents/agent-{agent_id}.jsonl",
+        slug_for_cwd(&cwd)
+    )
+}
+
+fn derive_wsl_unc_transcript_path(
+    linux_home: &str,
+    cwd: &str,
+    session_id: &str,
+    agent_id: &str,
+    distro: &str,
+) -> String {
+    let linux_path = derive_wsl_linux_transcript_path(linux_home, cwd, session_id, agent_id);
+    crate::wsl::linux_to_unc_wsl_path(&linux_path, distro)
+}
+
+fn wsl_exe() -> String {
+    crate::wsl::find_wsl_exe()
+        .as_deref()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_else(|| "wsl.exe".to_string())
+}
+
+fn wsl_command_text(distro: &str, args: &[&str]) -> Result<(String, String), String> {
+    let program = wsl_exe();
+    let mut cmd = silent_command(&program);
+    cmd.args(["-d", distro]);
+    cmd.args(args);
+    run_wsl_command(cmd, &program)
+}
+
+fn wsl_default_command_text(args: &[&str]) -> Result<(String, String), String> {
+    let program = wsl_exe();
+    let mut cmd = silent_command(&program);
+    cmd.args(args);
+    run_wsl_command(cmd, &program)
+}
+
+fn run_wsl_command(mut cmd: std::process::Command, program: &str) -> Result<(String, String), String> {
+    let output = cmd
+        .output()
+        .map_err(|err| format!("wsl command '{program}' failed: {err}"))?;
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    if !output.status.success() {
+        return Err(format!(
+            "wsl command failed (exit {}): {}",
+            output
+                .status
+                .code()
+                .map(|c| c.to_string())
+                .unwrap_or_else(|| "?".to_string()),
+            stderr.trim()
+        ));
+    }
+    Ok((stdout, stderr))
+}
+
+fn default_wsl_distro_name() -> Result<String, String> {
+    info!("[subagent_transcript:wsl] resolving default distro from wsl.exe");
+    let (stdout, _stderr) = wsl_default_command_text(&["sh", "-lc", "printf %s \"$WSL_DISTRO_NAME\""])?;
+    let distro = stdout.trim();
+    if distro.is_empty() {
+        return Err("empty_wsl_distro_name".to_string());
+    }
+    Ok(distro.to_string())
+}
+
+fn resolve_wsl_distro_name(wsl_distro_name: Option<String>) -> Result<String, String> {
+    if let Some(distro) = trimmed(wsl_distro_name) {
+        return Ok(distro);
+    }
+    default_wsl_distro_name()
+}
+
+fn wsl_home_dir(distro: &str) -> Result<String, String> {
+    info!("[subagent_transcript:wsl] resolving HOME: distro={distro}");
+    let (stdout, _stderr) = wsl_command_text(distro, &["sh", "-lc", "printf %s \"$HOME\""])?;
+    let home = stdout.trim();
+    if home.is_empty() {
+        return Err("empty_wsl_home".to_string());
+    }
+    Ok(home.to_string())
+}
+
+fn resolve_wsl_transcript_path(
+    cwd: String,
+    session_id: String,
+    agent_id: String,
+    distro: String,
+) -> Result<String, String> {
+    let linux_home = wsl_home_dir(&distro)?;
+    let resolved = derive_wsl_unc_transcript_path(
+        &linux_home,
+        &cwd,
+        &session_id,
+        &agent_id,
+        &distro,
+    );
+    info!(
+        "[subagent_transcript:wsl] derived transcript path: distro={distro} cwd={cwd} sessionId={session_id} agentId={agent_id} path={resolved}"
+    );
+    Ok(resolved)
 }
 
 fn home_dir() -> Option<PathBuf> {
@@ -176,21 +345,41 @@ fn resolve_transcript_path(
     cwd: Option<String>,
     session_id: Option<String>,
     agent_id: Option<String>,
+    wsl_distro_name: Option<String>,
 ) -> Result<String, String> {
-    let trimmed = |value: Option<String>| {
-        value
-            .map(|v| v.trim().to_string())
-            .filter(|v| !v.is_empty())
-    };
-
     if let Some(explicit) = trimmed(transcript_path) {
-        return Ok(explicit);
+        if is_linux_absolute_path(&explicit) {
+            let distro = resolve_wsl_distro_name(wsl_distro_name)?;
+            info!(
+                "[subagent_transcript] resolving explicit linux transcript path with distro={distro}"
+            );
+            return Ok(normalize_explicit_transcript_path(explicit, Some(&distro)));
+        }
+        info!(
+            "[subagent_transcript] resolving explicit transcript path: hasWslDistro={} isLinuxPath={}",
+            wsl_distro_name.as_deref().is_some_and(|v| !v.trim().is_empty()),
+            is_linux_absolute_path(&explicit)
+        );
+        return Ok(normalize_explicit_transcript_path(
+            explicit,
+            wsl_distro_name.as_deref(),
+        ));
     }
 
-    let home = home_dir().ok_or_else(|| "no_home_dir".to_string())?;
     let cwd = trimmed(cwd).ok_or_else(|| "missing_cwd".to_string())?;
     let session_id = trimmed(session_id).ok_or_else(|| "missing_session_id".to_string())?;
     let agent_id = trimmed(agent_id).ok_or_else(|| "missing_agent_id".to_string())?;
+    if let Some(distro) = trimmed(wsl_distro_name) {
+        info!(
+            "[subagent_transcript] resolving derived WSL transcript path: distro={distro} cwd={cwd} sessionId={session_id} agentId={agent_id}"
+        );
+        return resolve_wsl_transcript_path(cwd, session_id, agent_id, distro);
+    }
+
+    let home = home_dir().ok_or_else(|| "no_home_dir".to_string())?;
+    info!(
+        "[subagent_transcript] resolving derived native transcript path: cwd={cwd} sessionId={session_id} agentId={agent_id}"
+    );
     Ok(derive_transcript_path(&home, &cwd, &session_id, &agent_id))
 }
 
@@ -204,11 +393,19 @@ pub async fn subagent_transcript_subscribe(
     cwd: Option<String>,
     session_id: Option<String>,
     agent_id: Option<String>,
+    wsl_distro_name: Option<String>,
 ) -> Result<String, String> {
     if key.trim().is_empty() {
         return Err("missing_key".to_string());
     }
-    let path = resolve_transcript_path(transcript_path, cwd, session_id, agent_id)?;
+    let path = resolve_transcript_path(
+        transcript_path,
+        cwd,
+        session_id,
+        agent_id,
+        wsl_distro_name,
+    )?;
+    info!("[subagent_transcript] subscribe resolved path: key={key} path={path}");
     bridge.subscribe(app_handle, key, path.clone())?;
     Ok(path)
 }
@@ -229,7 +426,15 @@ pub async fn subagent_transcript_unsubscribe(
 pub async fn subagent_transcript_discover(
     cwd: String,
     session_id: String,
+    wsl_distro_name: Option<String>,
 ) -> Result<Vec<String>, String> {
+    if let Some(distro) = trimmed(wsl_distro_name) {
+        info!(
+            "[subagent_transcript:wsl] discover requested: distro={distro} cwd={cwd} sessionId={session_id}"
+        );
+        return discover_wsl_subagent_files(&cwd, &session_id, &distro);
+    }
+
     let home = home_dir().ok_or_else(|| "no_home_dir".to_string())?;
     let subagents_dir = home
         .join(".claude")
@@ -239,9 +444,17 @@ pub async fn subagent_transcript_discover(
         .join("subagents");
 
     if !subagents_dir.exists() {
+        info!(
+            "[subagent_transcript] discover native dir missing: {}",
+            subagents_dir.to_string_lossy()
+        );
         return Ok(Vec::new());
     }
 
+    info!(
+        "[subagent_transcript] discover native dir: {}",
+        subagents_dir.to_string_lossy()
+    );
     let entries = std::fs::read_dir(&subagents_dir).map_err(|e| e.to_string())?;
     let mut agent_files = Vec::new();
 
@@ -256,7 +469,69 @@ pub async fn subagent_transcript_discover(
         }
     }
 
+    info!(
+        "[subagent_transcript] discover native result: count={}",
+        agent_files.len()
+    );
     Ok(agent_files)
+}
+
+fn discover_wsl_subagent_files(
+    cwd: &str,
+    session_id: &str,
+    distro: &str,
+) -> Result<Vec<String>, String> {
+    let linux_home = wsl_home_dir(distro)?;
+    let linux_cwd = cwd_for_wsl_slug(cwd);
+    let subagents_dir = format!(
+        "{}/.claude/projects/{}/{}/subagents",
+        linux_home.trim_end_matches('/'),
+        slug_for_cwd(&linux_cwd),
+        session_id
+    );
+    let pattern = "agent-\\*.jsonl";
+    let args = [
+        "find",
+        subagents_dir.as_str(),
+        "-maxdepth",
+        "1",
+        "-name",
+        pattern,
+        "-type",
+        "f",
+        "-printf",
+        "%f\n",
+    ];
+    info!(
+        "[subagent_transcript:wsl] discover dir: distro={distro} dir={subagents_dir}"
+    );
+
+    match wsl_command_text(distro, &args) {
+        Ok((stdout, stderr)) => {
+            if !stderr.trim().is_empty() {
+                warn!("[subagent_transcript:wsl] discover stderr: {}", stderr.trim());
+            }
+            let files: Vec<String> = stdout
+                .lines()
+                .map(str::trim)
+                .filter(|name| name.starts_with("agent-") && name.ends_with(".jsonl"))
+                .map(ToString::to_string)
+                .collect();
+            info!(
+                "[subagent_transcript:wsl] discover result: distro={distro} count={} files={:?}",
+                files.len(),
+                files
+            );
+            Ok(files)
+        }
+        Err(err) => {
+            warn!(
+                "[subagent_transcript:wsl] discover failed: distro={distro} dir={subagents_dir} error={}",
+                err.trim()
+            );
+            Ok(Vec::new())
+        }
+    }
 }
 
 #[cfg(test)]
@@ -289,14 +564,51 @@ mod tests {
 
     #[test]
     fn resolve_prefers_explicit_transcript_path() {
-        let got =
-            resolve_transcript_path(Some("  /tmp/a.jsonl ".to_string()), None, None, None).unwrap();
-        assert_eq!(got, "/tmp/a.jsonl");
+        let got = resolve_transcript_path(
+            Some(r"  C:\tmp\a.jsonl ".to_string()),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(got, r"C:\tmp\a.jsonl");
+    }
+
+    #[test]
+    fn explicit_linux_path_converts_to_wsl_unc_when_distro_known() {
+        let got = resolve_transcript_path(
+            Some(" /home/me/.claude/projects/p/s/subagents/agent-a.jsonl ".to_string()),
+            None,
+            None,
+            None,
+            Some("Ubuntu-22.04".to_string()),
+        )
+        .unwrap();
+        assert_eq!(
+            got,
+            r"\\wsl.localhost\Ubuntu-22.04\home\me\.claude\projects\p\s\subagents\agent-a.jsonl"
+        );
+    }
+
+    #[test]
+    fn derives_wsl_unc_path_from_windows_cwd_using_linux_slug() {
+        let got = derive_wsl_unc_transcript_path(
+            "/home/me",
+            r"D:\work\pythonProject\CLI-Manager",
+            "sess-1",
+            "a99",
+            "Ubuntu",
+        );
+        assert_eq!(
+            got,
+            r"\\wsl.localhost\Ubuntu\home\me\.claude\projects\-mnt-d-work-pythonProject-CLI-Manager\sess-1\subagents\agent-a99.jsonl"
+        );
     }
 
     #[test]
     fn resolve_requires_parts_when_no_explicit_path() {
-        let err = resolve_transcript_path(None, None, None, None).unwrap_err();
+        let err = resolve_transcript_path(None, None, None, None, None).unwrap_err();
         // 缺 home 或缺 cwd 都应报错（不静默编出错误路径）。
         assert!(err == "missing_cwd" || err == "no_home_dir", "got {err}");
     }
