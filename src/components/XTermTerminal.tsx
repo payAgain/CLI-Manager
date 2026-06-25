@@ -507,7 +507,8 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
       cols: 80,
       rows: 24,
       cursorBlink: false,
-      cursorStyle: "block",
+      cursorStyle: "bar",
+      cursorWidth: 1,
       fontSize,
       fontFamily,
       scrollback: terminalScrollbackRows,
@@ -527,6 +528,8 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
         activate: (_event, uri) => openHttpUrl(sessionId, uri),
       },
     });
+    // Keep Claude Code / other TUIs from overriding the app-wide thin cursor via DECSCUSR.
+    const cursorStyleDisposable = terminal.parser.registerCsiHandler({ intermediates: " ", final: "q" }, () => true);
 
     const fitAddon = new FitAddon();
     const imageAddon = new ImageAddon({
@@ -1251,6 +1254,7 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
       inactiveBufferSizeRef.current = 0;
       unlisten?.();
       searchResultDisposable.dispose();
+      cursorStyleDisposable.dispose();
       webglAddon?.dispose();
       terminal.dispose();
       terminalRef.current = null;

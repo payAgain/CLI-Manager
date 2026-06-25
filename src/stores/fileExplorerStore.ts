@@ -48,6 +48,7 @@ interface FileExplorerStore {
   refreshGitChanges: () => Promise<void>;
   loadDir: (path: string) => Promise<void>;
   toggleDir: (path: string) => Promise<void>;
+  expandCompactDirChain: (path: string) => Promise<void>;
   collapseDir: (path: string) => void;
   setSearchQuery: (query: string) => Promise<void>;
   openFile: (entry: ProjectFileEntry) => Promise<void>;
@@ -433,6 +434,37 @@ export const useFileExplorerStore = create<FileExplorerStore>((set, get) => ({
     expanded.add(path);
     set({ expandedPaths: expanded });
     await get().loadDir(path);
+  },
+
+  expandCompactDirChain: async (path) => {
+    const project = get().project;
+    if (!project) return;
+
+    const loadedDirs: Array<{ path: string; children: ProjectFileEntry[] }> = [];
+    let currentPath = path;
+
+    while (true) {
+      const children = await listDir(project.path, currentPath);
+      loadedDirs.push({ path: currentPath, children });
+
+      if (
+        children.length !== 1
+        || children[0].kind !== "directory"
+        || isDefaultCollapsedDirectoryName(children[0].name)
+      ) {
+        break;
+      }
+
+      currentPath = children[0].path;
+    }
+
+    set((state) => ({
+      expandedPaths: new Set([...state.expandedPaths, ...loadedDirs.map((dir) => dir.path)]),
+      tree: loadedDirs.reduce(
+        (tree, dir) => replaceChildrenKeepingLoadedSubtrees(tree, dir.path, dir.children),
+        state.tree
+      ),
+    }));
   },
 
   collapseDir: (path) => {

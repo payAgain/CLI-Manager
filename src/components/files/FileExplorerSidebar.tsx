@@ -288,6 +288,7 @@ function FileNode({
   const project = useFileExplorerStore((s) => s.project);
   const expandedPaths = useFileExplorerStore((s) => s.expandedPaths);
   const toggleDir = useFileExplorerStore((s) => s.toggleDir);
+  const expandCompactDirChain = useFileExplorerStore((s) => s.expandCompactDirChain);
   const collapseDir = useFileExplorerStore((s) => s.collapseDir);
   const setClipboard = useFileExplorerStore((s) => s.setClipboard);
   const pasteInto = useFileExplorerStore((s) => s.pasteInto);
@@ -315,6 +316,19 @@ function FileNode({
       }
       throw err;
     }
+  };
+
+  const toggleDirectory = () => {
+    if (!isDir) return;
+    if (isOpen) {
+      if (chainPaths.length > 1) {
+        collapseDir(entry.path);
+      } else {
+        void toggleDir(displayEntry.path);
+      }
+      return;
+    }
+    void expandCompactDirChain(entry.path);
   };
 
   const childRows = isDir && isOpen && displayEntry.children ? (
@@ -383,7 +397,7 @@ function FileNode({
               if (event.defaultPrevented) return;
               if (event.key !== "Enter" && event.key !== " ") return;
               event.preventDefault();
-              if (isDir) void toggleDir(displayEntry.path);
+              if (isDir) toggleDirectory();
               else onOpenFile(displayEntry);
             }}
             onDragStart={(event) => onFileDragStart(event, displayEntry)}
@@ -391,7 +405,7 @@ function FileNode({
             onDragOver={(event) => onFileDragOver(event, displayEntry)}
             onDrop={(event) => onFileDrop(event, displayEntry)}
             onClick={() => {
-              if (isDir) void toggleDir(displayEntry.path);
+              if (isDir) toggleDirectory();
               else onOpenFile(displayEntry);
             }}
           >
