@@ -16,17 +16,16 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { useTerminalStore } from "../../stores/terminalStore";
 import { useUpdateStore } from "../../stores/updateStore";
 import { MarkdownContent } from "../ui/MarkdownContent";
-import { useI18n, type TranslationKey } from "../../lib/i18n";
 
 const REPOSITORY_URL = "https://github.com/dark-hxx/CLI-Manager";
 const MANUAL_URL = `${REPOSITORY_URL}/blob/master/docs/%E5%8A%9F%E8%83%BD%E6%B8%85%E5%8D%95.md`;
 const AUTHOR_URL = "https://github.com/dark-hxx";
 
-const PROJECT_HIGHLIGHTS: TranslationKey[] = [
-  "settings.about.highlight.pty",
-  "settings.about.highlight.cli",
-  "settings.about.highlight.history",
-  "settings.about.highlight.sync",
+const PROJECT_HIGHLIGHTS = [
+  "多项目 PTY 终端管理",
+  "Claude Code / Codex CLI 集成",
+  "历史会话 Diff 与用量分析",
+  "供应商切换与 WebDAV 同步",
 ];
 
 interface ExternalLinkItemProps {
@@ -66,7 +65,6 @@ function ExternalLinkItem({ icon: Icon, title, description, url }: ExternalLinkI
 }
 
 export function AboutSection() {
-  const { language, t } = useI18n();
   const {
     currentVersion,
     checking,
@@ -133,7 +131,7 @@ export function AboutSection() {
   const formatDate = (dateStr: string) => {
     if (!dateStr) return "";
     try {
-      return new Date(dateStr).toLocaleDateString(language, {
+      return new Date(dateStr).toLocaleDateString("zh-CN", {
         year: "numeric",
         month: "long",
         day: "numeric",
@@ -161,7 +159,7 @@ export function AboutSection() {
     ? `${downloadProgress}%（${formatBytes(downloadedBytes)} / ${formatBytes(downloadTotalBytes)}）`
     : downloadProgress > 0
       ? `${downloadProgress}%`
-      : t("settings.about.downloading");
+      : "正在下载...";
 
   return (
     <div className="space-y-4">
@@ -171,9 +169,9 @@ export function AboutSection() {
             <Info className="h-5 w-5" />
           </span>
           <div className="min-w-0 flex-1">
-            <div className="text-sm font-semibold text-on-surface">{t("settings.about.projectIntro")}</div>
+            <div className="text-sm font-semibold text-on-surface">项目介绍</div>
             <p className="mt-2 max-w-3xl text-sm leading-6 text-on-surface-variant">
-              {t("settings.about.projectDescription")}
+              CLI-Manager 是面向 Claude Code / Codex CLI 的跨平台 AI CLI 增强工作台，用于集中管理多项目终端、会话历史、Diff 回看、用量分析、供应商切换和配置同步。
             </p>
             <div className="mt-3 flex flex-wrap gap-2">
               {PROJECT_HIGHLIGHTS.map((item) => (
@@ -181,7 +179,7 @@ export function AboutSection() {
                   key={item}
                   className="rounded-full border border-border bg-surface-container-high px-2.5 py-1 text-xs text-on-surface-variant"
                 >
-                  {t(item)}
+                  {item}
                 </span>
               ))}
             </div>
@@ -190,10 +188,10 @@ export function AboutSection() {
       </section>
 
       <section className="ui-surface-card rounded-2xl border border-border p-4">
-        <div className="text-sm font-semibold text-on-surface">{t("settings.about.updates")}</div>
+        <div className="text-sm font-semibold text-on-surface">应用更新</div>
 
         <div className="mt-3 flex items-center justify-between">
-          <span className="text-xs text-on-surface-variant">{t("settings.about.version")}</span>
+          <span className="text-xs text-on-surface-variant">版本号</span>
           <span className="rounded-md bg-surface-container-high px-2 py-0.5 font-mono text-xs font-semibold text-on-surface">
             V{currentVersion || "---"}
           </span>
@@ -205,17 +203,17 @@ export function AboutSection() {
             onClick={handleCheckUpdate}
             disabled={checking || downloading || installing}
             className="ui-interactive ui-focus-ring flex items-center gap-1.5 rounded-lg border border-border bg-surface-container-high px-3 py-1.5 text-xs font-medium text-on-surface transition-colors hover:bg-surface-container-highest disabled:cursor-not-allowed disabled:opacity-60"
-            aria-label={checking ? t("settings.about.checking") : t("settings.about.checkUpdate")}
+            aria-label={checking ? "检查中" : "检查更新"}
           >
             {checking ? (
               <>
                 <RefreshCw className="h-3.5 w-3.5 animate-spin" />
-                <span>{t("settings.about.checkingEllipsis")}</span>
+                <span>检查中...</span>
               </>
             ) : (
               <>
                 <RefreshCw className="h-3.5 w-3.5" />
-                <span>{t("settings.about.checkUpdate")}</span>
+                <span>检查更新</span>
               </>
             )}
           </button>
@@ -225,10 +223,10 @@ export function AboutSection() {
               <AlertCircle className="h-3.5 w-3.5" />
               <span>{error}</span>
               <button type="button" onClick={handleCheckUpdate} className="ml-1 underline hover:no-underline">
-                {t("settings.about.retry")}
+                重试
               </button>
               <button type="button" onClick={handleOpenReleaseFallback} className="ml-1 underline hover:no-underline">
-                {t("settings.about.viewRelease")}
+                查看 Release
               </button>
             </div>
           )}
@@ -236,7 +234,7 @@ export function AboutSection() {
           {showLatest && (
             <div className="flex items-center gap-1 text-xs text-success">
               <Check className="h-3.5 w-3.5" />
-              <span>{t("settings.about.latest")}</span>
+              <span>已是最新版本</span>
             </div>
           )}
         </div>
@@ -248,12 +246,12 @@ export function AboutSection() {
                 <div className="flex items-center gap-2">
                   <span className="text-sm font-semibold text-on-surface">V{updateInfo.version}</span>
                   <span className="rounded-full bg-success/20 px-2 py-0.5 text-[10px] font-medium text-success">
-                    {t("settings.about.updateAvailable")}
+                    新版本可用
                   </span>
                 </div>
                 {updateInfo.releaseDate && (
                   <div className="mt-1 text-xs text-on-surface-variant">
-                    {t("settings.about.releaseDate", { date: formatDate(updateInfo.releaseDate) })}
+                    发布日期：{formatDate(updateInfo.releaseDate)}
                   </div>
                 )}
               </div>
@@ -265,7 +263,7 @@ export function AboutSection() {
                     className="flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
                   >
                     <Download className="h-3.5 w-3.5" />
-                    <span>{t("settings.about.downloadUpdate")}</span>
+                    <span>下载更新</span>
                   </button>
                 )}
                 {readyToInstall && !installConfirmVisible && (
@@ -275,7 +273,7 @@ export function AboutSection() {
                     className="flex items-center gap-1.5 rounded-lg bg-success px-3 py-1.5 text-xs font-medium text-white transition-opacity hover:opacity-90"
                   >
                     <RotateCw className="h-3.5 w-3.5" />
-                    <span>{t("settings.about.installRelaunch")}</span>
+                    <span>安装并重启</span>
                   </button>
                 )}
                 <button
@@ -284,7 +282,7 @@ export function AboutSection() {
                   className="flex items-center gap-1 text-xs text-on-surface-variant underline hover:no-underline"
                 >
                   <ExternalLink className="h-3 w-3" />
-                  <span>{t("settings.about.viewReleasePage")}</span>
+                  <span>查看 Release 页面</span>
                 </button>
               </div>
             </div>
@@ -292,7 +290,7 @@ export function AboutSection() {
             {downloading && (
               <div className="mt-3 rounded-lg border border-border/60 bg-surface-container-high/60 p-3">
                 <div className="mb-2 flex items-center justify-between text-xs text-on-surface-variant">
-                  <span>{t("settings.about.downloadingUpdate")}</span>
+                  <span>正在下载更新</span>
                   <span>{progressLabel}</span>
                 </div>
                 <div className="h-2 overflow-hidden rounded-full bg-surface-container-highest">
@@ -309,12 +307,12 @@ export function AboutSection() {
                 <div className="flex items-start gap-2">
                   <AlertTriangle className="mt-0.5 h-4 w-4 flex-none text-danger" />
                   <div className="min-w-0 flex-1">
-                    <div className="text-xs font-semibold text-on-surface">{t("settings.about.confirmInstallTitle")}</div>
+                    <div className="text-xs font-semibold text-on-surface">确认安装并重启</div>
                     <div className="mt-1 text-xs text-on-surface-variant">
-                      {t("settings.about.installWarning")}
+                      安装更新会关闭并重启 CLI-Manager。
                       {activeTerminalCount > 0
-                        ? t("settings.about.runningTerminalsWarning", { count: activeTerminalCount })
-                        : t("settings.about.saveWorkWarning")}
+                        ? ` 当前仍有 ${activeTerminalCount} 个运行中的终端会话，继续操作会中断其中的任务。`
+                        : " 请确认当前工作已保存。"}
                     </div>
                     <div className="mt-3 flex flex-wrap gap-2">
                       <button
@@ -323,7 +321,7 @@ export function AboutSection() {
                         disabled={installing}
                         className="rounded-lg bg-danger px-3 py-1.5 text-xs font-medium text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
                       >
-                        {installing ? t("settings.about.installing") : t("settings.about.installRelaunch")}
+                        {installing ? "正在安装..." : "确认安装并重启"}
                       </button>
                       <button
                         type="button"
@@ -331,7 +329,7 @@ export function AboutSection() {
                         disabled={installing}
                         className="rounded-lg border border-border bg-surface-container-high px-3 py-1.5 text-xs font-medium text-on-surface transition-colors hover:bg-surface-container-highest disabled:cursor-not-allowed disabled:opacity-60"
                       >
-                        {t("settings.about.later")}
+                        稍后
                       </button>
                     </div>
                   </div>
@@ -341,7 +339,7 @@ export function AboutSection() {
 
             {updateInfo.releaseNotes && (
               <div className="mt-3 border-t border-border/50 pt-3">
-                <div className="mb-1 text-xs font-medium text-on-surface-variant">{t("settings.about.releaseNotes")}</div>
+                <div className="mb-1 text-xs font-medium text-on-surface-variant">更新说明</div>
                 <MarkdownContent content={updateInfo.releaseNotes} linkBehavior="open" />
               </div>
             )}
@@ -352,25 +350,25 @@ export function AboutSection() {
               disabled={checking || downloading || installing}
               className="mt-3 text-xs text-on-surface-variant underline hover:no-underline disabled:cursor-not-allowed disabled:opacity-60"
             >
-              {t("settings.about.remindLater")}
+              稍后提醒
             </button>
           </div>
         )}
       </section>
 
       <div className="space-y-3">
-        <div className="px-1 text-sm font-semibold text-on-surface">{t("settings.about.resources")}</div>
+        <div className="px-1 text-sm font-semibold text-on-surface">项目资源</div>
         <div className="grid gap-3 md:grid-cols-2">
           <ExternalLinkItem
             icon={Github}
-            title={t("settings.about.gitTitle")}
-            description={t("settings.about.gitDescription")}
+            title="Git 开源地址"
+            description="查看源码、提交 Issue 或参与 Pull Request。"
             url={REPOSITORY_URL}
           />
           <ExternalLinkItem
             icon={BookOpen}
-            title={t("settings.about.manualTitle")}
-            description={t("settings.about.manualDescription")}
+            title="操作手册"
+            description="查看功能清单、使用说明和能力边界。"
             url={MANUAL_URL}
           />
         </div>
@@ -382,10 +380,10 @@ export function AboutSection() {
             <UserRound className="h-5 w-5" />
           </span>
           <div className="min-w-0 flex-1">
-            <div className="text-sm font-semibold text-on-surface">{t("settings.about.authorInfo")}</div>
-            <div className="mt-2 text-sm text-on-surface-variant">{t("settings.about.author")}</div>
+            <div className="text-sm font-semibold text-on-surface">作者信息</div>
+            <div className="mt-2 text-sm text-on-surface-variant">作者：hxx / dark-hxx</div>
             <div className="mt-1 text-xs leading-5 text-on-surface-variant">
-              {t("settings.about.authorDescription")}
+              项目长期围绕 AI CLI 工作流、终端体验、历史会话分析和多项目管理持续演进。
             </div>
             <button
               type="button"
@@ -393,7 +391,7 @@ export function AboutSection() {
               className="ui-interactive ui-focus-ring mt-3 inline-flex items-center gap-1.5 rounded-lg border border-border bg-surface-container-high px-3 py-1.5 text-xs font-medium text-on-surface transition-colors hover:bg-surface-container-highest"
             >
               <Github className="h-3.5 w-3.5" />
-              <span>{t("settings.about.viewAuthor")}</span>
+              <span>查看作者主页</span>
               <ExternalLink className="h-3 w-3 text-on-surface-variant" />
             </button>
           </div>

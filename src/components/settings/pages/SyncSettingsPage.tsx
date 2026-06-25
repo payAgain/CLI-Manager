@@ -32,27 +32,25 @@ import {
   Folder,
 } from "../../icons";
 import { toast } from "sonner";
-import { useI18n, type TranslationKey } from "../../../lib/i18n";
 
-const SYNC_MODE_OPTIONS: { value: SyncMode; label: TranslationKey; description: TranslationKey }[] = [
-  { value: "cloud", label: "settings.sync.mode.cloud", description: "settings.sync.mode.cloudDescription" },
-  { value: "local", label: "settings.sync.mode.local", description: "settings.sync.mode.localDescription" },
+const SYNC_MODE_OPTIONS: { value: SyncMode; label: string; description: string }[] = [
+  { value: "cloud", label: "云同步", description: "通过 WebDAV 协议同步到云端" },
+  { value: "local", label: "本地同步", description: "将配置打包为 zip 保存到本地目录" },
 ];
 
-const AUTO_SYNC_OPTIONS: { value: AutoSyncAction; label: TranslationKey }[] = [
-  { value: "off", label: "settings.sync.auto.off" },
-  { value: "upload", label: "settings.sync.auto.upload" },
-  { value: "download", label: "settings.sync.auto.download" },
+const AUTO_SYNC_OPTIONS: { value: AutoSyncAction; label: string }[] = [
+  { value: "off", label: "关闭" },
+  { value: "upload", label: "上传" },
+  { value: "download", label: "下载" },
 ];
 
-const DOMAIN_OPTIONS: { value: SyncDataDomain; label: TranslationKey }[] = [
-  { value: "projects", label: "settings.sync.domain.projects" },
-  { value: "groups", label: "settings.sync.domain.groups" },
-  { value: "command_templates", label: "settings.sync.domain.commandTemplates" },
+const DOMAIN_OPTIONS: { value: SyncDataDomain; label: string }[] = [
+  { value: "projects", label: "项目" },
+  { value: "groups", label: "分组" },
+  { value: "command_templates", label: "命令模板" },
 ];
 
 export function SyncSettingsPage() {
-  const { language, t } = useI18n();
   const {
     webdavUrl,
     webdavUsername,
@@ -122,7 +120,7 @@ export function SyncSettingsPage() {
 
   const handleTest = async () => {
     if (!url.trim() || !username.trim() || !password.trim()) {
-      toast.error(t("settings.sync.fillConnection"));
+      toast.error("请填写完整的连接信息");
       return;
     }
 
@@ -130,11 +128,11 @@ export function SyncSettingsPage() {
     try {
       const result = await testConnection(url.trim(), username.trim(), password);
       if (result.success) {
-        toast.success(t("settings.sync.connectionSuccess"));
+        toast.success("连接成功");
         await setConfig(url.trim(), username.trim(), password);
         setShowPassword(false);
       } else {
-        toast.error(t("settings.sync.connectionFailed"), { description: result.message });
+        toast.error("连接失败", { description: result.message });
       }
     } finally {
       setTesting(false);
@@ -143,46 +141,46 @@ export function SyncSettingsPage() {
 
   const handleSave = async () => {
     if (!url.trim()) {
-      toast.error(t("settings.sync.fillWebdavUrl"));
+      toast.error("请填写 WebDAV URL");
       return;
     }
 
     if (password.trim()) {
       await setConfig(url.trim(), username.trim(), password);
-      toast.success(t("settings.sync.savedWithPassword"));
+      toast.success("配置已保存（包含密码）");
     } else {
       await setConfig(url.trim(), username.trim());
-      toast.success(t("settings.sync.saved"));
+      toast.success("配置已保存");
     }
   };
 
   const handleSaveDeviceName = async () => {
     try {
       await setDeviceName(deviceNameInput);
-      toast.success(t("settings.sync.deviceSaved"));
+      toast.success("设备名称已保存");
     } catch (error) {
-      toast.error(t("settings.sync.saveFailed"), { description: error instanceof Error ? error.message : String(error) });
+      toast.error("保存失败", { description: error instanceof Error ? error.message : String(error) });
     }
   };
 
   const handleSaveRemoteDir = async () => {
     try {
       await setRemoteDir(remoteDirInput.trim());
-      toast.success(t("settings.sync.saved"));
+      toast.success("远程目录已保存");
     } catch (error) {
-      toast.error(t("settings.sync.saveFailed"), { description: error instanceof Error ? error.message : String(error) });
+      toast.error("保存失败", { description: error instanceof Error ? error.message : String(error) });
     }
   };
 
   const openPreview = async (mode: "upload" | "download") => {
     if (!hasPassword) {
-      toast.error(t("settings.sync.configureWebdavFirst"));
+      toast.error("请先配置并测试 WebDAV 连接");
       return;
     }
     try {
       const nextPreview = await getPreview(previewDeviceName || deviceName);
       if (mode === "download" && nextPreview.remote.missing) {
-        toast.error(t("settings.sync.cannotDownload"));
+        toast.error("无法从云端同步");
         return;
       }
       setPreview(nextPreview);
@@ -190,29 +188,29 @@ export function SyncSettingsPage() {
       setSelectedDomains(["projects", "groups", "command_templates"]);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      toast.error(mode === "upload" ? t("settings.sync.readUploadPreviewFailed") : t("settings.sync.readDownloadPreviewFailed"), { description: message });
+      toast.error(mode === "upload" ? "读取同步摘要失败" : "读取云端快照失败", { description: message });
     }
   };
 
   const confirmPreviewAction = async () => {
     if (!previewMode) return;
     if (previewMode === "download" && preview?.remote.missing) {
-      toast.error(t("settings.sync.cannotDownload"));
+      toast.error("无法从云端同步");
       return;
     }
     try {
       if (previewMode === "upload") {
         await upload();
-        toast.success(t("settings.sync.uploadSuccess"));
+        toast.success("上传成功");
       } else {
         await download(true, { deviceName: previewDeviceName || deviceName, domains: selectedDomains });
-        toast.success(t("settings.sync.downloadSuccess"));
+        toast.success("下载成功");
       }
       setPreview(null);
       setPreviewMode(null);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      toast.error(previewMode === "upload" ? t("settings.sync.uploadFailed") : t("settings.sync.downloadFailed"), { description: message });
+      toast.error(previewMode === "upload" ? "上传失败" : "下载失败", { description: message });
     }
   };
 
@@ -224,26 +222,26 @@ export function SyncSettingsPage() {
 
   const handlePickLocalDir = async () => {
     try {
-      const result = await openDialog({ directory: true, multiple: false, title: t("settings.sync.chooseLocalDir") });
+      const result = await openDialog({ directory: true, multiple: false, title: "选择本地同步目录" });
       if (typeof result === "string" && result.length > 0) {
         await setLocalSyncDir(result);
       }
     } catch (error) {
-      toast.error(t("settings.sync.chooseDirFailed"), { description: String(error) });
+      toast.error("选择目录失败", { description: String(error) });
     }
   };
 
   const handleLocalExport = async () => {
     if (!localSyncDir) {
-      toast.error(t("settings.sync.pickLocalDirFirst"));
+      toast.error("请先选择本地同步目录");
       return;
     }
     try {
       const path = await localExport();
-      toast.success(t("settings.sync.localExportSuccess"), { description: path });
+      toast.success("本地导出成功", { description: path });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      toast.error(t("settings.sync.localExportFailed"), { description: message });
+      toast.error("本地导出失败", { description: message });
     }
   };
 
@@ -252,15 +250,15 @@ export function SyncSettingsPage() {
       const result = await openDialog({
         directory: false,
         multiple: false,
-        title: t("settings.sync.chooseZip"),
-        filters: [{ name: t("settings.sync.zipFilter"), extensions: ["zip"] }],
+        title: "选择要导入的同步 zip 文件",
+        filters: [{ name: "同步包", extensions: ["zip"] }],
         defaultPath: localSyncDir || undefined,
       });
       if (typeof result === "string" && result.length > 0) {
         setShowImportConfirm(result);
       }
     } catch (error) {
-      toast.error(t("settings.sync.chooseFileFailed"), { description: String(error) });
+      toast.error("选择文件失败", { description: String(error) });
     }
   };
 
@@ -270,20 +268,18 @@ export function SyncSettingsPage() {
     if (!zipPath) return;
     try {
       await localImport(zipPath);
-      toast.success(t("settings.sync.localImportSuccess"));
+      toast.success("本地导入成功");
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      toast.error(t("settings.sync.localImportFailed"), { description: message });
+      toast.error("本地导入失败", { description: message });
     }
   };
 
   const formatLastSync = () => {
-    if (!lastSyncAt) return t("settings.sync.never");
+    if (!lastSyncAt) return "从未同步";
     const date = new Date(lastSyncAt);
-    return date.toLocaleString(language);
+    return date.toLocaleString("zh-CN");
   };
-  const formatDateTime = (value: string | number) => new Date(value).toLocaleString(language);
-  const namesText = (names: string[]) => names.join(t("settings.common.listSeparator")) || t("settings.sync.none");
 
   return (
     <Stack gap="md">
@@ -296,49 +292,43 @@ export function SyncSettingsPage() {
             <Stack gap="sm" className="flex-1">
               <Box>
                 <Text fw={600} c="yellow">
-                  {t("settings.sync.conflictTitle")}
+                  检测到同步冲突
                 </Text>
                 <Text mt={4} size="sm" c="var(--on-surface-variant)">
-                  {t("settings.sync.conflictDescription")}
+                本地和远程都有更新，请选择保留哪个版本。
                 </Text>
               </Box>
               <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="sm">
                 <Card className="bg-surface-container-high" p="sm" radius="lg">
-                  <Text fw={600}>{t("settings.sync.localVersion")}</Text>
+                  <Text fw={600}>本地版本</Text>
                   <Text mt={4} size="sm" c="var(--on-surface-variant)">
-                    {formatDateTime(conflictInfo.local_modified)}
+                    {new Date(conflictInfo.local_modified).toLocaleString("zh-CN")}
                   </Text>
                   <Text mt={8} size="xs">
-                    {t("settings.sync.summary", {
-                      projects: conflictInfo.local_projects,
-                      groups: conflictInfo.local_groups,
-                      templates: conflictInfo.local_templates,
-                    })}
+                    {conflictInfo.local_projects} 个项目 · {conflictInfo.local_groups} 个分组 ·{" "}
+                    {conflictInfo.local_templates} 个模板
                   </Text>
                 </Card>
                 <Card className="bg-surface-container-high" p="sm" radius="lg">
-                  <Text fw={600}>{t("settings.sync.remoteVersion")}</Text>
+                  <Text fw={600}>远程版本</Text>
                   <Text mt={4} size="sm" c="var(--on-surface-variant)">
-                    {formatDateTime(conflictInfo.remote_modified)}
+                    {new Date(conflictInfo.remote_modified).toLocaleString("zh-CN")}
                   </Text>
                   <Text mt={8} size="xs">
-                    {t("settings.sync.summary", {
-                      projects: conflictInfo.remote_projects,
-                      groups: conflictInfo.remote_groups,
-                      templates: conflictInfo.remote_templates,
-                    })}
+                    {conflictInfo.remote_projects} 个项目 · {conflictInfo.remote_groups} 个分组 ·{" "}
+                    {conflictInfo.remote_templates} 个模板
                   </Text>
                 </Card>
               </SimpleGrid>
               <Group gap="xs">
                 <Button size="xs" color="cliPrimary" onClick={() => resolveConflict(true)}>
-                  {t("settings.sync.keepLocal")}
+                  保留本地
                 </Button>
                 <Button size="xs" variant="default" color="gray" onClick={() => resolveConflict(false)}>
-                  {t("settings.sync.useRemote")}
+                  使用远程
                 </Button>
                 <Button size="xs" variant="subtle" color="gray" onClick={clearConflict}>
-                  {t("settings.sync.cancel")}
+                  取消
                 </Button>
               </Group>
             </Stack>
@@ -349,7 +339,7 @@ export function SyncSettingsPage() {
       <section className="ui-surface-card rounded-2xl border border-border p-4">
         <Stack gap="sm">
           <Text size="sm" fw={600} c="var(--on-surface)">
-            {t("settings.sync.method")}
+            同步方式
           </Text>
           <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="xs">
           {SYNC_MODE_OPTIONS.map((opt) => {
@@ -372,10 +362,10 @@ export function SyncSettingsPage() {
               >
                 <Stack gap={4} style={{ minWidth: 0 }}>
                   <Text size="sm" fw={600} c="var(--on-surface)" style={{ lineHeight: 1.25 }}>
-                    {t(opt.label)}
+                    {opt.label}
                   </Text>
                   <Text size="xs" lh={1.45} c="var(--on-surface-variant)" style={{ overflowWrap: "anywhere" }}>
-                    {t(opt.description)}
+                    {opt.description}
                   </Text>
                 </Stack>
               </UnstyledButton>
@@ -390,30 +380,30 @@ export function SyncSettingsPage() {
           <section className="ui-surface-card rounded-2xl border border-border p-4">
             <Stack gap="md">
               <Text size="sm" fw={600} c="var(--on-surface)">
-                {t("settings.sync.webdavConfig")}
+                WebDAV 配置
               </Text>
 
               <TextInput
-                  label={t("settings.sync.serverUrl")}
+                  label="服务器地址"
                   type="url"
                   value={url}
                   onChange={(event) => setUrl(event.currentTarget.value)}
                   placeholder="https://dav.example.com/webdav"
                   size="sm"
-                  aria-label={t("settings.sync.serverUrlAria")}
+                  aria-label="WebDAV 服务器地址"
               />
 
               <Box>
                 <Group align="flex-end" gap="xs" wrap="nowrap">
                   <TextInput
-                    label={t("settings.sync.remoteDir")}
+                    label="远程目录"
                     type="text"
                     value={remoteDirInput}
                     onChange={(event) => setRemoteDirInput(event.currentTarget.value)}
-                    placeholder={t("settings.sync.remoteDirPlaceholder")}
+                    placeholder="cli-manager（默认）"
                     size="sm"
                     className="flex-1"
-                    aria-label={t("settings.sync.remoteDir")}
+                    aria-label="远程目录"
                   />
                   <Button
                     type="button"
@@ -422,47 +412,47 @@ export function SyncSettingsPage() {
                     color="gray"
                     onClick={handleSaveRemoteDir}
                   >
-                    {t("settings.sync.saveRemoteDir")}
+                    保存目录
                   </Button>
                 </Group>
                 <Text mt={4} size="xs" c="var(--on-surface-variant)">
-                  {t("settings.sync.remoteDirDescription")}
+                  自定义云端存储目录，留空则使用默认 cli-manager。修改后重新上传/下载以切换命名空间。
                 </Text>
               </Box>
 
               <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="md">
                 <TextInput
-                    label={t("settings.sync.username")}
+                    label="用户名"
                     type="text"
                     value={username}
                     onChange={(event) => setUsername(event.currentTarget.value)}
-                    placeholder={t("settings.sync.usernamePlaceholder")}
+                    placeholder="username"
                     size="sm"
-                    aria-label={t("settings.sync.usernameAria")}
+                    aria-label="WebDAV 用户名"
                 />
                 <PasswordInput
-                    label={t("settings.sync.password")}
+                    label="密码"
                     value={password}
                     onChange={(event) => setPassword(event.currentTarget.value)}
                     placeholder="••••••••"
                     visible={showPassword}
                     onVisibilityChange={setShowPassword}
                     size="sm"
-                    aria-label={t("settings.sync.passwordAria")}
+                    aria-label="WebDAV 密码"
                 />
               </SimpleGrid>
 
               <Box>
                 <Group align="flex-end" gap="xs" wrap="nowrap">
                   <TextInput
-                    label={t("settings.sync.deviceName")}
+                    label="当前设备名称"
                     type="text"
                     value={deviceNameInput}
                     onChange={(event) => setDeviceNameInput(event.currentTarget.value)}
-                    placeholder={t("settings.sync.devicePlaceholder")}
+                    placeholder="当前设备"
                     size="sm"
                     className="flex-1"
-                    aria-label={t("settings.sync.deviceName")}
+                    aria-label="当前设备名称"
                   />
                   <Button
                     type="button"
@@ -471,11 +461,11 @@ export function SyncSettingsPage() {
                     color="gray"
                     onClick={handleSaveDeviceName}
                   >
-                    {t("settings.sync.saveDeviceName")}
+                    保存设备名
                   </Button>
                 </Group>
                 <Text mt={4} size="xs" c="var(--on-surface-variant)">
-                  {t("settings.sync.deviceDescription")}
+                  云端快照会按设备名称隔离，避免不同设备路径互相覆盖。
                 </Text>
               </Box>
 
@@ -486,7 +476,7 @@ export function SyncSettingsPage() {
                   onClick={handleTest}
                   disabled={testing || !url.trim() || !username.trim() || !password.trim()}
                 >
-                  {testing ? t("settings.sync.testing") : t("settings.sync.testConnection")}
+                  {testing ? "测试中..." : "测试连接"}
                 </Button>
                 <Button
                   size="xs"
@@ -494,7 +484,7 @@ export function SyncSettingsPage() {
                   color="gray"
                   onClick={handleSave}
                 >
-                  {t("settings.sync.saveConfig")}
+                  保存配置
                 </Button>
                 {hasPassword && (
                   <Button
@@ -503,7 +493,7 @@ export function SyncSettingsPage() {
                     color="red"
                     onClick={clearPassword}
                   >
-                    {t("settings.sync.clearPassword")}
+                    清除密码
                   </Button>
                 )}
               </Group>
@@ -511,7 +501,7 @@ export function SyncSettingsPage() {
               {hasPassword && (
                 <Group gap="xs" c="var(--success)">
                   <Check size={16} />
-                  <Text size="sm">{t("settings.sync.webdavConfigured")}</Text>
+                  <Text size="sm">已配置 WebDAV 连接</Text>
                 </Group>
               )}
             </Stack>
@@ -520,41 +510,41 @@ export function SyncSettingsPage() {
           <section className="ui-surface-card rounded-2xl border border-border p-4">
             <Stack gap="md">
               <Text size="sm" fw={600} c="var(--on-surface)">
-                {t("settings.sync.cloudActions")}
+                云端同步操作
               </Text>
             {!hasPassword && (
               <Card className="border border-yellow-500/30 bg-yellow-500/10" p="sm" radius="lg">
                 <Text size="sm" c="yellow">
-                  {t("settings.sync.webdavRequired")}
+                请先完成 WebDAV 配置并点击"测试连接"验证成功后再进行同步操作。
                 </Text>
               </Card>
             )}
 
             <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="md">
               <Select<AutoSyncAction>
-                  label={t("settings.sync.onStartup")}
+                  label="应用打开时"
                   value={autoSyncOnStartup}
                   onChange={(value) => {
                     if (value) void setAutoSyncOnStartup(value);
                   }}
-                  data={AUTO_SYNC_OPTIONS.map((option) => ({ ...option, label: t(option.label) }))}
+                  data={AUTO_SYNC_OPTIONS}
                   allowDeselect={false}
                   size="sm"
               />
               <Select<AutoSyncAction>
-                  label={t("settings.sync.onClose")}
+                  label="应用关闭时"
                   value={autoSyncOnClose}
                   onChange={(value) => {
                     if (value) void setAutoSyncOnClose(value);
                   }}
-                  data={AUTO_SYNC_OPTIONS.map((option) => ({ ...option, label: t(option.label) }))}
+                  data={AUTO_SYNC_OPTIONS}
                   allowDeselect={false}
                   size="sm"
               />
             </SimpleGrid>
 
             <Select<string>
-                label={t("settings.sync.restoreDevice")}
+                label="恢复设备快照"
                 value={previewDeviceName}
                 onChange={(value) => setPreviewDeviceName(value ?? "")}
                 data={knownDeviceNames.map((name) => ({ value: name, label: name }))}
@@ -570,7 +560,7 @@ export function SyncSettingsPage() {
                 onClick={() => void openPreview("upload")}
                 disabled={!hasPassword || status === "syncing"}
               >
-                {status === "syncing" ? t("settings.sync.syncing") : t("settings.sync.uploadCloud")}
+                {status === "syncing" ? "同步中" : "上传到云端"}
               </Button>
               <Button
                 size="sm"
@@ -580,24 +570,24 @@ export function SyncSettingsPage() {
                 onClick={() => void openPreview("download")}
                 disabled={!hasPassword || status === "syncing"}
               >
-                {status === "syncing" ? t("settings.sync.syncing") : t("settings.sync.downloadCloud")}
+                {status === "syncing" ? "同步中" : "从云端下载"}
               </Button>
             </Group>
 
             <Group gap="xs" c="var(--on-surface-variant)">
               <Cloud size={16} />
-              <Text size="sm">{t("settings.sync.lastSync", { time: formatLastSync() })}</Text>
+              <Text size="sm">上次同步：{formatLastSync()}</Text>
             </Group>
             </Stack>
           </section>
 
           <Card className="border border-border bg-surface-container-high" p="md" radius="lg">
-            <Text fw={600} c="var(--on-surface)">{t("settings.sync.instructions")}</Text>
+            <Text fw={600} c="var(--on-surface)">使用说明</Text>
             <Stack mt="xs" gap={4}>
-              <Text size="sm" c="var(--on-surface-variant)">{t("settings.sync.cloudInstruction1")}</Text>
-              <Text size="sm" c="var(--on-surface-variant)">{t("settings.sync.cloudInstruction2")}</Text>
-              <Text size="sm" c="var(--on-surface-variant)">{t("settings.sync.cloudInstruction3")}</Text>
-              <Text size="sm" c="var(--on-surface-variant)">{t("settings.sync.cloudInstruction4")}</Text>
+              <Text size="sm" c="var(--on-surface-variant)">支持 WebDAV 协议，可使用坚果云、InfiniCLOUD、群晖 NAS 等服务。</Text>
+              <Text size="sm" c="var(--on-surface-variant)">上传将覆盖远程配置，下载将覆盖本地配置。</Text>
+              <Text size="sm" c="var(--on-surface-variant)">建议在切换设备前先上传，在新设备上下载。</Text>
+              <Text size="sm" c="var(--on-surface-variant)">密码使用系统安全存储，不会被明文保存。</Text>
             </Stack>
           </Card>
         </>
@@ -608,18 +598,18 @@ export function SyncSettingsPage() {
           <section className="ui-surface-card rounded-2xl border border-border p-4">
             <Stack gap="md">
               <Text size="sm" fw={600} c="var(--on-surface)">
-                {t("settings.sync.localDir")}
+                本地同步目录
               </Text>
               <Group align="flex-end" gap="xs" wrap="nowrap">
                 <TextInput
-                  label={t("settings.sync.directory")}
+                  label="目录"
                   type="text"
                   value={localSyncDir}
                   readOnly
-                  placeholder={t("settings.sync.noDirSelected")}
+                  placeholder="尚未选择目录"
                   className="flex-1"
                   size="sm"
-                  aria-label={t("settings.sync.localDirAria")}
+                  aria-label="本地同步目录"
                 />
                 <Button
                   type="button"
@@ -629,13 +619,13 @@ export function SyncSettingsPage() {
                   leftSection={<Folder size={16} />}
                   onClick={handlePickLocalDir}
                 >
-                  {t("settings.sync.selectDir")}
+                  选择目录
                 </Button>
               </Group>
               {localSyncDir && (
                 <Group gap="xs" c="var(--success)">
                   <Check size={16} />
-                  <Text size="sm">{t("settings.sync.localDirConfigured")}</Text>
+                  <Text size="sm">已配置本地同步目录</Text>
                 </Group>
               )}
             </Stack>
@@ -644,13 +634,13 @@ export function SyncSettingsPage() {
           <section className="ui-surface-card rounded-2xl border border-border p-4">
             <Stack gap="md">
               <Text size="sm" fw={600} c="var(--on-surface)">
-                {t("settings.sync.localActions")}
+                本地同步操作
               </Text>
 
             {!localSyncDir && (
               <Card className="border border-yellow-500/30 bg-yellow-500/10" p="sm" radius="lg">
                 <Text size="sm" c="yellow">
-                  {t("settings.sync.localDirRequired")}
+                请先选择本地同步目录，再执行导出操作。
                 </Text>
               </Card>
             )}
@@ -663,7 +653,7 @@ export function SyncSettingsPage() {
                 onClick={handleLocalExport}
                 disabled={!localSyncDir || status === "syncing"}
               >
-                {status === "syncing" ? t("settings.sync.syncing") : t("settings.sync.exportZip")}
+                {status === "syncing" ? "同步中" : "导出到本地（zip）"}
               </Button>
               <Button
                 size="sm"
@@ -673,24 +663,24 @@ export function SyncSettingsPage() {
                 onClick={handleLocalImportPick}
                 disabled={status === "syncing"}
               >
-                {status === "syncing" ? t("settings.sync.syncing") : t("settings.sync.importZip")}
+                {status === "syncing" ? "同步中" : "从 zip 导入"}
               </Button>
             </Group>
 
             <Group gap="xs" c="var(--on-surface-variant)">
               <Folder size={16} />
-              <Text size="sm">{t("settings.sync.lastSync", { time: formatLastSync() })}</Text>
+              <Text size="sm">上次同步：{formatLastSync()}</Text>
             </Group>
             </Stack>
           </section>
 
           <Card className="border border-border bg-surface-container-high" p="md" radius="lg">
-            <Text fw={600} c="var(--on-surface)">{t("settings.sync.instructions")}</Text>
+            <Text fw={600} c="var(--on-surface)">使用说明</Text>
             <Stack mt="xs" gap={4}>
-              <Text size="sm" c="var(--on-surface-variant)">{t("settings.sync.localInstruction1")}</Text>
-              <Text size="sm" c="var(--on-surface-variant)">{t("settings.sync.localInstruction2")}</Text>
-              <Text size="sm" c="var(--on-surface-variant)">{t("settings.sync.localInstruction3")}</Text>
-              <Text size="sm" c="var(--on-surface-variant)">{t("settings.sync.localInstruction4")}</Text>
+              <Text size="sm" c="var(--on-surface-variant)">导出文件名格式：cli-manager-sync-YYYYMMDD-HHmmss.zip（保留历史）。</Text>
+              <Text size="sm" c="var(--on-surface-variant)">导入时将覆盖本地所有项目、分组和模板配置，操作不可撤销。</Text>
+              <Text size="sm" c="var(--on-surface-variant)">可将目录指向云盘同步盘（OneDrive / 坚果云 / Dropbox 等）以实现跨设备同步。</Text>
+              <Text size="sm" c="var(--on-surface-variant)">同步内容仅包括项目、分组、命令模板，不包括 WebDAV 密码与终端会话。</Text>
             </Stack>
           </Card>
         </>
@@ -702,7 +692,7 @@ export function SyncSettingsPage() {
           setPreview(null);
           setPreviewMode(null);
         }}
-        title={previewMode === "upload" ? t("settings.sync.confirmUpload") : t("settings.sync.confirmDownload")}
+        title={previewMode === "upload" ? "确认上传到云端" : "确认从云端下载"}
         size="xl"
         centered
       >
@@ -713,41 +703,32 @@ export function SyncSettingsPage() {
                 <AlertTriangle size={16} />
               </ThemeIcon>
               <Text size="sm" c="var(--on-surface-variant)">
-                {t("settings.sync.previewDescription", {
-                  description:
-                    previewMode === "upload"
-                      ? t("settings.sync.uploadPreviewDescription")
-                      : t("settings.sync.downloadPreviewDescription"),
-                })}
+                  执行前请核对本地与云端摘要。{previewMode === "upload" ? "云端快照缺失时将创建当前设备快照。" : "下载可按数据域选择覆盖范围。"}
               </Text>
             </Group>
 
             <SimpleGrid cols={{ base: 1, md: 2 }} spacing="sm">
               {[preview.local, preview.remote].map((item, index) => (
                 <Card key={index === 0 ? "local" : "remote"} className="bg-surface-container-low" p="sm" radius="lg">
-                  <Text fw={600} c="var(--on-surface)">{index === 0 ? t("settings.sync.localContent") : t("settings.sync.cloudContent")}</Text>
-                  <Text mt={4} size="sm" c="var(--on-surface-variant)">{t("settings.sync.device", { name: item.deviceName })}</Text>
+                  <Text fw={600} c="var(--on-surface)">{index === 0 ? "本地内容" : "云端内容"}</Text>
+                  <Text mt={4} size="sm" c="var(--on-surface-variant)">设备：{item.deviceName}</Text>
                   <Text size="sm" c="var(--on-surface-variant)">
-                    {t("settings.sync.time", { time: item.missing ? t("settings.sync.noCloudSnapshot") : formatDateTime(item.lastModified) })}
+                    时间：{item.missing ? "云端暂无快照" : new Date(item.lastModified).toLocaleString("zh-CN")}
                   </Text>
                   {item.missing && (
                     <Card mt="xs" className="border border-yellow-500/30 bg-yellow-500/10" p="xs" radius="md">
                       <Text size="xs" c="yellow">
-                        {t("settings.sync.emptyCloudSnapshot")}
+                      当前设备云端快照为空，确认上传后会新建快照。
                       </Text>
                     </Card>
                   )}
                   <Text mt="xs" size="xs" c="var(--on-surface-variant)">
-                    {t("settings.sync.summary", {
-                      projects: item.projects,
-                      groups: item.groups,
-                      templates: item.commandTemplates,
-                    })}
+                    {item.projects} 个项目 · {item.groups} 个分组 · {item.commandTemplates} 个模板
                   </Text>
                   <Stack mt="xs" gap={4}>
-                    <Text size="xs" c="var(--on-surface-variant)">{t("settings.sync.projectNames", { names: namesText(item.projectNames) })}</Text>
-                    <Text size="xs" c="var(--on-surface-variant)">{t("settings.sync.groupNames", { names: namesText(item.groupNames) })}</Text>
-                    <Text size="xs" c="var(--on-surface-variant)">{t("settings.sync.templateNames", { names: namesText(item.templateNames) })}</Text>
+                    <Text size="xs" c="var(--on-surface-variant)">项目：{item.projectNames.join("、") || "无"}</Text>
+                    <Text size="xs" c="var(--on-surface-variant)">分组：{item.groupNames.join("、") || "无"}</Text>
+                    <Text size="xs" c="var(--on-surface-variant)">模板：{item.templateNames.join("、") || "无"}</Text>
                   </Stack>
                 </Card>
               ))}
@@ -756,14 +737,14 @@ export function SyncSettingsPage() {
             {previewMode === "download" && (
               <Card className="bg-surface-container-low" p="sm" radius="lg">
                 <Stack gap="xs">
-                  <Text size="sm" fw={600} c="var(--on-surface)">{t("settings.sync.selectOverwriteScope")}</Text>
+                  <Text size="sm" fw={600} c="var(--on-surface)">选择覆盖范围</Text>
                   <Group gap="sm">
                   {DOMAIN_OPTIONS.map((option) => (
                     <Checkbox
                       key={option.value}
                       checked={selectedDomains.includes(option.value)}
                       onChange={() => toggleDomain(option.value)}
-                      label={t(option.label)}
+                      label={option.label}
                       color="cliPrimary"
                     />
                   ))}
@@ -782,7 +763,7 @@ export function SyncSettingsPage() {
                   setPreviewMode(null);
                 }}
               >
-                {t("settings.sync.cancel")}
+                取消
               </Button>
               <Button
                 size="xs"
@@ -790,7 +771,7 @@ export function SyncSettingsPage() {
                 onClick={() => void confirmPreviewAction()}
                 disabled={previewMode === "download" && selectedDomains.length === 0}
               >
-                {t("settings.sync.execute")}
+                确认执行
               </Button>
             </Group>
           </Stack>
@@ -800,7 +781,7 @@ export function SyncSettingsPage() {
       <Modal
         opened={Boolean(showImportConfirm)}
         onClose={() => setShowImportConfirm(null)}
-        title={t("settings.sync.confirmImport")}
+        title="确认导入"
         size="sm"
         centered
       >
@@ -811,15 +792,15 @@ export function SyncSettingsPage() {
                 <AlertTriangle size={16} />
               </ThemeIcon>
               <Text size="sm" c="var(--on-surface-variant)" style={{ overflowWrap: "anywhere" }}>
-                {t("settings.sync.importWarning", { path: showImportConfirm })}
+                  从 <span className="font-mono">{showImportConfirm}</span> 导入将覆盖本地所有项目、分组和模板配置，此操作不可撤销。
               </Text>
             </Group>
             <Group justify="flex-end" gap="xs">
               <Button size="xs" variant="default" color="gray" onClick={() => setShowImportConfirm(null)}>
-                {t("settings.sync.cancel")}
+                取消
               </Button>
               <Button size="xs" color="red" onClick={confirmLocalImport}>
-                {t("settings.sync.confirmImport")}
+                确认导入
               </Button>
             </Group>
           </Stack>

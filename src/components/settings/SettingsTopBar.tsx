@@ -1,6 +1,5 @@
 import { TextInput } from "@mantine/core";
 import { Search } from "../icons";
-import { useI18n } from "../../lib/i18n";
 
 interface SettingsTopBarProps {
   title: string;
@@ -19,8 +18,6 @@ export function SettingsTopBar({
   onSearchChange,
   onClose,
 }: SettingsTopBarProps) {
-  const { t } = useI18n();
-
   return (
     <header className="ui-surface-base ui-glass z-10 border-b border-border px-4 py-3 min-[1280px]:px-6 min-[1280px]:py-4">
       <div className="flex flex-col gap-3 min-[1280px]:flex-row min-[1280px]:items-start min-[1280px]:justify-between min-[1280px]:gap-4">
@@ -36,7 +33,7 @@ export function SettingsTopBar({
               placeholder={searchPlaceholder}
               size="xs"
               leftSection={<Search size={14} strokeWidth={1.75} />}
-              aria-label={t("settings.searchAria")}
+              aria-label="设置搜索"
               className="min-w-0 flex-1 min-[1280px]:w-56 min-[1280px]:flex-none"
             />
           )}
@@ -48,9 +45,9 @@ export function SettingsTopBar({
               backgroundColor: "color-mix(in srgb, var(--primary) 8%, transparent)",
               color: "var(--primary)",
             }}
-            aria-label={t("settings.closeAria")}
+            aria-label="关闭设置窗口"
           >
-            {t("settings.close")}
+            关闭
           </button>
         </div>
       </div>

@@ -9,17 +9,16 @@ import {
   type TerminalNewlineShortcut,
 } from "../../../stores/settingsStore";
 import { eventToCombo } from "../../../hooks/useKeyboardShortcuts";
-import { useI18n, type TranslationKey } from "../../../lib/i18n";
 
-const SHORTCUT_LABEL_KEYS: Record<ShortcutAction, TranslationKey> = {
-  newTerminal: "settings.shortcuts.action.newTerminal",
-  closeTerminal: "settings.shortcuts.action.closeTerminal",
-  nextTab: "settings.shortcuts.action.nextTab",
-  prevTab: "settings.shortcuts.action.prevTab",
-  commandPalette: "settings.shortcuts.action.commandPalette",
-  sessionHistory: "settings.shortcuts.action.sessionHistory",
-  copyAi: "settings.shortcuts.action.copyAi",
-  toggleTerminalFullscreen: "settings.shortcuts.action.toggleTerminalFullscreen",
+const SHORTCUT_LABELS: Record<ShortcutAction, string> = {
+  newTerminal: "新建终端",
+  closeTerminal: "关闭终端",
+  nextTab: "下一个标签",
+  prevTab: "上一个标签",
+  commandPalette: "命令面板",
+  sessionHistory: "会话历史",
+  copyAi: "Copy AI",
+  toggleTerminalFullscreen: "终端全屏",
 };
 
 const TERMINAL_NEWLINE_OPTIONS: { value: TerminalNewlineShortcut; label: string }[] = [
@@ -28,10 +27,10 @@ const TERMINAL_NEWLINE_OPTIONS: { value: TerminalNewlineShortcut; label: string 
   { value: "Alt+Enter", label: "Alt + Enter" },
 ];
 
-const TAB_SWITCH_OPTIONS: { value: TabSwitchShortcutModifier; label: TranslationKey }[] = [
-  { value: "Alt", label: "settings.shortcuts.option.altArrows" },
-  { value: "Ctrl", label: "settings.shortcuts.option.ctrlArrows" },
-  { value: "Shift", label: "settings.shortcuts.option.shiftArrows" },
+const TAB_SWITCH_OPTIONS: { value: TabSwitchShortcutModifier; label: string }[] = [
+  { value: "Alt", label: "Alt + 方向键" },
+  { value: "Ctrl", label: "Ctrl + 方向键" },
+  { value: "Shift", label: "Shift + 方向键" },
 ];
 
 interface ShortcutSettingsPageProps {
@@ -39,7 +38,6 @@ interface ShortcutSettingsPageProps {
 }
 
 export function ShortcutSettingsPage({ searchValue }: ShortcutSettingsPageProps) {
-  const { t } = useI18n();
   const shortcuts = useSettingsStore((s) => s.keyboardShortcuts);
   const terminalNewlineShortcut = useSettingsStore((s) => s.terminalNewlineShortcut);
   const update = useSettingsStore((s) => s.update);
@@ -99,14 +97,14 @@ export function ShortcutSettingsPage({ searchValue }: ShortcutSettingsPageProps)
 
   const keyword = searchValue.trim().toLowerCase();
   const visibleActions = useMemo(() => {
-    const all = Object.keys(SHORTCUT_LABEL_KEYS) as ShortcutAction[];
+    const all = Object.keys(SHORTCUT_LABELS) as ShortcutAction[];
     if (!keyword) return all;
-    return all.filter((action) => t(SHORTCUT_LABEL_KEYS[action]).toLowerCase().includes(keyword));
-  }, [keyword, t]);
+    return all.filter((action) => SHORTCUT_LABELS[action].toLowerCase().includes(keyword));
+  }, [keyword]);
 
   const conflictMap = useMemo(() => {
     const comboToActions = new Map<string, ShortcutAction[]>();
-    (Object.keys(SHORTCUT_LABEL_KEYS) as ShortcutAction[]).forEach((action) => {
+    (Object.keys(SHORTCUT_LABELS) as ShortcutAction[]).forEach((action) => {
       const key = shortcuts[action].trim().toLowerCase();
       if (!key) return;
       const group = comboToActions.get(key) ?? [];
@@ -119,12 +117,12 @@ export function ShortcutSettingsPage({ searchValue }: ShortcutSettingsPageProps)
       actions.forEach((action) => {
         const peer = actions.find((candidate) => candidate !== action);
         if (peer) {
-          conflictByAction.set(action, t("settings.shortcuts.conflict", { label: t(SHORTCUT_LABEL_KEYS[peer]) }));
+          conflictByAction.set(action, `与「${SHORTCUT_LABELS[peer]}」冲突`);
         }
       });
     });
     return conflictByAction;
-  }, [shortcuts, t]);
+  }, [shortcuts]);
 
   return (
     <Stack gap="md">
@@ -132,13 +130,13 @@ export function ShortcutSettingsPage({ searchValue }: ShortcutSettingsPageProps)
         <Stack gap="sm">
           <Box>
             <Text size="sm" fw={600} c="var(--on-surface)">
-              {t("settings.shortcuts.terminalKeys")}
+              终端键位
             </Text>
             <Text mt={4} size="xs" c="var(--on-surface-variant)">
-              {t("settings.shortcuts.terminalKeysDescription")}
+              在终端中按下该组合键时，向 PTY 发送换行符 <code>\n</code>（适配 Claude Code、Codex 等 AI CLI 的“换行不提交”）。单按 Enter 行为不变。
             </Text>
           </Box>
-          <Group gap="xs" aria-label={t("settings.shortcuts.terminalNewlineAria")}>
+          <Group gap="xs" aria-label="终端换行快捷键">
             {TERMINAL_NEWLINE_OPTIONS.map((opt) => {
               const active = terminalNewlineShortcut === opt.value;
               return (
@@ -165,10 +163,10 @@ export function ShortcutSettingsPage({ searchValue }: ShortcutSettingsPageProps)
         <Stack gap="sm">
           <Box>
             <Text size="sm" fw={600} c="var(--on-surface)">
-              {t("settings.shortcuts.tabSwitch")}
+              终端标签切换
             </Text>
             <Text mt={4} size="xs" c="var(--on-surface-variant)">
-              {t("settings.shortcuts.tabSwitchDescription")}
+              左方向键切到上一个标签，右方向键切到下一个标签。
             </Text>
           </Box>
           <Group gap="xs">
@@ -186,14 +184,14 @@ export function ShortcutSettingsPage({ searchValue }: ShortcutSettingsPageProps)
                   }}
                   aria-pressed={active}
                 >
-                  {t(opt.label)}
+                  {opt.label}
                 </Button>
               );
             })}
           </Group>
           {currentTabSwitchModifier === null && (
             <Text size="xs" c="var(--on-surface-variant)">
-              {t("settings.shortcuts.customTabSwitchHint")}
+              当前为自定义标签切换快捷键，可在下方单独修改。
             </Text>
           )}
         </Stack>
@@ -203,10 +201,10 @@ export function ShortcutSettingsPage({ searchValue }: ShortcutSettingsPageProps)
         <Stack gap="sm">
           <Group justify="space-between" align="center" gap="md">
             <Text size="sm" fw={600} c="var(--on-surface)">
-              {t("settings.shortcuts.bindings")}
+              快捷键绑定
             </Text>
             <Button type="button" size="xs" variant="default" color="gray" onClick={resetDefaults}>
-              {t("settings.shortcuts.resetDefaults")}
+              恢复默认
             </Button>
           </Group>
 
@@ -229,7 +227,7 @@ export function ShortcutSettingsPage({ searchValue }: ShortcutSettingsPageProps)
                 <Group justify="space-between" align="center" gap="md" wrap="nowrap">
                   <Box className="min-w-0">
                     <Text size="sm" fw={500} c="var(--on-surface)">
-                      {t(SHORTCUT_LABEL_KEYS[action])}
+                      {SHORTCUT_LABELS[action]}
                     </Text>
                     {conflict && (
                       <Text mt={2} size="xs" c="var(--warning)">
@@ -241,7 +239,7 @@ export function ShortcutSettingsPage({ searchValue }: ShortcutSettingsPageProps)
                     {isRecording ? (
                       <>
                         <Badge color="cliPrimary" variant="filled" className="animate-pulse">
-                          {t("settings.shortcuts.pressShortcut")}
+                          请按下快捷键...
                         </Badge>
                         <Button
                           type="button"
@@ -250,7 +248,7 @@ export function ShortcutSettingsPage({ searchValue }: ShortcutSettingsPageProps)
                           color="gray"
                           onClick={() => clearShortcut(action)}
                         >
-                          {t("settings.shortcuts.clear")}
+                          清空
                         </Button>
                         <Button
                           type="button"
@@ -259,7 +257,7 @@ export function ShortcutSettingsPage({ searchValue }: ShortcutSettingsPageProps)
                           color="cliPrimary"
                           onClick={() => setRecording(null)}
                         >
-                          {t("settings.shortcuts.cancel")}
+                          取消
                         </Button>
                       </>
                     ) : (
@@ -268,7 +266,7 @@ export function ShortcutSettingsPage({ searchValue }: ShortcutSettingsPageProps)
                           className="min-w-[108px] text-center"
                           style={{ color: shortcuts[action].trim() ? "var(--on-surface)" : "var(--on-surface-variant)" }}
                         >
-                          {shortcuts[action].trim() || t("settings.shortcuts.unset")}
+                          {shortcuts[action].trim() || "未设置"}
                         </Kbd>
                         <Button
                           type="button"
@@ -277,7 +275,7 @@ export function ShortcutSettingsPage({ searchValue }: ShortcutSettingsPageProps)
                           color="cliPrimary"
                           onClick={() => setRecording(action)}
                         >
-                          {t("settings.shortcuts.edit")}
+                          修改
                         </Button>
                       </>
                     )}
@@ -289,7 +287,7 @@ export function ShortcutSettingsPage({ searchValue }: ShortcutSettingsPageProps)
           {visibleActions.length === 0 && (
             <Card className="border border-dashed border-border bg-surface-container-lowest text-center" p="lg" radius="lg">
               <Text size="xs" c="var(--on-surface-variant)">
-                {t("settings.shortcuts.empty")}
+              未找到匹配的快捷键动作
               </Text>
             </Card>
           )}

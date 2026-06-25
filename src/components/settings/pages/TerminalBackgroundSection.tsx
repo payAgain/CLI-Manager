@@ -24,7 +24,6 @@ import {
 import { backgroundAssetUrl } from "../../../lib/assetUrl";
 import { formatFileSize } from "../../../lib/utils";
 import { logError } from "../../../lib/logger";
-import { useI18n, type TranslationKey } from "../../../lib/i18n";
 
 interface SavedBackground {
   relativePath: string;
@@ -32,11 +31,11 @@ interface SavedBackground {
   warning?: string;
 }
 
-const FIT_OPTIONS: { value: TerminalBackgroundFit; label: TranslationKey }[] = [
-  { value: "cover", label: "settings.background.fit.cover" },
-  { value: "contain", label: "settings.background.fit.contain" },
-  { value: "center", label: "settings.background.fit.center" },
-  { value: "tile", label: "settings.background.fit.tile" },
+const FIT_OPTIONS: { value: TerminalBackgroundFit; label: string }[] = [
+  { value: "cover", label: "Cover（铺满裁剪）" },
+  { value: "contain", label: "Contain（完整显示）" },
+  { value: "center", label: "Center（原始尺寸）" },
+  { value: "tile", label: "Tile（平铺）" },
 ];
 
 const POSITION_GRID: TerminalBackgroundPosition[] = [
@@ -51,20 +50,19 @@ const POSITION_GRID: TerminalBackgroundPosition[] = [
   "bottom-right",
 ];
 
-const POSITION_LABEL_KEYS: Record<TerminalBackgroundPosition, TranslationKey> = {
-  "top-left": "settings.background.position.topLeft",
-  "top-center": "settings.background.position.topCenter",
-  "top-right": "settings.background.position.topRight",
-  "center-left": "settings.background.position.centerLeft",
-  center: "settings.background.position.center",
-  "center-right": "settings.background.position.centerRight",
-  "bottom-left": "settings.background.position.bottomLeft",
-  "bottom-center": "settings.background.position.bottomCenter",
-  "bottom-right": "settings.background.position.bottomRight",
+const POSITION_LABEL: Record<TerminalBackgroundPosition, string> = {
+  "top-left": "左上",
+  "top-center": "上",
+  "top-right": "右上",
+  "center-left": "左",
+  center: "居中",
+  "center-right": "右",
+  "bottom-left": "左下",
+  "bottom-center": "下",
+  "bottom-right": "右下",
 };
 
 export function TerminalBackgroundSection() {
-  const { t } = useI18n();
   const terminalBackground = useSettingsStore((s) => s.terminalBackground);
   const update = useSettingsStore((s) => s.update);
   const terminalBackgroundMissing = useSettingsStore((s) => s.terminalBackgroundMissing);
@@ -103,10 +101,10 @@ export function TerminalBackgroundSection() {
       selected = await openDialog({
         multiple: false,
         directory: false,
-        filters: [{ name: t("settings.background.dialogFilter"), extensions: ["jpg", "jpeg", "png", "gif"] }],
+        filters: [{ name: "图片", extensions: ["jpg", "jpeg", "png", "gif"] }],
       });
     } catch (err) {
-      toast.error(t("settings.background.openPickerFailed"), { description: String(err) });
+      toast.error("无法打开文件选择器", { description: String(err) });
       logError("openDialog failed for terminal background", { err });
       return;
     }
@@ -136,16 +134,16 @@ export function TerminalBackgroundSection() {
         }
       }
       if (saved.warning === "file_too_large") {
-        toast.warning(t("settings.background.largeTitle"), {
-          description: t("settings.background.largeDescription"),
+        toast.warning("背景图较大", {
+          description: "图片大于 5MB，可能影响启动速度",
         });
       }
     } catch (err) {
       const msg = String(err);
       if (msg.includes("unsupported_format")) {
-        toast.error(t("settings.background.unsupportedTitle"), { description: t("settings.background.unsupportedDescription") });
+        toast.error("不支持的图片格式", { description: "请选择 JPEG / PNG / GIF" });
       } else {
-        toast.error(t("settings.background.saveFailed"), { description: msg });
+        toast.error("背景图保存失败", { description: msg });
         logError("save_background_image failed", { err, source: selected });
       }
     } finally {
@@ -155,7 +153,7 @@ export function TerminalBackgroundSection() {
 
   const handleClear = () => {
     if (!imagePath && !terminalBackgroundMissing) return;
-    if (!window.confirm(t("settings.background.confirmRemove"))) return;
+    if (!window.confirm("移除背景图?")) return;
     void (async () => {
       await update("terminalBackground", {
         ...terminalBackground,
@@ -179,24 +177,24 @@ export function TerminalBackgroundSection() {
         <Group justify="space-between" align="flex-start" gap="md" wrap="nowrap">
           <Box>
             <Text size="sm" fw={600} c="var(--on-surface)">
-              {t("settings.background.title")}
+              终端背景
             </Text>
             <Text mt={4} size="xs" c="var(--on-surface-variant)">
-              {t("settings.background.description")}
+              使用本地图片作为终端背景。支持 JPEG / PNG / GIF。
             </Text>
           </Box>
           <Switch
             color="cliPrimary"
             checked={enabled}
             onChange={(event) => patch({ enabled: event.currentTarget.checked })}
-            aria-label={enabled ? t("settings.background.disableAria") : t("settings.background.enableAria")}
+            aria-label={enabled ? "关闭终端背景图" : "启用终端背景图"}
           />
         </Group>
 
         {enabled && terminalBackgroundMissing && (
           <Card className="border border-warning/40 bg-warning/10" p="sm" radius="lg" role="alert">
             <Text size="xs" c="var(--warning)">
-              {t("settings.background.missingWarning")}
+              此前选择的背景图已丢失（可能被外部删除或移动）。请重新选择图片或关闭背景。
             </Text>
           </Card>
         )}
@@ -204,7 +202,7 @@ export function TerminalBackgroundSection() {
         {enabled && !imagePath && !terminalBackgroundMissing && (
           <Card className="border border-dashed border-border bg-surface-container-low" p="sm" radius="lg">
             <Text size="xs" c="var(--on-surface-variant)">
-              {t("settings.background.emptyHint")}
+              尚未选择图片。点击下方“选择图片”上传一张本地图片以启用背景。
             </Text>
           </Card>
         )}
@@ -213,29 +211,29 @@ export function TerminalBackgroundSection() {
           <Card className="border border-border bg-surface-container-lowest" p="sm" radius="lg">
             <Stack gap="sm">
               <Text size="xs" fw={600} c="var(--on-surface)">
-                {t("settings.background.image")}
+                图片
               </Text>
               <Group align="flex-start" gap="md" wrap="nowrap">
                 <Box
                   className="ui-selection-card flex shrink-0 items-center justify-center overflow-hidden rounded-lg border border-border bg-surface-container-low text-[10px] text-on-surface-variant"
                   w={96}
                   h={64}
-                  aria-label={t("settings.background.previewAria")}
+                  aria-label="背景图预览"
                 >
                   {thumbUrl && !thumbFailed ? (
                     <img
                       src={thumbUrl}
-                      alt={t("settings.background.thumbnailAlt")}
+                      alt="背景缩略图"
                       className="h-full w-full object-cover"
                       onError={() => setThumbFailed(true)}
                     />
                   ) : thumbFailed ? (
                     <Text size="xs" ta="center" c="var(--warning)">
-                      {t("settings.background.loadFailed")}
+                      加载失败
                     </Text>
                   ) : (
                     <Text size="xs" c="var(--on-surface-variant)">
-                      {t("settings.background.noImage")}
+                      无图
                     </Text>
                   )}
                 </Box>
@@ -248,34 +246,34 @@ export function TerminalBackgroundSection() {
                       onClick={() => void handlePickImage()}
                       disabled={saving}
                     >
-                      {saving ? t("settings.templates.saving") : imagePath ? t("settings.background.changeImage") : t("settings.background.chooseImage")}
+                      {saving ? "保存中..." : imagePath ? "更换图片" : "选择图片..."}
                     </Button>
                     {imagePath && (
                       <Button variant="subtle" color="red" size="xs" onClick={handleClear} disabled={saving}>
-                        {t("settings.background.clear")}
+                        清除
                       </Button>
                     )}
                     {thumbFailed && imagePath && (
                       <Button variant="subtle" color="cliPrimary" size="xs" onClick={() => void handlePickImage()}>
-                        {t("settings.background.repick")}
+                        重选
                       </Button>
                     )}
                   </Group>
                   <Text size="xs" c="var(--on-surface-variant)" style={{ overflowWrap: "anywhere" }}>
                     {imagePath ? (
                       <>
-                        {t("settings.background.currentFile")}<span className="font-mono">{imagePath}</span>
+                        当前文件：<span className="font-mono">{imagePath}</span>
                         {typeof imageSizeBytes === "number" && (
                           <span className="ml-1 text-text-muted">（{formatFileSize(imageSizeBytes)}）</span>
                         )}
                       </>
                     ) : (
-                      t("settings.background.noImageSelected")
+                      "尚未选择图片"
                     )}
                   </Text>
                   {thumbFailed && imagePath && (
                     <Text size="xs" c="var(--warning)">
-                      {t("settings.background.reloadHint")}
+                      无法加载图片。文件可能已被外部删除，请重新选择。
                     </Text>
                   )}
                 </Stack>
@@ -286,47 +284,47 @@ export function TerminalBackgroundSection() {
           <Card className="border border-border bg-surface-container-lowest" p="sm" radius="lg">
             <Stack gap="sm">
               <Text size="xs" fw={600} c="var(--on-surface)">
-                {t("settings.background.displaySettings")}
+                显示设置
               </Text>
               <SliderRow
-                label={t("settings.background.opacity")}
+                label="透明度"
                 min={0}
                 max={100}
                 step={1}
                 value={opacity}
                 suffix="%"
-                ariaLabel={t("settings.background.opacityAria")}
+                ariaLabel="背景图透明度"
                 onChange={(v) => patch({ opacity: v })}
               />
               <Select<TerminalBackgroundFit>
-                label={t("settings.background.fitMode")}
+                label="适配模式"
                 value={fit}
                 onChange={(value) => {
                   if (value) patch({ fit: value });
                 }}
-                data={FIT_OPTIONS.map((option) => ({ ...option, label: t(option.label) }))}
+                data={FIT_OPTIONS}
                 allowDeselect={false}
                 size="xs"
-                aria-label={t("settings.background.fitMode")}
+                aria-label="适配模式"
               />
               <SliderRow
-                label={t("settings.background.blur")}
+                label="模糊"
                 min={0}
                 max={20}
                 step={1}
                 value={blur}
                 suffix="px"
-                ariaLabel={t("settings.background.blurAria")}
+                ariaLabel="背景图模糊"
                 onChange={(v) => patch({ blur: v })}
               />
               <SliderRow
-                label={t("settings.background.overlayDarken")}
+                label="暗化覆盖"
                 min={0}
                 max={80}
                 step={1}
                 value={overlayDarken}
                 suffix="%"
-                ariaLabel={t("settings.background.overlayDarkenAria")}
+                ariaLabel="暗化覆盖强度"
                 onChange={(v) => patch({ overlayDarken: v })}
               />
             </Stack>
@@ -335,15 +333,14 @@ export function TerminalBackgroundSection() {
           <Card className="border border-border bg-surface-container-lowest" p="sm" radius="lg">
             <Stack gap="xs">
               <Text size="xs" fw={600} c="var(--on-surface)">
-                {t("settings.background.positionAlign")}
+                位置对齐
               </Text>
               <Text size="xs" c="var(--on-surface-variant)">
-                {t("settings.background.positionDescription")}
+                适配为 Center 时尤其有用，其它模式下也保留作为偏好。
               </Text>
               <SimpleGrid cols={3} spacing={6} w={128}>
                 {POSITION_GRID.map((pos) => {
                   const active = position === pos;
-                  const positionLabel = t(POSITION_LABEL_KEYS[pos]);
                   return (
                     <UnstyledButton
                       key={pos}
@@ -352,8 +349,8 @@ export function TerminalBackgroundSection() {
                       className="ui-interactive ui-focus-ring ui-selection-card flex h-10 w-10 items-center justify-center rounded-lg border text-[10px]"
                       data-selected={active ? "true" : "false"}
                       aria-pressed={active}
-                      aria-label={t("settings.background.positionAria", { label: positionLabel })}
-                      title={positionLabel}
+                      aria-label={`位置：${POSITION_LABEL[pos]}`}
+                      title={POSITION_LABEL[pos]}
                     >
                       <Box
                         component="span"

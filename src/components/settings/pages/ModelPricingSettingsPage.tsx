@@ -32,7 +32,6 @@ import {
 import { useModelPricingStore, type ModelPriceSyncCandidate } from "@/stores/modelPricingStore";
 import { VendorIcon, inferVendor } from "@/components/VendorIcon";
 import { normalizeModelId, type ModelPrice } from "@/lib/modelPricing";
-import { useI18n } from "@/lib/i18n";
 
 interface Props {
   searchValue: string;
@@ -107,9 +106,9 @@ function formatPrice(value: number): string {
   return `$${value.toLocaleString(undefined, { maximumFractionDigits: 6 })}`;
 }
 
-function sourceLabel(source: string, t: ReturnType<typeof useI18n>["t"]): string {
-  if (source === "builtin") return t("settings.modelPricing.source.builtin");
-  if (source === "manual") return t("settings.modelPricing.source.manual");
+function sourceLabel(source: string): string {
+  if (source === "builtin") return "内置";
+  if (source === "manual") return "手动";
   if (source === "litellm") return "LiteLLM";
   if (source === "openrouter") return "OpenRouter";
   return source;
@@ -230,7 +229,6 @@ function SectionTitle({
 }
 
 function SourceBadge({ source }: { source: string }) {
-  const { t } = useI18n();
   const dot = SOURCE_DOT[source] ?? "var(--text-muted)";
   return (
     <span
@@ -241,7 +239,7 @@ function SourceBadge({ source }: { source: string }) {
       }}
     >
       <span style={{ width: 6, height: 6, borderRadius: 999, backgroundColor: dot }} />
-      <span style={{ fontSize: 11, fontWeight: 700, color: "var(--on-surface-variant)" }}>{sourceLabel(source, t)}</span>
+      <span style={{ fontSize: 11, fontWeight: 700, color: "var(--on-surface-variant)" }}>{sourceLabel(source)}</span>
     </span>
   );
 }
@@ -256,7 +254,6 @@ function PriceCell({ value }: { value: number }) {
 }
 
 export function ModelPricingSettingsPage({ searchValue }: Props) {
-  const { t } = useI18n();
   const {
     modelPrices,
     discoveredModels,
@@ -288,9 +285,9 @@ export function ModelPricingSettingsPage({ searchValue }: Props) {
 
   useEffect(() => {
     if (!loaded && !loading) {
-      void load().catch((err) => toast.error(t("settings.modelPricing.loadFailed"), { description: String(err) }));
+      void load().catch((err) => toast.error("加载模型价格失败", { description: String(err) }));
     }
-  }, [loaded, loading, load, t]);
+  }, [loaded, loading, load]);
 
   const prices = useMemo(() => Object.values(modelPrices).sort((a, b) => a.model.localeCompare(b.model)), [modelPrices]);
   const missingModels = useMemo(
@@ -338,7 +335,7 @@ export function ModelPricingSettingsPage({ searchValue }: Props) {
   const saveDraft = async () => {
     const model = draft.model.trim();
     if (!model) {
-      toast.error(t("settings.modelPricing.modelRequired"));
+      toast.error("模型名不能为空");
       return;
     }
     const existing = editingModel ? modelPrices[editingModel] : modelPrices[model];
@@ -361,9 +358,9 @@ export function ModelPricingSettingsPage({ searchValue }: Props) {
       }
       await upsert([price]);
       setEditorOpen(false);
-      toast.success(t("settings.modelPricing.saved"));
+      toast.success("模型价格已保存");
     } catch (err) {
-      toast.error(t("settings.modelPricing.saveFailed"), { description: String(err) });
+      toast.error("保存模型价格失败", { description: String(err) });
     }
   };
 
@@ -372,10 +369,10 @@ export function ModelPricingSettingsPage({ searchValue }: Props) {
     setDeleting(true);
     try {
       await deletePrices([deleteTarget]);
-      toast.success(t("settings.modelPricing.deleted"));
+      toast.success("模型价格已删除");
       setDeleteTarget(null);
     } catch (err) {
-      toast.error(t("settings.modelPricing.deleteFailed"), { description: String(err) });
+      toast.error("删除模型价格失败", { description: String(err) });
     } finally {
       setDeleting(false);
     }
@@ -383,12 +380,7 @@ export function ModelPricingSettingsPage({ searchValue }: Props) {
 
   const handleDiscover = async () => {
     const models = await discover();
-    toast.success(t("settings.modelPricing.discoverSuccess"), {
-      description: t("settings.modelPricing.discoverDescription", {
-        count: models.length,
-        missing: models.filter((model) => !hasPrice(modelPrices, model)).length,
-      }),
-    });
+    toast.success("本地模型识别完成", { description: `识别到 ${models.length} 个模型，缺失价格 ${models.filter((model) => !hasPrice(modelPrices, model)).length} 个。` });
     setFilter("missing");
   };
 
@@ -396,16 +388,12 @@ export function ModelPricingSettingsPage({ searchValue }: Props) {
     try {
       const targets = Array.from(new Set([...prices.map((price) => price.model), ...discoveredModels]));
       const result = await sync(targets);
-      toast.success(t("settings.modelPricing.syncSuccess"), {
-        description: t("settings.modelPricing.syncDescription", {
-          fetched: result.fetchedCount,
-          matched: result.matched.length,
-          candidates: result.candidates.length,
-        }),
+      toast.success("远程价格同步完成", {
+        description: `获取 ${result.fetchedCount} 条，自动匹配 ${result.matched.length} 条，候选 ${result.candidates.length} 条。`,
       });
       if (result.candidates.length > 0) setFilter("candidates");
     } catch (err) {
-      toast.error(t("settings.modelPricing.syncFailed"), { description: String(err) });
+      toast.error("远程价格同步失败", { description: String(err) });
     }
   };
 
@@ -418,9 +406,9 @@ export function ModelPricingSettingsPage({ searchValue }: Props) {
     const selected = selectedCandidateFor(targetModel, items);
     try {
       await applyCandidate(selected);
-      toast.success(t("settings.modelPricing.candidateApplied"), { description: `${targetModel} ← ${selected.remote.model}` });
+      toast.success("候选价格已应用", { description: `${targetModel} ← ${selected.remote.model}` });
     } catch (err) {
-      toast.error(t("settings.modelPricing.applyCandidateFailed"), { description: String(err) });
+      toast.error("应用候选失败", { description: String(err) });
     }
   };
 
@@ -430,9 +418,9 @@ export function ModelPricingSettingsPage({ searchValue }: Props) {
     try {
       const selected = groupedCandidates.map(({ targetModel, items }) => selectedCandidateFor(targetModel, items));
       await applyCandidates(selected);
-      toast.success(t("settings.modelPricing.applyAllSuccess"), { description: t("settings.modelPricing.applyAllDescription", { count: selected.length }) });
+      toast.success("已批量应用候选价格", { description: `共应用 ${selected.length} 个模型。` });
     } catch (err) {
-      toast.error(t("settings.modelPricing.applyAllFailed"), { description: String(err) });
+      toast.error("批量应用候选失败", { description: String(err) });
     } finally {
       setApplyingAll(false);
     }
@@ -453,42 +441,37 @@ export function ModelPricingSettingsPage({ searchValue }: Props) {
               <IconTile icon={Coins} tone="primary" variant="solid" size={38} />
               <Box>
                 <Text fz={18} fw={800} c="var(--on-surface)" style={{ letterSpacing: -0.3, lineHeight: 1.15 }}>
-                  {t("settings.modelPricing.title")}
+                  模型价格
                 </Text>
                 <Text size="xs" c="var(--text-muted)">
-                  {t("settings.modelPricing.subtitle")}
+                  USD / 1M tokens · 优先用于历史统计与终端实时估算
                 </Text>
               </Box>
             </Group>
             <Group gap="xs">
-              <StatChip icon={CircleCheck} tone="success" value={totalCount} label={t("settings.modelPricing.savedCount")} />
-              <StatChip icon={CircleAlert} tone="warning" value={missingModels.length} label={t("settings.modelPricing.missingCount")} />
-              <StatChip icon={Sparkles} tone="primary" value={candidateTargetCount} label={t("settings.modelPricing.candidateCount")} />
+              <StatChip icon={CircleCheck} tone="success" value={totalCount} label="已保存" />
+              <StatChip icon={CircleAlert} tone="warning" value={missingModels.length} label="缺失" />
+              <StatChip icon={Sparkles} tone="primary" value={candidateTargetCount} label="候选" />
             </Group>
             <Text size="sm" c="var(--text-muted)" style={{ maxWidth: 560 }}>
-              {t("settings.modelPricing.description")}
+              历史统计和内置终端实时估算会优先使用这里的价格；ccusage 面板仍使用外部工具自身定价。
             </Text>
             {lastSyncResult && (
               <Text size="xs" c="var(--text-muted)">
-                {t("settings.modelPricing.lastSync", {
-                  fetched: lastSyncResult.fetchedCount,
-                  matched: lastSyncResult.matched.length,
-                  candidates: candidateTargetCount,
-                  unmatched: pendingUnmatched.length,
-                })}
+                最近同步：远程 {lastSyncResult.fetchedCount} 条，自动匹配 {lastSyncResult.matched.length} 条，待确认候选 {candidateTargetCount} 个，缺价未匹配 {pendingUnmatched.length} 条。
               </Text>
             )}
-            {error && <Text size="xs" c="var(--danger)">{t("settings.modelPricing.lastError", { error })}</Text>}
+            {error && <Text size="xs" c="var(--danger)">最近错误：{error}</Text>}
           </Stack>
           <Group gap="xs" className="shrink-0">
             <Button variant="light" leftSection={<ScanLine size={15} />} loading={discovering} onClick={() => void handleDiscover()}>
-              {t("settings.modelPricing.discoverLocal")}
+              识别本地模型
             </Button>
             <Button variant="light" leftSection={<RefreshCw size={15} />} loading={syncing} onClick={() => void handleSync()}>
-              {t("settings.modelPricing.syncRemote")}
+              同步远程价格
             </Button>
             <Button leftSection={<Plus size={15} />} onClick={() => openAddEditor()}>
-              {t("settings.modelPricing.addManual")}
+              手动添加
             </Button>
           </Group>
         </Group>
@@ -502,21 +485,21 @@ export function ModelPricingSettingsPage({ searchValue }: Props) {
             color="cliPrimary"
             radius="md"
             data={[
-              { value: "all", label: t("settings.modelPricing.filter.all") },
-              { value: "saved", label: t("settings.modelPricing.filter.saved") },
-              { value: "missing", label: t("settings.modelPricing.filter.missing", { count: missingModels.length }) },
-              { value: "candidates", label: t("settings.modelPricing.filter.candidates", { count: candidateTargetCount }) },
+              { value: "all", label: "全部" },
+              { value: "saved", label: "已保存" },
+              { value: "missing", label: `缺失 (${missingModels.length})` },
+              { value: "candidates", label: `候选 (${candidateTargetCount})` },
             ]}
           />
           <Group gap="xs">
             {candidateTargetCount > 0 && (
               <Button size="compact-sm" leftSection={<CircleCheck size={14} />} loading={applyingAll} onClick={() => void handleApplyAllCandidates()}>
-                {t("settings.modelPricing.applyAllCandidates", { count: candidateTargetCount })}
+                全部应用候选 ({candidateTargetCount})
               </Button>
             )}
             {candidates.length > 0 && (
               <Button size="compact-sm" variant="subtle" leftSection={<X size={14} />} onClick={clearCandidates}>
-                {t("settings.modelPricing.clearCandidates")}
+                清空候选
               </Button>
             )}
           </Group>
@@ -527,13 +510,13 @@ export function ModelPricingSettingsPage({ searchValue }: Props) {
           <Table className="mp-table" verticalSpacing="sm" stickyHeader>
             <Table.Thead>
               <Table.Tr>
-                <Table.Th>{t("settings.modelPricing.table.model")}</Table.Th>
-                <Table.Th>{t("settings.modelPricing.table.source")}</Table.Th>
-                <Table.Th ta="right">{t("settings.modelPricing.table.input")}</Table.Th>
-                <Table.Th ta="right">{t("settings.modelPricing.table.output")}</Table.Th>
-                <Table.Th ta="right">{t("settings.modelPricing.table.cacheRead")}</Table.Th>
-                <Table.Th ta="right">{t("settings.modelPricing.table.cacheWrite")}</Table.Th>
-                <Table.Th ta="right">{t("settings.modelPricing.table.actions")}</Table.Th>
+                <Table.Th>模型</Table.Th>
+                <Table.Th>来源</Table.Th>
+                <Table.Th ta="right">输入</Table.Th>
+                <Table.Th ta="right">输出</Table.Th>
+                <Table.Th ta="right">缓存命中</Table.Th>
+                <Table.Th ta="right">缓存写入</Table.Th>
+                <Table.Th ta="right">操作</Table.Th>
               </Table.Tr>
             </Table.Thead>
             <Table.Tbody>
@@ -550,7 +533,7 @@ export function ModelPricingSettingsPage({ searchValue }: Props) {
                       <Box className="min-w-0">
                         <Text fw={600} size="sm" c="var(--on-surface)" className="break-all">{price.model}</Text>
                         {price.sourceModelId && price.sourceModelId !== price.model && (
-                          <Text size="xs" c="var(--text-muted)" className="break-all">{t("settings.modelPricing.sourceId", { id: price.sourceModelId })}</Text>
+                          <Text size="xs" c="var(--text-muted)" className="break-all">源 ID：{price.sourceModelId}</Text>
                         )}
                       </Box>
                     </Group>
@@ -562,13 +545,13 @@ export function ModelPricingSettingsPage({ searchValue }: Props) {
                   <Table.Td ta="right"><PriceCell value={price.cacheCreationPer1m} /></Table.Td>
                   <Table.Td>
                     <Group justify="flex-end" gap={4} wrap="nowrap">
-                      <Tooltip label={t("settings.modelPricing.edit")} withArrow>
-                        <ActionIcon variant="subtle" color="gray" onClick={() => openEditEditor(price)} aria-label={t("settings.modelPricing.edit")}>
+                      <Tooltip label="编辑" withArrow>
+                        <ActionIcon variant="subtle" color="gray" onClick={() => openEditEditor(price)} aria-label="编辑">
                           <Pencil size={15} />
                         </ActionIcon>
                       </Tooltip>
-                      <Tooltip label={t("settings.modelPricing.delete")} withArrow>
-                        <ActionIcon variant="subtle" color="red" onClick={() => setDeleteTarget(price.model)} aria-label={t("settings.modelPricing.delete")}>
+                      <Tooltip label="删除" withArrow>
+                        <ActionIcon variant="subtle" color="red" onClick={() => setDeleteTarget(price.model)} aria-label="删除">
                           <Trash2 size={15} />
                         </ActionIcon>
                       </Tooltip>
@@ -577,7 +560,7 @@ export function ModelPricingSettingsPage({ searchValue }: Props) {
                 </Table.Tr>
               ))}
               {filteredPrices.length === 0 && (
-                <Table.Tr><Table.Td colSpan={7}><Text ta="center" c="var(--text-muted)" py="md">{t("settings.modelPricing.noPrices")}</Text></Table.Td></Table.Tr>
+                <Table.Tr><Table.Td colSpan={7}><Text ta="center" c="var(--text-muted)" py="md">没有匹配的模型价格。</Text></Table.Td></Table.Tr>
               )}
             </Table.Tbody>
           </Table>
@@ -585,7 +568,7 @@ export function ModelPricingSettingsPage({ searchValue }: Props) {
 
         {(filter === "all" || filter === "missing") && visibleMissing.length > 0 && (
           <Stack gap="sm" mt={filter === "all" ? "lg" : 0}>
-            <SectionTitle icon={CircleAlert} tone="warning" title={t("settings.modelPricing.missingSection")} count={visibleMissing.length} />
+            <SectionTitle icon={CircleAlert} tone="warning" title="缺失价格的本地模型" count={visibleMissing.length} />
             {visibleMissing.map((model) => (
               <Group
                 key={model}
@@ -601,11 +584,11 @@ export function ModelPricingSettingsPage({ searchValue }: Props) {
                   <IconTile icon={Coins} tone="warning" size={30} />
                   <Box className="min-w-0">
                     <Text size="sm" fw={600} c="var(--on-surface)" className="break-all">{model}</Text>
-                    <Text size="xs" c="var(--text-muted)">{t("settings.modelPricing.unpricedHint")}</Text>
+                    <Text size="xs" c="var(--text-muted)">费用会计入未定价 Token，直到添加或同步价格。</Text>
                   </Box>
                 </Group>
                 <Button size="compact-sm" variant="light" leftSection={<Plus size={14} />} className="shrink-0" onClick={() => openAddEditor(model)}>
-                  {t("settings.modelPricing.addPrice")}
+                  添加价格
                 </Button>
               </Group>
             ))}
@@ -617,18 +600,18 @@ export function ModelPricingSettingsPage({ searchValue }: Props) {
             <SectionTitle
               icon={Sparkles}
               tone="primary"
-              title={t("settings.modelPricing.candidateSection")}
+              title="同步候选确认"
               count={candidateTargetCount}
               action={
                 <Button size="compact-sm" leftSection={<CircleCheck size={14} />} loading={applyingAll} onClick={() => void handleApplyAllCandidates()}>
-                  {t("settings.modelPricing.applyAll", { count: candidateTargetCount })}
+                  全部应用 ({candidateTargetCount})
                 </Button>
               }
             />
             {groupedCandidates.map(({ targetModel, items }) => {
               const data = items.map((item) => ({
                 value: candidateKey(item),
-                label: `${item.remote.model} · ${sourceLabel(item.remote.source, t)} · ${(item.score * 100).toFixed(1)}%`,
+                label: `${item.remote.model} · ${sourceLabel(item.remote.source)} · ${(item.score * 100).toFixed(1)}%`,
               }));
               const selected = items.find((item) => candidateKey(item) === (candidateSelections[targetModel] ?? data[0]?.value)) ?? items[0];
               return (
@@ -648,7 +631,7 @@ export function ModelPricingSettingsPage({ searchValue }: Props) {
                         <Text fw={700} c="var(--on-surface)" className="truncate">{targetModel}</Text>
                       </Group>
                       <Select
-                        label={t("settings.modelPricing.remoteCandidate")}
+                        label="候选远程价格"
                         data={data}
                         value={candidateSelections[targetModel] ?? data[0]?.value ?? null}
                         allowDeselect={false}
@@ -656,17 +639,12 @@ export function ModelPricingSettingsPage({ searchValue }: Props) {
                       />
                       {selected && (
                         <Text size="xs" c="var(--text-muted)">
-                          {t("settings.modelPricing.candidatePriceLine", {
-                            input: formatPrice(selected.remote.inputPer1m),
-                            output: formatPrice(selected.remote.outputPer1m),
-                            cacheRead: formatPrice(selected.remote.cacheReadPer1m),
-                            cacheWrite: formatPrice(selected.remote.cacheCreationPer1m),
-                          })}
+                          输入 {formatPrice(selected.remote.inputPer1m)} · 输出 {formatPrice(selected.remote.outputPer1m)} · 缓存命中 {formatPrice(selected.remote.cacheReadPer1m)} · 缓存写入 {formatPrice(selected.remote.cacheCreationPer1m)}
                         </Text>
                       )}
                     </Stack>
                     <Button mt={28} leftSection={<CircleCheck size={15} />} className="shrink-0" onClick={() => void handleApplyCandidate(targetModel, items)}>
-                      {t("settings.modelPricing.confirmApply")}
+                      确认应用
                     </Button>
                   </Group>
                 </Card>
@@ -677,10 +655,7 @@ export function ModelPricingSettingsPage({ searchValue }: Props) {
 
         {pendingUnmatched.length > 0 && (filter === "all" || filter === "candidates") && (
           <Text size="xs" c="var(--text-muted)" mt="md">
-            {t("settings.modelPricing.unmatched", {
-              models: pendingUnmatched.slice(0, 12).join(t("settings.common.listSeparator")),
-              suffix: pendingUnmatched.length > 12 ? t("settings.modelPricing.moreSuffix", { count: pendingUnmatched.length }) : "",
-            })}
+            未匹配模型（仍缺价）：{pendingUnmatched.slice(0, 12).join("、")}{pendingUnmatched.length > 12 ? ` 等 ${pendingUnmatched.length} 个` : ""}
           </Text>
         )}
         </Box>
@@ -692,25 +667,25 @@ export function ModelPricingSettingsPage({ searchValue }: Props) {
         title={
           <Group gap="xs" align="center">
             <IconTile icon={editingModel ? Pencil : Plus} tone="primary" size={26} />
-            <Text fw={700}>{editingModel ? t("settings.modelPricing.editTitle") : t("settings.modelPricing.addTitle")}</Text>
+            <Text fw={700}>{editingModel ? "编辑模型价格" : "添加模型价格"}</Text>
           </Group>
         }
         centered
       >
         <Stack gap="md">
           <TextInput
-            label={t("settings.modelPricing.modelId")}
+            label="模型 ID"
             value={draft.model}
             disabled={editingModel !== null}
             onChange={(event) => setDraft((prev) => ({ ...prev, model: event.currentTarget.value }))}
           />
-          <NumberInput label={t("settings.modelPricing.inputUsd")} prefix="$" min={0} decimalScale={8} value={draft.inputPer1m} onChange={(value) => setDraft((prev) => ({ ...prev, inputPer1m: Number(value) || 0 }))} />
-          <NumberInput label={t("settings.modelPricing.outputUsd")} prefix="$" min={0} decimalScale={8} value={draft.outputPer1m} onChange={(value) => setDraft((prev) => ({ ...prev, outputPer1m: Number(value) || 0 }))} />
-          <NumberInput label={t("settings.modelPricing.cacheReadUsd")} prefix="$" min={0} decimalScale={8} value={draft.cacheReadPer1m} onChange={(value) => setDraft((prev) => ({ ...prev, cacheReadPer1m: Number(value) || 0 }))} />
-          <NumberInput label={t("settings.modelPricing.cacheWriteUsd")} prefix="$" min={0} decimalScale={8} value={draft.cacheCreationPer1m} onChange={(value) => setDraft((prev) => ({ ...prev, cacheCreationPer1m: Number(value) || 0 }))} />
+          <NumberInput label="Input USD / 1M" prefix="$" min={0} decimalScale={8} value={draft.inputPer1m} onChange={(value) => setDraft((prev) => ({ ...prev, inputPer1m: Number(value) || 0 }))} />
+          <NumberInput label="Output USD / 1M" prefix="$" min={0} decimalScale={8} value={draft.outputPer1m} onChange={(value) => setDraft((prev) => ({ ...prev, outputPer1m: Number(value) || 0 }))} />
+          <NumberInput label="缓存命中 USD / 1M" prefix="$" min={0} decimalScale={8} value={draft.cacheReadPer1m} onChange={(value) => setDraft((prev) => ({ ...prev, cacheReadPer1m: Number(value) || 0 }))} />
+          <NumberInput label="缓存写入 USD / 1M" prefix="$" min={0} decimalScale={8} value={draft.cacheCreationPer1m} onChange={(value) => setDraft((prev) => ({ ...prev, cacheCreationPer1m: Number(value) || 0 }))} />
           <Group justify="flex-end">
-            <Button variant="subtle" onClick={() => setEditorOpen(false)}>{t("settings.modelPricing.cancel")}</Button>
-            <Button leftSection={<CircleCheck size={15} />} onClick={() => void saveDraft()}>{t("settings.modelPricing.save")}</Button>
+            <Button variant="subtle" onClick={() => setEditorOpen(false)}>取消</Button>
+            <Button leftSection={<CircleCheck size={15} />} onClick={() => void saveDraft()}>保存</Button>
           </Group>
         </Stack>
       </Modal>
@@ -721,7 +696,7 @@ export function ModelPricingSettingsPage({ searchValue }: Props) {
         title={
           <Group gap="xs" align="center">
             <IconTile icon={Trash2} tone="danger" size={26} />
-            <Text fw={700}>{t("settings.modelPricing.deleteTitle")}</Text>
+            <Text fw={700}>删除模型价格</Text>
           </Group>
         }
         centered
@@ -729,11 +704,11 @@ export function ModelPricingSettingsPage({ searchValue }: Props) {
       >
         <Stack gap="md">
           <Text size="sm">
-            {deleteTarget ? t("settings.modelPricing.deleteConfirm", { model: deleteTarget }) : ""}
+            确认删除 <Text span fw={700}>{deleteTarget}</Text> 的价格？删除后该模型的用量将计入未定价 Token。
           </Text>
           <Group justify="flex-end">
-            <Button variant="subtle" onClick={() => setDeleteTarget(null)}>{t("settings.modelPricing.cancel")}</Button>
-            <Button color="red" leftSection={<Trash2 size={15} />} loading={deleting} onClick={() => void confirmDelete()}>{t("settings.modelPricing.delete")}</Button>
+            <Button variant="subtle" onClick={() => setDeleteTarget(null)}>取消</Button>
+            <Button color="red" leftSection={<Trash2 size={15} />} loading={deleting} onClick={() => void confirmDelete()}>删除</Button>
           </Group>
         </Stack>
       </Modal>
