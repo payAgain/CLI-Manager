@@ -92,6 +92,23 @@ export function defaultShellForOs(os: OsPlatform): ShellKey {
   }
 }
 
+export function isWindowsOnlyShellKey(value?: string | null): boolean {
+  const normalized = normalizeShellKey(value);
+  return (
+    normalized === "powershell" ||
+    normalized === "cmd" ||
+    normalized === "wsl" ||
+    normalized === "gitbash"
+  );
+}
+
+export function normalizeShellForOs(value: string | null | undefined, os: OsPlatform): ShellKey | undefined {
+  const normalized = normalizeShellKey(value);
+  if (!normalized) return undefined;
+  if (os !== "windows" && isWindowsOnlyShellKey(normalized)) return undefined;
+  return normalized;
+}
+
 /**
  * Get platform-specific default shell
  */

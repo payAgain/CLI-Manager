@@ -209,6 +209,8 @@ Hook-driven `attention` must win over shell runtime state until the user activat
 | Persisted `shellRuntimeMonitoringEnabled` is explicit `true` | Preserve the user opt-in; newly-created PowerShell / pwsh PTY may receive `CLI_MANAGER_SHELL_RUNTIME_MONITORING=1`. |
 | Monitoring setting is disabled | New PTY must not receive `CLI_MANAGER_SHELL_RUNTIME_MONITORING=1`; frontend must ignore shell runtime events for that shell. |
 | Shell is not PowerShell / pwsh | Do not inject PowerShell prompt wrapper. Preserve the normal shell launch path. |
+| Shell is omitted | Do not inject shell runtime monitoring from the frontend. The Rust PTY boundary chooses the platform default shell. |
+| Non-Windows receives a Windows-only shell key (`powershell`, `cmd`, `wsl`, `gitbash`) | Treat it as unsupported for runtime injection and fall back to the platform default shell path instead of spawning `.exe` binaries. |
 | OSC marker is split across output chunks | Buffer until `BEL`, then parse and strip before writing to xterm. |
 | OSC marker remains unterminated beyond the safety limit | Drop the buffered private marker fragment instead of writing it to xterm. |
 | Unknown event name | Ignore the marker and do not update status. |
@@ -238,6 +240,7 @@ Hook-driven `attention` must win over shell runtime state until the user activat
   - Over-limit unterminated fragments are dropped.
 - Rust boundary assertions when feasible:
   - PowerShell / pwsh with monitoring enabled includes `-NoExit -Command` and the prompt wrapper.
+  - macOS/Linux with omitted shell or Windows-only stale shell never resolves to `powershell.exe`, `cmd.exe`, or `wsl.exe`.
   - Non-PowerShell shells keep their normal argument list.
   - `pty_create` always injects `CLI_MANAGER_TAB_ID`.
 

@@ -42,7 +42,7 @@ import {
 import { SubagentTranscriptView } from "./terminal/SubagentTranscriptView";
 import { FileEditorPane } from "./files/FileEditorPane";
 import { openWindowsTerminal } from "../lib/externalTerminal";
-import { resolveProjectStartupCommand } from "../lib/projectStartupCommand";
+import { normalizeDirectCodexStartupCommand, resolveProjectStartupCommand } from "../lib/projectStartupCommand";
 import { parseProjectEnvVars } from "../lib/providerSwitching";
 import { Terminal, Plus, ListClockIcon, X, Copy, Maximize2, Minimize2, ChevronDown, ChevronRight, BarChart3, GitBranch, Folder, Check } from "./icons";
 import { VendorIcon, inferVendor, type VendorKey } from "./VendorIcon";
@@ -186,15 +186,18 @@ function formatCliToolLabel(value: string | null | undefined): string {
 
 function formatShellLabel(value: string | null | undefined): string {
   const trimmed = value?.trim();
-  if (!trimmed) return "PowerShell";
+  if (!trimmed) return "默认 Shell";
 
   const normalized = trimmed.toLowerCase();
-  if (normalized === "powershell") return "PowerShell";
-  if (normalized === "pwsh") return "PowerShell 7";
+  if (normalized === "powershell" || normalized === "powershell.exe") return "PowerShell";
+  if (normalized === "pwsh" || normalized === "pwsh.exe") return "PowerShell 7";
   if (normalized === "cmd") return "CMD";
   if (normalized === "wsl") return "WSL";
   if (normalized === "git-bash" || normalized === "git bash" || normalized === "gitbash") return "Git Bash";
   if (normalized === "bash") return "Bash";
+  if (normalized === "zsh") return "Zsh";
+  if (normalized === "fish") return "Fish";
+  if (normalized === "sh") return "sh";
   return trimmed;
 }
 
@@ -219,7 +222,7 @@ function buildTerminalTabHoverInfo(session: TerminalSession, project?: Project):
   return {
     name: session.title.trim() || "Terminal",
     cli: formatCliToolLabel(project?.cli_tool),
-    shell: formatShellLabel(session.shell ?? project?.shell ?? "powershell"),
+    shell: formatShellLabel(session.shell ?? project?.shell),
     project: project?.name.trim() || "\u672a\u7ed1\u5b9a\u9879\u76ee",
     path: session.cwd?.trim() || project?.path.trim() || "-",
     sessionId: session.cliSessionId?.trim() || session.id,
@@ -320,6 +323,7 @@ function SortableTab({
   const [hoverCardPosition, setHoverCardPosition] = useState<{ left: number; top: number } | null>(null);
   const hoverOpenTimerRef = useRef<number | null>(null);
   const hoverCloseTimerRef = useRef<number | null>(null);
+  const terminalTabHoverInfoEnabled = useSettingsStore((s) => s.terminalTabHoverInfoEnabled);
 
   const clearHoverOpenTimer = useCallback(() => {
     if (hoverOpenTimerRef.current === null) return;
@@ -353,7 +357,7 @@ function SortableTab({
   }, [clearHoverCloseTimer, clearHoverOpenTimer]);
 
   const scheduleHoverCard = useCallback(() => {
-    if (isEditing || isDragging) return;
+    if (!terminalTabHoverInfoEnabled || isEditing || isDragging) return;
     clearHoverOpenTimer();
     clearHoverCloseTimer();
     hoverOpenTimerRef.current = window.setTimeout(() => {
@@ -368,7 +372,7 @@ function SortableTab({
         top: clampNumber(rect.bottom + 6, 8, maxTop),
       });
     }, TERMINAL_TAB_HOVER_DELAY_MS);
-  }, [clearHoverCloseTimer, clearHoverOpenTimer, isDragging, isEditing]);
+  }, [clearHoverCloseTimer, clearHoverOpenTimer, isDragging, isEditing, terminalTabHoverInfoEnabled]);
 
   const copySessionId = useCallback(() => {
     void navigator.clipboard
@@ -385,6 +389,10 @@ function SortableTab({
   useEffect(() => {
     if (isEditing || isDragging) hideHoverCard();
   }, [hideHoverCard, isDragging, isEditing]);
+
+  useEffect(() => {
+    if (!terminalTabHoverInfoEnabled) hideHoverCard();
+  }, [hideHoverCard, terminalTabHoverInfoEnabled]);
 
   const submitEdit = useCallback(() => {
     const trimmed = editValue.trim();
@@ -510,7 +518,7 @@ function SortableTab({
       </ContextMenuTrigger>
       <ContextMenuContent className={menuClassName} style={menuStyle}>{menuContent(getTabAnchor)}</ContextMenuContent>
       </ContextMenu>
-      {hoverCardPosition && !isEditing && !isDragging && (
+      {terminalTabHoverInfoEnabled && hoverCardPosition && !isEditing && !isDragging && (
         <Portal>
           <TerminalTabHoverCard info={hoverInfo} position={hoverCardPosition} onPointerEnter={keepHoverCardOpen} onPointerLeave={scheduleHideHoverCard} onCopySessionId={copySessionId} />
         </Portal>
@@ -1634,7 +1642,7 @@ export function TerminalTabs({ fullscreen = false, onToggleFullscreen }: Termina
       session.projectId,
       session.cwd,
       session.title,
-      session.startupCmd,
+      normalizeDirectCodexStartupCommand(session.startupCmd),
       session.envVars ? { ...session.envVars } : undefined,
       session.shell ?? undefined,
     ).then(() => {

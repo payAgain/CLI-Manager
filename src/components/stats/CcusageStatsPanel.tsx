@@ -11,7 +11,16 @@ import { useI18n, type TranslationKey } from "../../lib/i18n";
 import type { CcusageSource } from "../../lib/types";
 import { useCcusageStore } from "../../stores/ccusageStore";
 import { EChart } from "./EChart";
-import { ACCENT, CHART_TOOLTIP, COST_FILL, PEAK, SERIES_COLORS } from "./statsPalette";
+import { StatsDatePicker } from "./StatsDatePicker";
+import {
+  CHART_TOOLTIP,
+  COST_COLOR,
+  ECHARTS_AXIS_LINE,
+  ECHARTS_AXIS_SHADOW,
+  PEAK,
+  USAGE_SERIES_COLORS,
+  USAGE_TREND_COLORS,
+} from "./statsPalette";
 
 function SectionHeading({
   icon: Icon,
@@ -248,6 +257,17 @@ function niceAxisMax(value: number): number | undefined {
   for (const factor of [1, 2, 5, 10]) {
     const candidate = factor * base;
     if (value <= candidate) return candidate;
+  }
+  return 10 * base;
+}
+
+function paddedTrendAxisMax(value: number): number | undefined {
+  if (!Number.isFinite(value) || value <= 0) return undefined;
+  const padded = value * 1.3;
+  const base = 10 ** Math.floor(Math.log10(padded));
+  for (const factor of [1, 1.2, 1.5, 2, 2.5, 5, 10]) {
+    const candidate = factor * base;
+    if (padded <= candidate) return candidate;
   }
   return 10 * base;
 }
@@ -855,6 +875,7 @@ function getPeakDay(items: CcusageDailyItem[]): CcusageDailyItem | null {
 
 function formatCompactCount(value: number): string {
   if (!Number.isFinite(value)) return "0";
+  if (value >= 1_000_000_000) return `${(value / 1_000_000_000).toFixed(1)}B`;
   if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
   if (value >= 1_000) return `${(value / 1_000).toFixed(1)}K`;
   return formatCount(value);
@@ -1002,10 +1023,10 @@ function TokenCompositionStrip({ summary }: { summary: CcusageSummary }) {
   const { language } = useI18n();
   const text = (zh: string, en: string) => (language === "zh-CN" ? zh : en);
   const parts = [
-    { key: "input", label: text("输入", "Input"), value: summary.inputTokens, color: SERIES_COLORS.input },
-    { key: "output", label: text("输出", "Output"), value: summary.outputTokens, color: SERIES_COLORS.output },
-    { key: "cacheCreation", label: text("缓存写入", "Cache Write"), value: summary.cacheCreationTokens, color: SERIES_COLORS.cacheCreation },
-    { key: "cacheRead", label: text("缓存命中", "Cache Hit"), value: summary.cacheReadTokens, color: SERIES_COLORS.cacheRead },
+    { key: "input", label: text("输入", "Input"), value: summary.inputTokens, color: USAGE_SERIES_COLORS.input },
+    { key: "output", label: text("输出", "Output"), value: summary.outputTokens, color: USAGE_SERIES_COLORS.output },
+    { key: "cacheCreation", label: text("缓存写入", "Cache Write"), value: summary.cacheCreationTokens, color: USAGE_SERIES_COLORS.cacheCreation },
+    { key: "cacheRead", label: text("缓存命中", "Cache Hit"), value: summary.cacheReadTokens, color: USAGE_SERIES_COLORS.cacheRead },
   ];
   const total = Math.max(1, parts.reduce((sum, item) => sum + item.value, 0));
 
@@ -1107,52 +1128,52 @@ function TimeWindowSelector({
         )}
 
         {timeWindow.mode === "month" && (
-          <input
-            type="month"
+          <StatsDatePicker
+            mode="month"
             value={resolved.month}
             min={first.slice(0, 7)}
             max={latest.slice(0, 7)}
-            onChange={(e) => onChange({ ...timeWindow, month: e.target.value })}
+            onChange={(value) => onChange({ ...timeWindow, month: value })}
             className={inputClass}
-            aria-label={t("ccusage.month")}
+            ariaLabel={t("ccusage.month")}
             disabled={disabled}
           />
         )}
 
         {timeWindow.mode === "day" && (
-          <input
-            type="date"
+          <StatsDatePicker
+            mode="date"
             value={resolved.day}
             min={first}
             max={latest}
-            onChange={(e) => onChange({ ...timeWindow, day: e.target.value })}
+            onChange={(value) => onChange({ ...timeWindow, day: value })}
             className={inputClass}
-            aria-label={t("ccusage.date")}
+            ariaLabel={t("ccusage.date")}
             disabled={disabled}
           />
         )}
 
         {timeWindow.mode === "custom" && (
           <>
-            <input
-              type="date"
+            <StatsDatePicker
+              mode="date"
               value={resolved.customStart}
               min={first}
               max={latest}
-              onChange={(e) => onChange({ ...timeWindow, customStart: e.target.value })}
+              onChange={(value) => onChange({ ...timeWindow, customStart: value })}
               className={inputClass}
-              aria-label={t("ccusage.customStart")}
+              ariaLabel={t("ccusage.customStart")}
               disabled={disabled}
             />
             <span className="text-[11px] text-text-muted">{t("common.to")}</span>
-            <input
-              type="date"
+            <StatsDatePicker
+              mode="date"
               value={resolved.customEnd}
               min={first}
               max={latest}
-              onChange={(e) => onChange({ ...timeWindow, customEnd: e.target.value })}
+              onChange={(value) => onChange({ ...timeWindow, customEnd: value })}
               className={inputClass}
-              aria-label={t("ccusage.customEnd")}
+              ariaLabel={t("ccusage.customEnd")}
               disabled={disabled}
             />
           </>
@@ -1177,7 +1198,7 @@ function DailyUsageTrendChart({ items, granularity }: { items: CcusageDailyItem[
   const costLabel = text("费用", "Cost");
   const option = useMemo<EChartsOption>(() => {
     const dates = items.map((item) => item.date);
-    const tokenAxisMax = niceAxisMax(
+    const tokenAxisMax = paddedTrendAxisMax(
       Math.max(
         0,
         ...items.flatMap((item) => [
@@ -1189,16 +1210,24 @@ function DailyUsageTrendChart({ items, granularity }: { items: CcusageDailyItem[
         ])
       )
     );
-    const costAxisMax = niceAxisMax(Math.max(0, ...items.map((item) => item.totalCost)));
+    const costAxisMax = paddedTrendAxisMax(Math.max(0, ...items.map((item) => item.totalCost)));
     const denseDailyLabels = granularity === "天" && dates.length > 18;
     const xAxisLabelInterval = denseDailyLabels ? Math.ceil(dates.length / 8) : 0;
     return {
       backgroundColor: "transparent",
       animationDuration: 700,
-      color: [ACCENT, SERIES_COLORS.input, SERIES_COLORS.output, SERIES_COLORS.cacheCreation, SERIES_COLORS.cacheRead],
+      color: [
+        USAGE_TREND_COLORS.total,
+        USAGE_SERIES_COLORS.input,
+        USAGE_SERIES_COLORS.output,
+        USAGE_SERIES_COLORS.cacheCreation,
+        USAGE_SERIES_COLORS.cacheRead,
+        COST_COLOR,
+      ],
       tooltip: {
         trigger: "axis",
         confine: true,
+        axisPointer: { type: "line", lineStyle: { color: ECHARTS_AXIS_LINE, width: 1 } },
         ...CHART_TOOLTIP,
         formatter: (params: unknown) => {
           const rows = tooltipParamRows(params);
@@ -1208,12 +1237,13 @@ function DailyUsageTrendChart({ items, granularity }: { items: CcusageDailyItem[
             .map((row) => {
               const name = tooltipString(row, "seriesName");
               const marker = tooltipString(row, "marker");
+              const color = tooltipString(row, "color") || "var(--text-primary)";
               const value = tooltipNumber(row, "value");
               const display = name === costLabel ? formatCost(value) : `${formatCount(value)} Token`;
-              return `<div style="display:flex;align-items:center;justify-content:space-between;gap:18px;line-height:22px;"><span style="display:inline-flex;align-items:center;gap:6px;text-align:left;">${marker}<span>${name}</span></span><strong style="min-width:88px;text-align:right;">${display}</strong></div>`;
+              return `<div style="display:flex;align-items:center;justify-content:space-between;gap:22px;line-height:24px;color:var(--text-secondary);"><span style="display:inline-flex;align-items:center;gap:7px;text-align:left;min-width:0;">${marker}<span style="color:${color};font-weight:600;">${name}</span></span><strong style="min-width:104px;text-align:right;color:${color};font-weight:700;">${display}</strong></div>`;
             })
             .join("");
-          return `<div style="min-width:190px;"><div style="font-weight:700;margin-bottom:6px;">${day.date}${peak?.date === day.date ? ` · ${peakLabel}` : ""}</div>${seriesRows}<div style="margin-top:6px;color:var(--text-muted);">${text("模型", "Models")}：${day.models.length || "-"}</div></div>`;
+          return `<div style="min-width:270px;color:var(--text-primary);"><div style="font-weight:700;margin-bottom:8px;color:var(--text-primary);">${day.date}${peak?.date === day.date ? ` · ${peakLabel}` : ""}</div>${seriesRows}<div style="margin-top:8px;color:var(--text-muted);">${text("模型", "Models")}：${day.models.length || "-"}</div></div>`;
         },
       },
       legend: {
@@ -1266,8 +1296,9 @@ function DailyUsageTrendChart({ items, granularity }: { items: CcusageDailyItem[
           smooth: true,
           symbol: "circle",
           symbolSize: 5,
-          lineStyle: { width: 3 },
-          areaStyle: { color: `color-mix(in srgb, ${ACCENT} 16%, transparent)` },
+          itemStyle: { color: USAGE_TREND_COLORS.total },
+          lineStyle: { width: 3, color: USAGE_TREND_COLORS.total },
+          areaStyle: { color: `color-mix(in srgb, ${USAGE_TREND_COLORS.total} 16%, transparent)` },
           data: items.map((item) =>
             peak?.date === item.date
               ? { value: item.totalTokens, symbolSize: 12, itemStyle: { color: PEAK, borderColor: "var(--bg-secondary)", borderWidth: 2 } }
@@ -1296,7 +1327,8 @@ function DailyUsageTrendChart({ items, granularity }: { items: CcusageDailyItem[
           type: "line",
           smooth: true,
           symbol: "none",
-          lineStyle: { width: 1.8, opacity: 0.9 },
+          itemStyle: { color: USAGE_SERIES_COLORS.input },
+          lineStyle: { width: 1.8, opacity: 0.9, color: USAGE_SERIES_COLORS.input },
           data: items.map((item) => item.inputTokens),
         },
         {
@@ -1304,7 +1336,8 @@ function DailyUsageTrendChart({ items, granularity }: { items: CcusageDailyItem[
           type: "line",
           smooth: true,
           symbol: "none",
-          lineStyle: { width: 1.8, opacity: 0.9 },
+          itemStyle: { color: USAGE_SERIES_COLORS.output },
+          lineStyle: { width: 1.8, opacity: 0.9, color: USAGE_SERIES_COLORS.output },
           data: items.map((item) => item.outputTokens),
         },
         {
@@ -1312,7 +1345,8 @@ function DailyUsageTrendChart({ items, granularity }: { items: CcusageDailyItem[
           type: "line",
           smooth: true,
           symbol: "none",
-          lineStyle: { width: 1.8, opacity: 0.9 },
+          itemStyle: { color: USAGE_SERIES_COLORS.cacheCreation },
+          lineStyle: { width: 1.8, opacity: 0.9, color: USAGE_SERIES_COLORS.cacheCreation },
           data: items.map((item) => item.cacheCreationTokens),
         },
         {
@@ -1320,15 +1354,19 @@ function DailyUsageTrendChart({ items, granularity }: { items: CcusageDailyItem[
           type: "line",
           smooth: true,
           symbol: "none",
-          lineStyle: { width: 1.8, opacity: 0.9 },
+          itemStyle: { color: USAGE_SERIES_COLORS.cacheRead },
+          lineStyle: { width: 1.8, opacity: 0.9, color: USAGE_SERIES_COLORS.cacheRead },
           data: items.map((item) => item.cacheReadTokens),
         },
         {
           name: costLabel,
-          type: "bar",
+          type: "line",
+          smooth: true,
           yAxisIndex: 1,
-          barMaxWidth: 12,
-          itemStyle: { color: COST_FILL, borderRadius: [5, 5, 0, 0] },
+          symbol: "none",
+          itemStyle: { color: COST_COLOR },
+          lineStyle: { width: 2.2, color: COST_COLOR },
+          emphasis: { focus: "series" },
           data: items.map((item) => Number(item.totalCost.toFixed(2))),
         },
       ],
@@ -1361,11 +1399,11 @@ function DailyUsageTrendChart({ items, granularity }: { items: CcusageDailyItem[
 function heatmapCellColor(value: number, maxValue: number): string {
   if (value <= 0 || maxValue <= 0) return "color-mix(in srgb, var(--text-muted) 12%, transparent)";
   const ratio = value / maxValue;
-  if (ratio < 0.05) return "color-mix(in srgb, var(--accent) 18%, transparent)";
-  if (ratio < 0.25) return "color-mix(in srgb, var(--accent) 36%, transparent)";
-  if (ratio < 0.5) return "color-mix(in srgb, var(--accent) 56%, transparent)";
-  if (ratio < 0.75) return "color-mix(in srgb, var(--accent) 78%, transparent)";
-  return "var(--accent)";
+  if (ratio < 0.05) return `color-mix(in srgb, ${USAGE_TREND_COLORS.total} 18%, transparent)`;
+  if (ratio < 0.25) return `color-mix(in srgb, ${USAGE_TREND_COLORS.total} 36%, transparent)`;
+  if (ratio < 0.5) return `color-mix(in srgb, ${USAGE_TREND_COLORS.total} 56%, transparent)`;
+  if (ratio < 0.75) return `color-mix(in srgb, ${USAGE_TREND_COLORS.total} 78%, transparent)`;
+  return USAGE_TREND_COLORS.total;
 }
 
 function DailyUsageHeatmap({ items, granularity }: { items: CcusageDailyItem[]; granularity: string }) {
@@ -1432,14 +1470,14 @@ function ModelRankingChart({ summary }: { summary: CcusageSummary }) {
       backgroundColor: "transparent",
       tooltip: {
         trigger: "axis",
-        axisPointer: { type: "shadow" },
+        axisPointer: { type: "shadow", shadowStyle: { color: ECHARTS_AXIS_SHADOW } },
         confine: true,
         ...CHART_TOOLTIP,
         formatter: (params: unknown) => {
           const row = tooltipParamRows(params)[0];
           const model = models[tooltipDataIndex(row)];
           if (!model) return "";
-          return `<div style="min-width:220px;"><strong>${model.model}</strong><div style="margin-top:6px;">Token: ${formatCount(model.totalTokens)}</div><div>${text("费用", "Cost")}: ${formatCost(model.totalCost)}</div><div>${text("输入", "Input")}: ${formatCount(model.inputTokens)} · ${text("输出", "Output")}: ${formatCount(model.outputTokens)}</div></div>`;
+          return `<div style="min-width:220px;color:var(--text-secondary);"><strong style="color:var(--text-primary);">${model.model}</strong><div style="margin-top:6px;color:var(--text-primary);">Token: ${formatCount(model.totalTokens)}</div><div>${text("费用", "Cost")}: ${formatCost(model.totalCost)}</div><div>${text("输入", "Input")}: ${formatCount(model.inputTokens)} · ${text("输出", "Output")}: ${formatCount(model.outputTokens)}</div></div>`;
         },
       },
       grid: { left: 112, right: 54, top: 14, bottom: 24 },
@@ -1466,7 +1504,7 @@ function ModelRankingChart({ summary }: { summary: CcusageSummary }) {
           name: "Token",
           type: "bar",
           barWidth: 14,
-          itemStyle: { color: ACCENT, borderRadius: [0, 7, 7, 0] },
+          itemStyle: { color: USAGE_TREND_COLORS.total, borderRadius: [0, 7, 7, 0] },
           label: {
             show: true,
             position: "right",
@@ -1476,7 +1514,7 @@ function ModelRankingChart({ summary }: { summary: CcusageSummary }) {
           },
           data: models.map((item, index) => ({
             value: item.totalTokens,
-            itemStyle: { color: index === models.length - 1 ? PEAK : ACCENT },
+            itemStyle: { color: index === models.length - 1 ? PEAK : USAGE_TREND_COLORS.total },
           })),
         },
       ],

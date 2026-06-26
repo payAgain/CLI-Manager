@@ -31,7 +31,7 @@ function normalizeHistorySidebarWidth(width: number): number {
 }
 
 function normalizePathKey(value: string): string {
-  return value.trim().replace(/\\/g, "/").replace(/\/+$/g, "").toLowerCase();
+  return value.trim().replace(/\\/g, "/").replace(/\/+$/g, "");
 }
 
 function projectPathName(path: string): string {
@@ -75,15 +75,16 @@ function findHistoryProject(session: HistorySessionView | HistorySessionDetail, 
 
   const normalizedProjectKey = normalizePathKey(session.project_key);
   if (!normalizedProjectKey) return null;
+  const normalizedProjectKeyLower = normalizedProjectKey.toLowerCase();
 
   return projects.find((project) => {
     const projectPath = normalizePathKey(project.path);
     const projectName = project.name.trim().toLowerCase();
     return (
       projectPath === normalizedProjectKey ||
-      claudeProjectKeyFromPath(project.path) === normalizedProjectKey ||
-      projectPathName(project.path).toLowerCase() === normalizedProjectKey ||
-      projectName === normalizedProjectKey
+      claudeProjectKeyFromPath(project.path) === normalizedProjectKeyLower ||
+      projectPathName(project.path).toLowerCase() === normalizedProjectKeyLower ||
+      projectName === normalizedProjectKeyLower
     );
   }) ?? null;
 }

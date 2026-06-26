@@ -459,17 +459,17 @@ export function ThemeSettingsPage() {
               <Group justify="space-between" align="center" gap="md" wrap="nowrap">
                 <Box>
                   <Text size="xs" c="var(--on-surface-variant)">
-                    {text("外部 PowerShell", "External PowerShell")}
+                    {text("外部终端", "External terminal")}
                   </Text>
                   <Text mt={4} size="xs" c="var(--text-muted)">
-                    {text("启动项目时使用外部 PowerShell 窗口。", "Use an external PowerShell window when launching projects.")}
+                    {text("启动项目时使用系统外部终端窗口。", "Use the system external terminal when launching projects.")}
                   </Text>
                 </Box>
                 <Switch
                   color="cliPrimary"
                   checked={useExternalTerminal}
                   onChange={(event) => void update("useExternalTerminal", event.currentTarget.checked)}
-                  aria-label={useExternalTerminal ? text("关闭外部 PowerShell", "Disable external PowerShell") : text("开启外部 PowerShell", "Enable external PowerShell")}
+                  aria-label={useExternalTerminal ? text("关闭外部终端", "Disable external terminal") : text("开启外部终端", "Enable external terminal")}
                 />
               </Group>
             </Card>

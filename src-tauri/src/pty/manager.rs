@@ -56,13 +56,32 @@ impl PtyManager {
         }
     }
 
+    fn default_shell_key() -> &'static str {
+        if cfg!(target_os = "windows") {
+            "powershell"
+        } else if cfg!(target_os = "macos") {
+            "zsh"
+        } else {
+            "bash"
+        }
+    }
+
     fn resolve_shell(shell: &str) -> Result<(String, Vec<String>), String> {
         match shell {
             // Windows shells
-            "cmd" => Ok(("cmd.exe".to_string(), vec!["/Q".to_string()])),
-            "pwsh" => Ok(("pwsh.exe".to_string(), vec!["-NoLogo".to_string()])),
-            "wsl" => Ok(("wsl.exe".to_string(), Vec::new())),
-            "gitbash" => resolve_git_bash_exe()
+            "cmd" if cfg!(target_os = "windows") => {
+                Ok(("cmd.exe".to_string(), vec!["/Q".to_string()]))
+            }
+            "pwsh" => {
+                let exe = if cfg!(target_os = "windows") {
+                    "pwsh.exe"
+                } else {
+                    "pwsh"
+                };
+                Ok((exe.to_string(), vec!["-NoLogo".to_string()]))
+            }
+            "wsl" if cfg!(target_os = "windows") => Ok(("wsl.exe".to_string(), Vec::new())),
+            "gitbash" if cfg!(target_os = "windows") => resolve_git_bash_exe()
                 .map(|path| (path.to_string_lossy().into_owned(), Vec::new()))
                 .ok_or_else(|| GIT_BASH_NOT_FOUND_MESSAGE.to_string()),
             // Unix shells (macOS, Linux)
@@ -243,18 +262,22 @@ PS0='\e]133;C\a${PS0:0:$((__cli_manager_ran=1,0))}'
             return Self::resolve_shell(shell);
         }
         match shell {
-            "powershell" | "pwsh" => {
-                let exe = if shell == "pwsh" {
+            "powershell" if cfg!(target_os = "windows") => Ok((
+                "powershell.exe".to_string(),
+                Self::powershell_runtime_monitor_args(),
+            )),
+            "pwsh" => {
+                let exe = if cfg!(target_os = "windows") {
                     "pwsh.exe"
                 } else {
-                    "powershell.exe"
+                    "pwsh"
                 };
                 Ok((exe.to_string(), Self::powershell_runtime_monitor_args()))
             }
             // gitbash 是确定的 Windows 原生 bash，可安全注入 rcfile；
             // "bash"（System32 的 WSL 启动器）与 wsl 一样无法可靠注入，
             // 仅依赖前端识别用户自带的 OSC 133/633 集成。
-            "gitbash" => {
+            "gitbash" if cfg!(target_os = "windows") => {
                 let (exe, args) = Self::resolve_shell(shell)?;
                 match Self::write_bash_integration_rcfile() {
                     Ok(rcfile) => Ok((exe, vec!["--rcfile".to_string(), rcfile, "-i".to_string()])),
@@ -296,14 +319,18 @@ PS0='\e]133;C\a${PS0:0:$((__cli_manager_ran=1,0))}'
                 e.to_string()
             })?;
 
-        let shell_key = shell.unwrap_or("powershell");
+        let default_shell_key = Self::default_shell_key();
+        let shell_key = shell.unwrap_or(default_shell_key);
         let mut env_vars = env_vars;
-        if shell_key == "cmd" && Self::shell_runtime_monitoring_enabled(env_vars.as_ref()) {
+        if cfg!(target_os = "windows")
+            && shell_key == "cmd"
+            && Self::shell_runtime_monitoring_enabled(env_vars.as_ref())
+        {
             Self::apply_cmd_prompt_integration(env_vars.get_or_insert_with(HashMap::new));
         }
         // WSL：wsl.exe 把 cwd 自动映射到 /mnt，但 cmd.env 设的是 Windows 进程环境，
         // 不经 WSLENV 不会进 Linux shell，导致 hook 回调变量丢失。
-        if shell_key == "wsl" {
+        if cfg!(target_os = "windows") && shell_key == "wsl" {
             if let Some(vars) = env_vars.as_mut() {
                 Self::apply_wsl_env_forwarding(vars);
             }
@@ -350,7 +377,7 @@ PS0='\e]133;C\a${PS0:0:$((__cli_manager_ran=1,0))}'
         let child = Arc::new(Mutex::new(child));
         let diagnostics = Arc::new(Mutex::new(PtySessionDiagnostics {
             session_id: session_id.to_string(),
-            shell: shell.unwrap_or("powershell").to_string(),
+            shell: shell.unwrap_or(default_shell_key).to_string(),
             exe: exe.to_string(),
             cwd: cwd.map(str::to_string),
             last_resize_cols: None,

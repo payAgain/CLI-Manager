@@ -181,6 +181,35 @@ function collectDirectoryPaths(nodes: GitTreeNode[], treeId: string): string[] {
   return paths;
 }
 
+const inFlightChangeRequests = new Map<string, Promise<GitFileChange[]>>();
+const inFlightBranchStatusRequests = new Map<string, Promise<GitBranchStatus>>();
+
+function invokeGitChanges(projectPath: string): Promise<GitFileChange[]> {
+  const existing = inFlightChangeRequests.get(projectPath);
+  if (existing) return existing;
+
+  const request = invoke<GitFileChange[]>("git_get_changes", { projectPath }).finally(() => {
+    if (inFlightChangeRequests.get(projectPath) === request) {
+      inFlightChangeRequests.delete(projectPath);
+    }
+  });
+  inFlightChangeRequests.set(projectPath, request);
+  return request;
+}
+
+function invokeGitBranchStatus(projectPath: string): Promise<GitBranchStatus> {
+  const existing = inFlightBranchStatusRequests.get(projectPath);
+  if (existing) return existing;
+
+  const request = invoke<GitBranchStatus>("git_branch_status", { projectPath }).finally(() => {
+    if (inFlightBranchStatusRequests.get(projectPath) === request) {
+      inFlightBranchStatusRequests.delete(projectPath);
+    }
+  });
+  inFlightBranchStatusRequests.set(projectPath, request);
+  return request;
+}
+
 export const useGitStore = create<GitStore>((set, get) => ({
   changes: [],
   tree: [],
@@ -208,7 +237,8 @@ export const useGitStore = create<GitStore>((set, get) => ({
     }
 
     try {
-      const changes = await invoke<GitFileChange[]>("git_get_changes", { projectPath });
+      const changes = await invokeGitChanges(projectPath);
+      if (get().currentProjectPath !== projectPath) return;
 
       // 应用筛选并拆分已跟踪 / 未跟踪两棵树，使用当前分组模式
       const { statusFilter } = get();
@@ -227,20 +257,23 @@ export const useGitStore = create<GitStore>((set, get) => ({
       const errorMsg = err instanceof Error ? err.message : String(err);
       console.error(`[GitStore] 获取 Git 变更失败:`, err);
       // silent 失败（轮询）不清空已有数据、不弹错，避免打扰；仅非静默时显式报错。
+      if (get().currentProjectPath !== projectPath) return;
       if (silent) {
         set({ loading: false });
       } else {
-        set({ error: errorMsg, loading: false, changes: [], tree: [] });
+        set({ error: errorMsg, loading: false, changes: [], tree: [], untrackedTree: [] });
       }
     }
 
     // 分支状态独立刷新，失败不影响变更列表展示。
-    void get().fetchBranchStatus(projectPath);
+    if (get().currentProjectPath === projectPath) {
+      void get().fetchBranchStatus(projectPath);
+    }
   },
 
   fetchBranchStatus: async (projectPath: string) => {
     try {
-      const branchStatus = await invoke<GitBranchStatus>("git_branch_status", { projectPath });
+      const branchStatus = await invokeGitBranchStatus(projectPath);
       // 仅当仍是当前项目时写入，避免切换项目时的竞态覆盖。
       if (get().currentProjectPath === projectPath) {
         set({ branchStatus });

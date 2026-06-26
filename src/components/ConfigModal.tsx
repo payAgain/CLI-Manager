@@ -7,7 +7,7 @@ import { getShellOptions } from "../lib/types";
 import { getOsPlatform, defaultShellForOs, normalizeShellKey } from "../lib/shell";
 import type { OsPlatform } from "../lib/shell";
 import { ConfirmDialog } from "./ConfirmDialog";
-import { ChevronDown } from "./icons";
+import { Check, ChevronDown } from "./icons";
 import { Input } from "./ui/input";
 import { Select } from "./ui/select";
 import { VendorIcon, inferVendor } from "./VendorIcon";
@@ -226,26 +226,7 @@ export function ConfigModal({ project, cloneFrom, defaultGroupId, onClose }: Pro
 
               <div>
                 <label className="mb-1 block text-xs text-text-muted">CLI 工具</label>
-                <div className="relative">
-                  {inferVendor(cliTool) && (
-                    <span className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2">
-                      <VendorIcon vendor={inferVendor(cliTool)} size={16} />
-                    </span>
-                  )}
-                  <Input
-                    type="text"
-                    value={cliTool}
-                    onChange={(e) => setCliTool(e.target.value)}
-                    placeholder="claude / codex / custom"
-                    list="cli-tool-options"
-                    className={`text-sm ${inferVendor(cliTool) ? "pl-9" : ""}`}
-                  />
-                </div>
-                <datalist id="cli-tool-options">
-                  {CLI_TOOL_OPTIONS.map((tool) => (
-                    <option key={tool} value={tool} />
-                  ))}
-                </datalist>
+                <CliToolCombobox value={cliTool} onChange={setCliTool} />
               </div>
 
               <div>
@@ -296,6 +277,129 @@ export function ConfigModal({ project, cloneFrom, defaultGroupId, onClose }: Pro
         onClose={() => setShowConfirmEdit(false)}
       />
     </>
+  );
+}
+
+function CliToolCombobox({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const vendor = inferVendor(value);
+  const normalizedValue = value.trim().toLowerCase();
+
+  useEffect(() => {
+    if (!open) return;
+
+    const handler = (e: MouseEvent) => {
+      const target = e.target as Node;
+      if (rootRef.current?.contains(target)) return;
+      setOpen(false);
+    };
+
+    document.addEventListener("mousedown", handler);
+    return () => {
+      document.removeEventListener("mousedown", handler);
+    };
+  }, [open]);
+
+  const selectTool = (tool: (typeof CLI_TOOL_OPTIONS)[number]) => {
+    onChange(tool);
+    setOpen(false);
+    inputRef.current?.focus();
+  };
+
+  const handleBlur = (e: React.FocusEvent<HTMLDivElement>) => {
+    const nextFocus = e.relatedTarget as Node | null;
+    if (!nextFocus || !e.currentTarget.contains(nextFocus)) {
+      setOpen(false);
+    }
+  };
+
+  return (
+    <div ref={rootRef} className="relative" onBlur={handleBlur}>
+      {vendor && (
+        <span className="pointer-events-none absolute left-2.5 top-1/2 z-10 -translate-y-1/2">
+          <VendorIcon vendor={vendor} size={16} />
+        </span>
+      )}
+      <Input
+        ref={inputRef}
+        type="text"
+        value={value}
+        onFocus={() => setOpen(true)}
+        onChange={(e) => {
+          onChange(e.target.value);
+          setOpen(true);
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "ArrowDown") {
+            e.preventDefault();
+            setOpen(true);
+          } else if (e.key === "Escape") {
+            setOpen(false);
+          }
+        }}
+        placeholder="claude / codex / custom"
+        role="combobox"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-controls="cli-tool-options-panel"
+        className={`pr-8 text-sm ${vendor ? "pl-9" : ""}`}
+      />
+      <button
+        type="button"
+        tabIndex={-1}
+        aria-hidden="true"
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={() => {
+          setOpen((prev) => !prev);
+          inputRef.current?.focus();
+        }}
+        className="ui-focus-ring absolute right-1 top-1/2 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-md text-text-muted outline-none transition-colors hover:bg-surface-container-highest hover:text-text-primary"
+      >
+        <ChevronDown
+          size={12}
+          strokeWidth={1.8}
+          className={`transition-transform ${open ? "rotate-180" : ""}`}
+        />
+      </button>
+
+      {open && (
+        <div
+          id="cli-tool-options-panel"
+          role="listbox"
+          className="ui-select-popover absolute left-0 top-full z-[60] mt-1 max-h-48 w-full overflow-y-auto rounded-xl border border-border bg-surface-container-high py-1 text-xs shadow-lg"
+        >
+          {CLI_TOOL_OPTIONS.map((tool) => {
+            const selected = normalizedValue === tool;
+            return (
+              <button
+                key={tool}
+                type="button"
+                role="option"
+                aria-selected={selected}
+                data-selected={selected ? "true" : undefined}
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => selectTool(tool)}
+                className="flex w-[calc(100%-8px)] cursor-pointer items-center gap-2 outline-none hover:bg-surface-container-highest hover:text-text-primary"
+              >
+                <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center">
+                  <VendorIcon vendor={inferVendor(tool)} size={14} />
+                </span>
+                <span className="flex-1 truncate text-left font-mono">{tool}</span>
+                {selected && <Check size={12} className="shrink-0" />}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
   );
 }
 

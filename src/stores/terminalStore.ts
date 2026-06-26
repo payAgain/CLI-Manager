@@ -4,9 +4,10 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { toast } from "sonner";
 import type { SubagentTranscriptSource, TerminalSession, Project } from "../lib/types";
 import { logError, logInfo, logWarn } from "../lib/logger";
+import { normalizeDirectCodexStartupCommand } from "../lib/projectStartupCommand";
 import { useSettingsStore } from "./settingsStore";
 import { useSessionStore } from "./sessionStore";
-import { normalizeShellKey } from "../lib/shell";
+import { defaultShellForOs, getOsPlatform, normalizeShellForOs, normalizeShellKey, type OsPlatform, type ShellKey } from "../lib/shell";
 import { getCodexProviderOverride, isExactCodexProject } from "../lib/providerSwitching";
 import { useProjectStore } from "./projectStore";
 import {
@@ -226,7 +227,7 @@ function trimOptional(value: string | null | undefined): string | null {
 }
 
 function normalizePathForCompare(path: string): string {
-  return path.replace(/\\/g, "/").replace(/\/+$/g, "").toLowerCase();
+  return path.replace(/\\/g, "/").replace(/\/+$/g, "");
 }
 
 function isSameTranscriptPath(a: string | null, b: string | null): boolean {
@@ -583,7 +584,6 @@ function buildTabStatusUpdate(
 function supportsShellRuntimeInjection(shell?: string | null): boolean {
   const normalized = normalizeShellKey(shell);
   return (
-    normalized === undefined ||
     normalized === "powershell" ||
     normalized === "pwsh" ||
     normalized === "cmd" ||
@@ -593,6 +593,13 @@ function supportsShellRuntimeInjection(shell?: string | null): boolean {
 
 function isShellRuntimeMonitoringEnabled(): boolean {
   return useSettingsStore.getState().shellRuntimeMonitoringEnabled;
+}
+
+function resolveShellForPty(shell: string | null | undefined, hasProject: boolean, os: OsPlatform): ShellKey | null {
+  const inputShell = normalizeShellForOs(shell, os);
+  if (inputShell) return inputShell;
+  if (hasProject) return null;
+  return normalizeShellForOs(useSettingsStore.getState().defaultShell, os) ?? defaultShellForOs(os);
 }
 
 // hook running 超时回退：Stop/StopFailure 丢失（hook 脚本失败、bridge 不可达）
@@ -678,10 +685,8 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
   subagentTranscripts: {},
 
   createSession: async (projectId, cwd, title, startupCmd, envVars, shell, paneId) => {
-    const normalizedInputShell = normalizeShellKey(shell);
-    const normalizedDefaultShell = normalizeShellKey(useSettingsStore.getState().defaultShell);
-    const resolvedShell =
-      normalizedInputShell ?? (projectId ? null : (normalizedDefaultShell ?? null));
+    const os = await getOsPlatform();
+    const resolvedShell = resolveShellForPty(shell, !!projectId, os);
 
     let sessionId: string;
     try {
@@ -983,9 +988,8 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     const targetPane = findPaneLeafBySession(paneTree, sessionId);
     if (!targetPane || !paneTree) return null;
 
-    const normalizedInputShell = normalizeShellKey(options?.shell);
-    const normalizedDefaultShell = normalizeShellKey(useSettingsStore.getState().defaultShell);
-    const resolvedShell = normalizedInputShell ?? (options?.projectId ? null : (normalizedDefaultShell ?? null));
+    const os = await getOsPlatform();
+    const resolvedShell = resolveShellForPty(options?.shell, !!options?.projectId, os);
 
     let splitSessionId: string;
     try {
@@ -1207,6 +1211,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
 
     const newIdMap: Record<string, string> = {}; // oldId -> newId
 
+    const os = await getOsPlatform();
     for (let i = 0; i < persistedSessions.length; i++) {
       const ps = persistedSessions[i];
 
@@ -1227,8 +1232,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
       }
 
       // 重建 PTY
-      const normalizedShell = normalizeShellKey(ps.shell);
-      const resolvedShell = normalizedShell ?? (ps.projectId ? null : normalizeShellKey(useSettingsStore.getState().defaultShell) ?? null);
+      const resolvedShell = resolveShellForPty(ps.shell, !!ps.projectId, os);
 
       let newSessionId: string;
       try {
@@ -1247,6 +1251,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
 
       newIdMap[ps.id] = newSessionId;
 
+      const restoredStartupCmd = normalizeDirectCodexStartupCommand(ps.startupCmd);
       const restoredSession: TerminalSession = {
         id: newSessionId,
         projectId: ps.projectId,
@@ -1254,7 +1259,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
         cwd: ps.cwd,
         shell: resolvedShell,
         envVars: ps.envVars,
-        startupCmd: ps.startupCmd,
+        startupCmd: restoredStartupCmd,
       };
 
       let unlisten: UnlistenFn;
@@ -1278,13 +1283,13 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
       restoredListeners[newSessionId] = unlisten;
 
       // 执行启动命令
-      if (ps.startupCmd) {
+      if (restoredStartupCmd) {
         setTimeout(() => {
-          invoke("pty_write", { sessionId: newSessionId, data: ps.startupCmd + "\r" }).catch((err) => {
+          invoke("pty_write", { sessionId: newSessionId, data: restoredStartupCmd + "\r" }).catch((err) => {
             logError("Failed to write startup command on restore", {
               sessionId: newSessionId,
               hasStartupCmd: true,
-              startupCmdSummary: summarizeStartupCmd(ps.startupCmd),
+              startupCmdSummary: summarizeStartupCmd(restoredStartupCmd),
               err,
             });
           });

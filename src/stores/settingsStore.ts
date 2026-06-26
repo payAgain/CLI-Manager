@@ -3,7 +3,7 @@ import { Store } from "@tauri-apps/plugin-store";
 import { invoke } from "@tauri-apps/api/core";
 import { resolveAutoTerminalThemeId } from "../lib/terminalThemes";
 import { backgroundImageExists } from "../lib/assetUrl";
-import { getDefaultShellForPlatform } from "../lib/shell";
+import { defaultShellForOs, getOsPlatform, isWindowsOnlyShellKey } from "../lib/shell";
 
 export type ThemeMode = "dark" | "light" | "system";
 export type LightThemePalette =
@@ -187,6 +187,7 @@ interface Settings {
   /** Git 变更树分组模式：directory（按目录树） / module（按顶层目录模块） */
   gitGroupBy: "directory" | "module";
   confirmBeforeClosingTerminalTab: boolean;
+  terminalTabHoverInfoEnabled: boolean;
   fileExplorerIgnoredPaths: FileExplorerIgnoredPaths;
   /** 批量启动分组时，同一分组终端放在同一个 pane 中（多 tab），不同分组创建在不同 pane。默认关闭。 */
   batchLaunchGroupInPane: boolean;
@@ -279,6 +280,7 @@ const DEFAULTS: Settings = {
   ccSwitchDbPath: null,
   gitGroupBy: "directory",
   confirmBeforeClosingTerminalTab: false,
+  terminalTabHoverInfoEnabled: true,
   fileExplorerIgnoredPaths: {},
   batchLaunchGroupInPane: false,
   batchLaunchPaneDirection: "horizontal",
@@ -580,12 +582,19 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
         : DEFAULTS.terminalSidePanelMerged;
     entries.terminalBackground = migrateTerminalBackground(entries.terminalBackground);
 
-    // 默认 Shell：用户从未设置过时，根据操作系统选择合适的默认值
-    // （DEFAULTS.defaultShell 是 Windows 的 powershell.exe，在 mac/linux 上不合适）
-    if (entries.defaultShell === undefined) {
-      try {
-        entries.defaultShell = await getDefaultShellForPlatform();
-      } catch {
+    // 默认 Shell：非 Windows 上迁移旧 Windows-only 默认值，避免 macOS/Linux 继续显示或启动 powershell.exe。
+    try {
+      const os = await getOsPlatform();
+      const platformDefaultShell = defaultShellForOs(os);
+      const currentDefaultShell = typeof entries.defaultShell === "string" ? entries.defaultShell.trim() : "";
+      if (!currentDefaultShell || (os !== "windows" && isWindowsOnlyShellKey(currentDefaultShell))) {
+        entries.defaultShell = platformDefaultShell;
+        await s.set("defaultShell", platformDefaultShell);
+      } else {
+        entries.defaultShell = currentDefaultShell;
+      }
+    } catch {
+      if (entries.defaultShell === undefined) {
         entries.defaultShell = DEFAULTS.defaultShell;
       }
     }
@@ -642,6 +651,10 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
       typeof entries.confirmBeforeClosingTerminalTab === "boolean"
         ? entries.confirmBeforeClosingTerminalTab
         : DEFAULTS.confirmBeforeClosingTerminalTab;
+    entries.terminalTabHoverInfoEnabled =
+      typeof entries.terminalTabHoverInfoEnabled === "boolean"
+        ? entries.terminalTabHoverInfoEnabled
+        : DEFAULTS.terminalTabHoverInfoEnabled;
     entries.fileExplorerIgnoredPaths = migrateFileExplorerIgnoredPaths(entries.fileExplorerIgnoredPaths);
     entries.batchLaunchGroupInPane =
       typeof entries.batchLaunchGroupInPane === "boolean"

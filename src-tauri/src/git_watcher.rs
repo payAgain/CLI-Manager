@@ -47,7 +47,14 @@ impl GitWatcherBridge {
     /// 路径不可信：为空/不存在返回稳定错误；watcher 初始化失败返回错误供前端降级。
     pub fn start(&self, app_handle: AppHandle, project_path: String) -> Result<(), String> {
         let root = Path::new(&project_path);
-        if project_path.is_empty() || !root.exists() {
+        if project_path.is_empty() {
+            return Err("path_not_found".to_string());
+        }
+        if crate::wsl::is_wsl_config_dir(&project_path) {
+            warn!("[git_watcher] WSL UNC 路径跳过递归 watcher，前端降级慢轮询: {project_path}");
+            return Err("wsl_watch_unsupported".to_string());
+        }
+        if !root.exists() {
             return Err("path_not_found".to_string());
         }
 

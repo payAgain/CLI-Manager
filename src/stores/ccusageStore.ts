@@ -53,6 +53,8 @@ interface CcusageStore {
 }
 
 const memoryCache = new Map<string, CcusageReport>();
+let inFlightToolStatus: Promise<CcusageToolStatus> | null = null;
+const inFlightReportRefreshes = new Map<string, Promise<CcusageReport>>();
 
 function cacheKey(source: CcusageSource, reportKind = REPORT_KIND): string {
   return `${source}:${reportKind}`;
@@ -129,6 +131,50 @@ async function writeCachedReport(report: CcusageReport): Promise<void> {
   memoryCache.set(key, { ...report, fromCache: true });
 }
 
+function checkToolStatus(): Promise<CcusageToolStatus> {
+  if (inFlightToolStatus) return inFlightToolStatus;
+  inFlightToolStatus = invoke<CcusageToolStatus>("ccusage_get_status")
+    .then(normalizeToolStatus)
+    .finally(() => {
+      inFlightToolStatus = null;
+    });
+  return inFlightToolStatus;
+}
+
+function refreshReportFromBackend(
+  source: CcusageSource,
+  claudeConfigDir: string | null,
+  codexConfigDir: string | null
+): Promise<CcusageReport> {
+  const key = JSON.stringify([source, claudeConfigDir ?? "", codexConfigDir ?? ""]);
+  const existing = inFlightReportRefreshes.get(key);
+  if (existing) return existing;
+
+  const request = (async () => {
+    const response = await invoke<CcusageReportResponse>("ccusage_refresh_report", {
+      source,
+      claudeConfigDir,
+      codexConfigDir,
+    });
+    const report: CcusageReport = {
+      source: response.source,
+      reportKind: response.reportKind,
+      payload: response.payload,
+      updatedAt: response.refreshedAt,
+      fromCache: false,
+    };
+    await writeCachedReport(report);
+    return report;
+  })().finally(() => {
+    if (inFlightReportRefreshes.get(key) === request) {
+      inFlightReportRefreshes.delete(key);
+    }
+  });
+
+  inFlightReportRefreshes.set(key, request);
+  return request;
+}
+
 export const useCcusageStore = create<CcusageStore>((set, get) => ({
   source: "all",
   toolStatus: null,
@@ -146,8 +192,8 @@ export const useCcusageStore = create<CcusageStore>((set, get) => ({
   checkStatus: async () => {
     set({ checkingStatus: true, error: null });
     try {
-      const status = await invoke<CcusageToolStatus>("ccusage_get_status");
-      set({ toolStatus: normalizeToolStatus(status), checkingStatus: false });
+      const status = await checkToolStatus();
+      set({ toolStatus: status, checkingStatus: false });
     } catch (err) {
       set({ error: String(err), checkingStatus: false });
       throw err;
@@ -184,19 +230,11 @@ export const useCcusageStore = create<CcusageStore>((set, get) => ({
     const settings = useSettingsStore.getState();
     set({ refreshing: true, error: null });
     try {
-      const response = await invoke<CcusageReportResponse>("ccusage_refresh_report", {
+      const report = await refreshReportFromBackend(
         source,
-        claudeConfigDir: settings.claudeHookConfigDir,
-        codexConfigDir: settings.codexHookConfigDir,
-      });
-      const report: CcusageReport = {
-        source: response.source,
-        reportKind: response.reportKind,
-        payload: response.payload,
-        updatedAt: response.refreshedAt,
-        fromCache: false,
-      };
-      await writeCachedReport(report);
+        settings.claudeHookConfigDir,
+        settings.codexHookConfigDir
+      );
       if (get().source === source) {
         set({ report, refreshing: false });
       }

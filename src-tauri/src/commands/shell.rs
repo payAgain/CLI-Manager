@@ -32,6 +32,14 @@ fn shell_exe(shell: &str) -> Result<(String, Option<&'static str>), String> {
     }
 }
 
+#[cfg(not(target_os = "windows"))]
+fn trimmed_startup_cmd(tab: &ExternalTab) -> Option<&str> {
+    tab.startup_cmd
+        .as_deref()
+        .map(str::trim)
+        .filter(|cmd| !cmd.is_empty())
+}
+
 fn push_tab_args(args: &mut Vec<String>, tab: &ExternalTab) -> Result<(), String> {
     args.push("new-tab".into());
     if let Some(cwd) = &tab.cwd {
@@ -70,6 +78,48 @@ fn push_tab_args(args: &mut Vec<String>, tab: &ExternalTab) -> Result<(), String
     Ok(())
 }
 
+#[cfg(not(target_os = "windows"))]
+fn escape_posix_single_quoted(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+#[cfg(not(target_os = "windows"))]
+fn unix_shell_exe(shell: Option<&str>) -> &'static str {
+    match shell {
+        Some("bash") => "bash",
+        Some("zsh") => "zsh",
+        Some("fish") => "fish",
+        Some("sh") => "sh",
+        Some("pwsh") => "pwsh",
+        _ if cfg!(target_os = "macos") => "zsh",
+        _ => "bash",
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn build_unix_terminal_command(tab: &ExternalTab) -> String {
+    let shell = unix_shell_exe(tab.shell.as_deref());
+    let mut parts: Vec<String> = Vec::new();
+    if let Some(cwd) = tab
+        .cwd
+        .as_deref()
+        .map(str::trim)
+        .filter(|cwd| !cwd.is_empty())
+    {
+        parts.push(format!("cd {}", escape_posix_single_quoted(cwd)));
+    }
+    if let Some(cmd) = trimmed_startup_cmd(tab) {
+        parts.push(cmd.to_string());
+    }
+    parts.push(format!("exec {shell}"));
+    parts.join("; ")
+}
+
+#[cfg(target_os = "macos")]
+fn escape_applescript_string(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
 fn windows_terminal_candidates() -> Vec<PathBuf> {
     let mut candidates = vec![PathBuf::from("wt"), PathBuf::from("wt.exe")];
     if let Ok(local_app_data) = std::env::var("LOCALAPPDATA") {
@@ -105,8 +155,8 @@ fn spawn_windows_terminal(args: &[String]) -> Result<PathBuf, std::io::Error> {
     }))
 }
 
-#[tauri::command]
-pub async fn open_windows_terminal(tabs: Vec<ExternalTab>) -> Result<(), String> {
+#[cfg(target_os = "windows")]
+fn open_platform_terminal(tabs: &[ExternalTab]) -> Result<(), String> {
     if tabs.is_empty() {
         return Ok(());
     }
@@ -139,6 +189,101 @@ pub async fn open_windows_terminal(tabs: Vec<ExternalTab>) -> Result<(), String>
     Ok(())
 }
 
+#[cfg(target_os = "macos")]
+fn open_platform_terminal(tabs: &[ExternalTab]) -> Result<(), String> {
+    if tabs.is_empty() {
+        return Ok(());
+    }
+
+    for tab in tabs {
+        let command = escape_applescript_string(&build_unix_terminal_command(tab));
+        let do_script = format!("do script \"{command}\"");
+        let status = Command::new("osascript")
+            .args([
+                "-e",
+                "tell application \"Terminal\"",
+                "-e",
+                "activate",
+                "-e",
+                &do_script,
+                "-e",
+                "end tell",
+            ])
+            .status()
+            .map_err(|e| {
+                error!("Failed to open Terminal.app: {}", e);
+                format!("无法打开外部终端: {}", e)
+            })?;
+        if !status.success() {
+            return Err(format!("无法打开外部终端: osascript exited with {status}"));
+        }
+    }
+
+    info!("open_external_terminal: Terminal.app tabs={}", tabs.len());
+    Ok(())
+}
+
+#[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+fn open_platform_terminal(tabs: &[ExternalTab]) -> Result<(), String> {
+    if tabs.is_empty() {
+        return Ok(());
+    }
+
+    for tab in tabs {
+        let command = build_unix_terminal_command(tab);
+        let candidates: Vec<(&str, Vec<String>)> = vec![
+            (
+                "x-terminal-emulator",
+                vec!["-e".into(), "sh".into(), "-lc".into(), command.clone()],
+            ),
+            (
+                "gnome-terminal",
+                vec!["--".into(), "sh".into(), "-lc".into(), command.clone()],
+            ),
+            (
+                "konsole",
+                vec!["-e".into(), "sh".into(), "-lc".into(), command.clone()],
+            ),
+            (
+                "xfce4-terminal",
+                vec!["-x".into(), "sh".into(), "-lc".into(), command.clone()],
+            ),
+            (
+                "xterm",
+                vec!["-e".into(), "sh".into(), "-lc".into(), command],
+            ),
+        ];
+        let mut last_err: Option<std::io::Error> = None;
+        let mut opened = false;
+        for (program, args) in candidates {
+            match Command::new(program).args(&args).spawn() {
+                Ok(_) => {
+                    opened = true;
+                    break;
+                }
+                Err(err) => {
+                    warn!("Failed to spawn {}: {}", program, err);
+                    last_err = Some(err);
+                }
+            }
+        }
+        if !opened {
+            let detail = last_err
+                .map(|err| err.to_string())
+                .unwrap_or_else(|| "no supported terminal found".to_string());
+            return Err(format!("无法打开外部终端: {detail}"));
+        }
+    }
+
+    info!("open_external_terminal: linux tabs={}", tabs.len());
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn open_windows_terminal(tabs: Vec<ExternalTab>) -> Result<(), String> {
+    open_platform_terminal(&tabs)
+}
+
 /// 在系统文件管理器中打开指定路径
 #[tauri::command]
 pub async fn open_folder_in_explorer(path: String) -> Result<(), String> {
@@ -169,9 +314,36 @@ pub async fn open_folder_in_explorer(path: String) -> Result<(), String> {
         Ok(())
     }
 
-    // 非 Windows 平台的占位实现
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "macos")]
     {
-        Err("当前平台不支持打开文件夹".to_string())
+        let mut command = Command::new("open");
+        if path_buf.is_file() {
+            command.arg("-R").arg(&path);
+        } else {
+            command.arg(&path);
+        }
+        command.spawn().map_err(|e| {
+            error!("Failed to open path in Finder: {}", e);
+            format!("无法打开文件夹: {}", e)
+        })?;
+
+        info!("Opened path in Finder: {}", path);
+        Ok(())
+    }
+
+    #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
+    {
+        let target = if path_buf.is_file() {
+            path_buf.parent().unwrap_or(&path_buf)
+        } else {
+            path_buf.as_path()
+        };
+        Command::new("xdg-open").arg(target).spawn().map_err(|e| {
+            error!("Failed to open path with xdg-open: {}", e);
+            format!("无法打开文件夹: {}", e)
+        })?;
+
+        info!("Opened path with xdg-open: {}", target.to_string_lossy());
+        Ok(())
     }
 }

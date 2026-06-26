@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { getDb, batchInsert } from "../lib/db";
 import { useProjectStore } from "./projectStore";
 import { logInfo } from "../lib/logger";
+import { defaultShellForOs, getOsPlatform, isWindowsOnlyShellKey, normalizeShellForOs } from "../lib/shell";
 
 export type SyncStatus = "idle" | "syncing" | "success" | "error" | "conflict";
 export type SyncMode = "cloud" | "local";
@@ -691,6 +692,8 @@ async function applySyncData(
   const backupTemplates = await db.select<Record<string, unknown>[]>("SELECT * FROM command_templates");
 
   const nowStr = Date.now().toString();
+  const os = await getOsPlatform();
+  const platformDefaultShell = defaultShellForOs(os);
 
   const insertGroups = async (groups: Record<string, unknown>[]) => {
     await batchInsert(
@@ -716,6 +719,10 @@ async function applySyncData(
       projects,
       (project) => {
         const groupId = typeof project.group_id === "string" && validGroupIds.has(project.group_id) ? project.group_id : null;
+        const rawShell = typeof project.shell === "string" ? project.shell.trim() : "";
+        const shell =
+          normalizeShellForOs(rawShell, os) ??
+          (rawShell && !(os !== "windows" && isWindowsOnlyShellKey(rawShell)) ? rawShell : platformDefaultShell);
         return [
           project.id as string,
           project.name as string,
@@ -725,7 +732,7 @@ async function applySyncData(
           (project.cli_tool as string) ?? "",
           (project.startup_cmd as string) ?? "",
           (project.env_vars as string) ?? "{}",
-          (project.shell as string) ?? "powershell",
+          shell,
           (project.provider_overrides as string) ?? "{}",
           (project.created_at as string) ?? nowStr,
           (project.updated_at as string) ?? nowStr,

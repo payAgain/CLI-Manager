@@ -290,13 +290,6 @@ fn wsl_command_text(distro: &str, args: &[&str]) -> Result<(String, String), Str
     run_wsl_command(cmd, &program)
 }
 
-fn wsl_default_command_text(args: &[&str]) -> Result<(String, String), String> {
-    let program = wsl_exe();
-    let mut cmd = silent_command(&program);
-    cmd.args(args);
-    run_wsl_command(cmd, &program)
-}
-
 fn run_wsl_command(
     mut cmd: std::process::Command,
     program: &str,
@@ -318,24 +311,6 @@ fn run_wsl_command(
         ));
     }
     Ok((stdout, stderr))
-}
-
-fn default_wsl_distro_name() -> Result<String, String> {
-    info!("[subagent_transcript:wsl] resolving default distro from wsl.exe");
-    let (stdout, _stderr) =
-        wsl_default_command_text(&["sh", "-lc", "printf %s \"$WSL_DISTRO_NAME\""])?;
-    let distro = stdout.trim();
-    if distro.is_empty() {
-        return Err("empty_wsl_distro_name".to_string());
-    }
-    Ok(distro.to_string())
-}
-
-fn resolve_wsl_distro_name(wsl_distro_name: Option<String>) -> Result<String, String> {
-    if let Some(distro) = trimmed(wsl_distro_name) {
-        return Ok(distro);
-    }
-    default_wsl_distro_name()
 }
 
 fn wsl_home_dir(distro: &str) -> Result<String, String> {
@@ -364,10 +339,20 @@ fn resolve_wsl_transcript_path(
 }
 
 fn home_dir() -> Option<PathBuf> {
-    std::env::var_os("USERPROFILE")
-        .filter(|value| !value.is_empty())
-        .or_else(|| std::env::var_os("HOME").filter(|value| !value.is_empty()))
-        .map(PathBuf::from)
+    #[cfg(target_os = "windows")]
+    {
+        std::env::var_os("USERPROFILE")
+            .filter(|value| !value.is_empty())
+            .or_else(|| std::env::var_os("HOME").filter(|value| !value.is_empty()))
+            .map(PathBuf::from)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        std::env::var_os("HOME")
+            .filter(|value| !value.is_empty())
+            .or_else(|| std::env::var_os("USERPROFILE").filter(|value| !value.is_empty()))
+            .map(PathBuf::from)
+    }
 }
 
 /// 解析转录路径：优先显式 `agentTranscriptPath`，否则由 cwd+sessionId+agentId 推导。
@@ -380,11 +365,13 @@ fn resolve_transcript_path(
 ) -> Result<String, String> {
     if let Some(explicit) = trimmed(transcript_path) {
         if is_linux_absolute_path(&explicit) {
-            let distro = resolve_wsl_distro_name(wsl_distro_name)?;
-            info!(
-                "[subagent_transcript] resolving explicit linux transcript path with distro={distro}"
-            );
-            return Ok(normalize_explicit_transcript_path(explicit, Some(&distro)));
+            if let Some(distro) = trimmed(wsl_distro_name) {
+                info!(
+                    "[subagent_transcript] resolving explicit linux transcript path with distro={distro}"
+                );
+                return Ok(normalize_explicit_transcript_path(explicit, Some(&distro)));
+            }
+            return Ok(normalize_explicit_transcript_path(explicit, None));
         }
         info!(
             "[subagent_transcript] resolving explicit transcript path: hasWslDistro={} isLinuxPath={}",
@@ -614,6 +601,22 @@ mod tests {
         assert_eq!(
             got,
             r"\\wsl.localhost\Ubuntu-22.04\home\me\.claude\projects\p\s\subagents\agent-a.jsonl"
+        );
+    }
+
+    #[test]
+    fn explicit_native_posix_path_stays_native_without_wsl_distro() {
+        let got = resolve_transcript_path(
+            Some(" /Users/me/.claude/projects/p/s/subagents/agent-a.jsonl ".to_string()),
+            None,
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            got,
+            "/Users/me/.claude/projects/p/s/subagents/agent-a.jsonl"
         );
     }
 

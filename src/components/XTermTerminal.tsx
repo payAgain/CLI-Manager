@@ -17,6 +17,14 @@ import { applyTransparency, getTerminalTheme, getTerminalBackground } from "../l
 import { backgroundAssetUrl } from "../lib/assetUrl";
 import { TERMINAL_FILE_PATH_MIME } from "../lib/aiPathFormatter";
 import { endTerminalFileDrag, getTerminalFileDragText } from "../lib/terminalFileDrag";
+import {
+  defaultShellForOs,
+  getOsPlatform,
+  normalizeShellForOs,
+  normalizeShellKey,
+  type OsPlatform,
+  type ShellKey,
+} from "../lib/shell";
 import { Portal } from "./ui/Portal";
 import { useCommandHistoryStore } from "../stores/commandHistoryStore";
 import { useProjectStore } from "../stores/projectStore";
@@ -29,6 +37,9 @@ const MIN_TERMINAL_COLS = 40;
 const MIN_TERMINAL_ROWS = 8;
 const ACTIVE_WRITE_FRAME_BUDGET = 64 * 1024;
 const SEARCH_HIGHLIGHT_LIMIT = 1000;
+const INACTIVE_BUFFER_MIN_CHARS = 256 * 1024;
+const INACTIVE_BUFFER_MAX_CHARS = 8 * 1024 * 1024;
+const INACTIVE_BUFFER_CHARS_PER_SCROLLBACK_ROW = 256;
 const IMAGE_ADDON_PIXEL_LIMIT = 4 * 1024 * 1024;
 const IMAGE_ADDON_SEQUENCE_LIMIT = 8 * 1024 * 1024;
 const IMAGE_ADDON_STORAGE_LIMIT_MB = 32;
@@ -93,6 +104,11 @@ const normalizeHexColor = (value: string | undefined, fallback: string) => (
   value && /^#[0-9a-f]{6}$/i.test(value) ? value : fallback
 );
 
+const getInactiveBufferLimit = (scrollbackRows: number) => Math.min(
+  INACTIVE_BUFFER_MAX_CHARS,
+  Math.max(INACTIVE_BUFFER_MIN_CHARS, scrollbackRows * INACTIVE_BUFFER_CHARS_PER_SCROLLBACK_ROW)
+);
+
 const hexToRgba = (value: string | undefined, alpha: number, fallback: string) => {
   const normalized = normalizeHexColor(value, "");
   if (!normalized) return fallback;
@@ -123,9 +139,20 @@ const copyTextToClipboard = async (text: string) => {
   }
 };
 
-const quoteShellPath = (path: string) => `'${path.replace(/'/g, "''")}'`;
+const normalizeShellForKnownOs = (shell: string | null | undefined, os: OsPlatform): ShellKey | undefined => (
+  os === "unknown" ? normalizeShellKey(shell) : normalizeShellForOs(shell, os)
+);
 
-const formatShellPathList = (paths: string[]) => paths.filter(Boolean).map(quoteShellPath).join(" ");
+const quoteShellPath = (path: string, shell: string | null | undefined) => {
+  const normalized = normalizeShellKey(shell);
+  if (normalized === "cmd") return `"${path.replace(/"/g, "\"\"")}"`;
+  if (normalized === "powershell" || normalized === "pwsh") return `'${path.replace(/'/g, "''")}'`;
+  return `'${path.replace(/'/g, "'\\''")}'`;
+};
+
+const formatShellPathList = (paths: string[], shell: string | null | undefined) => (
+  paths.filter(Boolean).map((path) => quoteShellPath(path, shell)).join(" ")
+);
 
 const openHttpUrl = (sessionId: string, uri: string) => {
   if (!/^https?:\/\//i.test(uri)) return;
@@ -192,9 +219,10 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
   const activeWriteQueueRef = useRef<string[]>([]);
   const activeWriteRafRef = useRef<number | null>(null);
   const cursorShowTimerRef = useRef<number | null>(null);
-  const INACTIVE_BUFFER_MAX = 256 * 1024;
   const runtimeOscBufferRef = useRef("");
   const terminalScrollbackRows = useSettingsStore((s) => s.terminalScrollbackRows);
+  const inactiveBufferLimitRef = useRef(getInactiveBufferLimit(terminalScrollbackRows));
+  inactiveBufferLimitRef.current = getInactiveBufferLimit(terminalScrollbackRows);
 
   const background = useSettingsStore(
     useShallow((s) => ({
@@ -216,6 +244,26 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
   const [searchResult, setSearchResult] = useState<SearchResultState>(EMPTY_SEARCH_RESULT);
   const [menuState, setMenuState] = useState<{ x: number; y: number; hasSelection: boolean } | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
+  const osPlatformRef = useRef<OsPlatform>("unknown");
+
+  const getOsPlatformForPathQuoting = async () => {
+    if (osPlatformRef.current !== "unknown") return osPlatformRef.current;
+    const platform = await getOsPlatform();
+    osPlatformRef.current = platform;
+    return platform;
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+    void getOsPlatform().then((platform) => {
+      if (!cancelled) {
+        osPlatformRef.current = platform;
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -611,6 +659,14 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
     const hasTerminalFileDragData = (dataTransfer: DataTransfer | null) => (
       Boolean(getTerminalFileDragText()) || Boolean(dataTransfer?.types.includes(TERMINAL_FILE_PATH_MIME))
     );
+    const getShellForPathQuoting = async () => {
+      const os = await getOsPlatformForPathQuoting();
+      const session = useTerminalStore.getState().sessions.find((item) => item.id === sessionId);
+      const sessionShell = normalizeShellForKnownOs(session?.shell, os);
+      if (sessionShell) return sessionShell;
+      const defaultShell = normalizeShellForKnownOs(useSettingsStore.getState().defaultShell, os);
+      return defaultShell ?? defaultShellForOs(os);
+    };
 
     const onDragOver = (e: DragEvent) => {
       const isActiveTerminalFileDrag = Boolean(getTerminalFileDragText());
@@ -644,7 +700,7 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
       const position = payload.position.toLogical(scaleFactor);
       if (!isPointInsidePasteTarget(position.x, position.y)) return;
 
-      pasteIntoTerminal(formatShellPathList(payload.paths));
+      pasteIntoTerminal(formatShellPathList(payload.paths, await getShellForPathQuoting()));
       terminal.focus();
     }).then((fn) => {
       if (fileDropCancelled) {
@@ -785,8 +841,9 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
     let writeRafId: number | null = null;
     const stashInactiveText = (text: string) => {
       if (!text) return;
-      if (text.length >= INACTIVE_BUFFER_MAX) {
-        const suffix = text.slice(-INACTIVE_BUFFER_MAX);
+      const maxBufferChars = inactiveBufferLimitRef.current;
+      if (text.length >= maxBufferChars) {
+        const suffix = text.slice(-maxBufferChars);
         inactiveBufferRef.current = [suffix];
         inactiveBufferSizeRef.current = suffix.length;
         return;
@@ -794,8 +851,8 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
 
       inactiveBufferRef.current.push(text);
       inactiveBufferSizeRef.current += text.length;
-      while (inactiveBufferSizeRef.current > INACTIVE_BUFFER_MAX && inactiveBufferRef.current.length > 0) {
-        const overflow = inactiveBufferSizeRef.current - INACTIVE_BUFFER_MAX;
+      while (inactiveBufferSizeRef.current > maxBufferChars && inactiveBufferRef.current.length > 0) {
+        const overflow = inactiveBufferSizeRef.current - maxBufferChars;
         const head = inactiveBufferRef.current[0];
         if (!head || head.length <= overflow) {
           const removed = inactiveBufferRef.current.shift();

@@ -1617,10 +1617,20 @@ fn normalize_selected_dir(value: &str) -> Option<PathBuf> {
 }
 
 fn home_dir() -> Option<PathBuf> {
-    env::var_os("USERPROFILE")
-        .filter(|value| !value.is_empty())
-        .or_else(|| env::var_os("HOME").filter(|value| !value.is_empty()))
-        .map(PathBuf::from)
+    #[cfg(target_os = "windows")]
+    {
+        env::var_os("USERPROFILE")
+            .filter(|value| !value.is_empty())
+            .or_else(|| env::var_os("HOME").filter(|value| !value.is_empty()))
+            .map(PathBuf::from)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        env::var_os("HOME")
+            .filter(|value| !value.is_empty())
+            .or_else(|| env::var_os("USERPROFILE").filter(|value| !value.is_empty()))
+            .map(PathBuf::from)
+    }
 }
 
 fn build_claude_status(claude_dir: Option<PathBuf>) -> Result<ToolHookSettingsStatus, String> {
@@ -1993,8 +2003,8 @@ fn build_command(exe: &str, source: &str, event: &str) -> String {
         );
     }
 
-    // WSL/POSIX 环境继续交给 shell 执行，保持历史格式不变。
-    format!("\"{exe}\" {HOOK_COMMAND_MARKER} --source {source} --event {event}")
+    let exe = escape_posix_single_quoted(exe);
+    format!("{exe} {HOOK_COMMAND_MARKER} --source {source} --event {event}")
 }
 
 fn is_windows_native_exe_path(exe: &str) -> bool {
@@ -2008,6 +2018,10 @@ fn is_windows_native_exe_path(exe: &str) -> bool {
 
 fn escape_powershell_single_quoted(value: &str) -> String {
     value.replace('\'', "''")
+}
+
+fn escape_posix_single_quoted(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
 }
 
 fn cli_manager_exe() -> Result<String, String> {
@@ -2603,7 +2617,17 @@ model_instructions_file = "./instruction.md"
 
         assert_eq!(
             command,
-            "\"/mnt/d/Program Files/CLI-Manager/cli-manager.exe\" __hook --source codex --event SessionStart"
+            "'/mnt/d/Program Files/CLI-Manager/cli-manager.exe' __hook --source codex --event SessionStart"
+        );
+    }
+
+    #[test]
+    fn build_command_escapes_posix_single_quote() {
+        let command = build_command("/Users/me/CLI-Manager's/cli-manager", "claude", "Stop");
+
+        assert_eq!(
+            command,
+            "'/Users/me/CLI-Manager'\\''s/cli-manager' __hook --source claude --event Stop"
         );
     }
 

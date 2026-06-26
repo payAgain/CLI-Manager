@@ -3,6 +3,7 @@ import { toast, Toaster } from "sonner";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { LogicalSize } from "@tauri-apps/api/dpi";
 import { listen } from "@tauri-apps/api/event";
+import { exit } from "@tauri-apps/plugin-process";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Sidebar } from "./components/sidebar";
 import { TerminalTabs } from "./components/TerminalTabs";
@@ -621,25 +622,38 @@ function App() {
     return () => mq.removeEventListener("change", handler);
   }, []);
 
+  const exitApp = useCallback(async (source: string) => {
+    try {
+      await getCurrentWindow().destroy();
+    } catch (err) {
+      logWarn(`Failed to destroy window from ${source}`, err);
+      try {
+        await exit(0);
+      } catch (exitErr) {
+        logWarn(`Failed to exit process from ${source}`, exitErr);
+      }
+    }
+  }, []);
+
+  const runExitCleanup = useCallback(async (source: string) => {
+    try {
+      await runCloseAutoSync();
+      await useSessionStore.getState().clear();
+    } finally {
+      await exitApp(source);
+    }
+  }, [exitApp, runCloseAutoSync]);
+
   useEffect(() => {
     if (!IN_TAURI) return;
     const unlistenPromise = listen("tray-quit-requested", async () => {
-      try {
-        await runCloseAutoSync();
-        await useSessionStore.getState().clear();
-      } finally {
-        try {
-          await getCurrentWindow().destroy();
-        } catch (err) {
-          logWarn("Failed to destroy window from tray quit", err);
-        }
-      }
+      await runExitCleanup("tray quit");
     });
 
     return () => {
       void unlistenPromise.then((unlisten) => unlisten());
     };
-  }, [runCloseAutoSync]);
+  }, [runExitCleanup]);
 
   // 关闭窗口拦截：根据 closeBehavior 决定最小化到托盘 / 直接退出 / 弹窗询问
   useEffect(() => {
@@ -660,16 +674,7 @@ function App() {
       }
       if (behavior === "exit") {
         event.preventDefault();
-        try {
-          await runCloseAutoSync();
-          await useSessionStore.getState().clear();
-        } finally {
-          try {
-            await appWindow.destroy();
-          } catch (err) {
-            logWarn("Failed to destroy window on close", err);
-          }
-        }
+        await runExitCleanup("window close");
         return;
       }
       event.preventDefault();
@@ -679,7 +684,7 @@ function App() {
     return () => {
       unlistenPromise?.then((fn) => fn()).catch(() => {});
     };
-  }, [runCloseAutoSync]);
+  }, [runExitCleanup]);
 
   const handleCloseDialogMinimize = useCallback(
     (remember: boolean) => {
@@ -705,19 +710,10 @@ function App() {
         void updateSetting("closeBehavior", "exit");
       }
       void (async () => {
-        try {
-          await runCloseAutoSync();
-          await useSessionStore.getState().clear();
-        } finally {
-          try {
-            await getCurrentWindow().destroy();
-          } catch (err) {
-            logWarn("Failed to destroy window from dialog", err);
-          }
-        }
+        await runExitCleanup("close dialog");
       })();
     },
-    [runCloseAutoSync, updateSetting]
+    [runExitCleanup, updateSetting]
   );
 
   useEffect(() => {
