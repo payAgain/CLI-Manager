@@ -18,18 +18,22 @@ Rust command payloads:
 ```rust
 pub async fn history_get_stats(
     source: Option<String>,
+    claude_config_dir: Option<String>,
+    codex_config_dir: Option<String>,
     project_key: Option<String>,
-    range: Option<String>,
+    range_days: Option<usize>,
     start_at: Option<i64>,
     end_at: Option<i64>,
-    config_dir: Option<String>,
+    force: Option<bool>,
 ) -> Result<HistoryStatsResponse, String>
 
 pub async fn history_get_session(
+    file_path: String,
+    claude_config_dir: Option<String>,
+    codex_config_dir: Option<String>,
     source: String,
     project_key: String,
-    session_id: String,
-    config_dir: Option<String>,
+    aggregate_subtasks: Option<bool>,
 ) -> Result<HistorySessionDetail, String>
 ```
 
@@ -120,6 +124,11 @@ interface TerminalSession {
 - `HistorySessionDetail.tool_events` is detail-only diagnostic data, not part of list/stats aggregation. It may require an additional detail-path scan and must not pollute `SessionStatsScan` caches used by list/stats hot paths.
 - Tool event extraction must preserve source truth: return `duration_ms`, `status`, input/output summaries only when the raw JSONL exposes them. Do not synthesize durations or success states from tool names or message text. Missing fields normalize to `null` or an empty list on the frontend.
 - Tool event categories use stable strings: `builtin`, `skill`, or `mcp:<server>`. Claude `tool_use` names like `mcp__exa__web_search_exa` and Codex namespaces like `mcp__gitnexus` must map to the same MCP category shape.
+- `history_get_session(aggregate_subtasks = Some(true))` is a realtime-only aggregation mode for terminal stats. It keeps the parent session identity (`session_id`, `title`, `file_path`, `source`, `project_key`) but merges sibling `subagents/agent-*.jsonl` transcripts into the returned `usage`, `messages`, `tool_events`, `created_at`, and `updated_at`.
+- The default detail path (`aggregate_subtasks` omitted / false) must stay single-file so history detail/replay views do not silently change scope.
+- Aggregated token trend must be rebuilt from merged usage events ordered by event timestamp (fallback to each transcript file `updated_at`), not by concatenating per-file `token_trend` arrays.
+- Aggregated tool counts must sum the per-transcript usage counters; do not recompute them from merged `tool_events`, because diagnostic end/error rows are not equivalent to tool-call count events.
+- Aggregated context window / last context tokens should follow the most recently updated transcript that exposed those values, while aggregated `cwd` continues to prefer the parent session metadata.
 - Terminal realtime stats bind strictly to the current terminal's `TerminalSession.cliSessionId` (from CLI hook payload). When a session id is present, look up **only** that session; if it is not yet found in history (e.g. JSONL not flushed), keep that terminal's own empty/loading state and **never** fall back to a different session. Project-level "latest session" lookup is used only when the terminal has no session id at all.
 - When the CLI hook chain is known to be active (any terminal has bound a `cliSessionId` this run) but the current CLI terminal has not yet received its own id, the realtime panel shows an explicit "awaiting session identification" empty state instead of borrowing the project's latest session — so newly opened sessions never display a neighbor window's data. Only a true no-hook environment (no terminal ever bound an id) keeps the project latest-session fallback.
 - Stats date ranges may cover up to 366 days and must reject larger ranges with `date_range_too_large`.
@@ -147,6 +156,9 @@ interface TerminalSession {
 | History detail has no discoverable cwd | Return `cwd: null`; resume UI may fall back to a configured project match, otherwise show an error instead of opening a terminal in the wrong directory. |
 | Codex rollout session lacks `session_meta.payload.id` | Fall back to the file-stem `session_id`. |
 | Claude file contains a `session_meta.payload.id`-shaped field | Keep Claude's file-stem `session_id`; do not apply Codex identity normalization. |
+| `aggregate_subtasks=true` but no sibling `subagents/agent-*.jsonl` exists | Return the parent single-file detail unchanged. |
+| `aggregate_subtasks=true` and a child transcript has no timestamps | Order its usage/message/tool rows by that child file `updated_at` fallback. |
+| Aggregated `tool_events` includes MCP end/error diagnostics | Keep them in diagnostics, but do not let them inflate `tool_call_count` / tool buckets. |
 | History cache invalidation runs | Clear file, stats, project, and aggregate caches together. |
 
 ### 5. Good/Base/Bad Cases
@@ -156,8 +168,10 @@ interface TerminalSession {
 - Good: a history detail payload exposes `cwd` when the JSONL contains session metadata, allowing the frontend to create a resume terminal in the original project directory.
 - Good: a history detail payload includes `tool_events` for Claude `tool_use` and Codex `function_call` rows; missing per-call duration remains `null` and the frontend says no duration data is available.
 - Good: a Codex rollout file with `session_meta.payload.id` returns that UUID as `session_id`, allowing realtime stats strict binding to match the hook session id; a Claude file with a similar metadata id still keeps its original file-stem identity.
+- Good: realtime stats requests `history_get_session(..., aggregate_subtasks = Some(true))` for a parent session with `subagents/agent-*.jsonl`, and the returned token totals / trend / tool counts equal parent + child aggregate while `session_id` still matches the parent hook session id.
 - Base: a Codex session without model pricing still appears in stats with token totals and `unpriced_tokens`; a single-day stats view can map `hourly_activity` into 24 hourly trend and heatmap buckets.
 - Bad: frontend assumes a newly added numeric field is always present and renders `NaN` when older cached payloads omit it; realtime stats uses only project latest-session lookup and shows another window's current context.
+- Bad: realtime stats concatenates parent and child `token_trend` arrays directly or derives tool totals from merged `tool_events`, causing out-of-order trend points or inflated tool-call counts.
 
 ### 6. Tests Required
 
@@ -165,6 +179,7 @@ interface TerminalSession {
   - Date bounds accept a full 366-day range and reject larger ranges.
   - Codex session collection uses metadata `cwd` as project key when present.
   - `build_session_detail` exposes metadata `cwd` on `HistorySessionDetail`.
+  - `build_session_detail(..., true)` keeps the parent session id/cwd but aggregates sibling subagent usage, trend, messages, and tool counts.
   - Session project cache reuses matching fingerprints.
   - Codex rollout files expose `session_meta.payload.id` as `session_id`, fall back to file stem when absent, and Claude files keep file-stem identity.
   - Case-insensitive ASCII search avoids per-message lowercasing regressions.

@@ -609,6 +609,7 @@ export async function fetchLatestProjectSessionDetail(
       ...getHistoryPathArgs(),
       source: summary.source,
       projectKey: summary.project_key,
+      aggregateSubtasks: true,
     });
     return normalizeDetail(detailRaw);
   } catch {
