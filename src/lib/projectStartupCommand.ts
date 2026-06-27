@@ -3,7 +3,7 @@ import { getCodexProviderOverride, isExactCodexProject } from "./providerSwitchi
 
 const CODEX_NO_ALT_SCREEN_ARG = "--no-alt-screen";
 const CODEX_PROFILE_ARG = "--profile";
-const CODEX_LIGHT_TUI_THEME_ARG = "-c tui.theme=catppuccin-latte";
+const CODEX_LIGHT_TUI_THEME_ARG = "-c theme=catppuccin-latte";
 const DIRECT_CODEX_COMMAND_PATTERN = /^(\s*codex(?:\.(?:cmd|exe|ps1))?)(?=\s|$)/i;
 
 function isCodexStartupCommand(command: string): boolean {
@@ -18,8 +18,8 @@ function hasProfileArg(command: string): boolean {
   return new RegExp(`(^|\\s)${CODEX_PROFILE_ARG}(\\s|$)`).test(command);
 }
 
-function hasTuiThemeConfigArg(command: string): boolean {
-  return /(^|\s)(?:-c|--config)(?:\s+|=)["']?tui\.theme\s*=/i.test(command);
+function hasCodexThemeConfigArg(command: string): boolean {
+  return /(^|\s)(?:-c|--config)(?:\s+|=)["']?(?:tui\.)?theme\s*=/i.test(command);
 }
 
 export function normalizeDirectCodexStartupCommand(command?: string): string | undefined {
@@ -35,7 +35,7 @@ export function normalizeDirectCodexStartupCommand(command?: string): string | u
 
 export function withCodexLightTuiTheme(command?: string): string | undefined {
   const normalized = normalizeDirectCodexStartupCommand(command);
-  if (!normalized || hasTuiThemeConfigArg(normalized)) return normalized;
+  if (!normalized || hasCodexThemeConfigArg(normalized)) return normalized;
 
   const match = DIRECT_CODEX_COMMAND_PATTERN.exec(normalized);
   if (!match) return normalized;

@@ -3,6 +3,7 @@ import { useShallow } from "zustand/shallow";
 import type { DragEndEvent } from "@dnd-kit/core";
 import { useProjectStore } from "../../stores/projectStore";
 import { useTerminalStore, type SessionStatus, type SplitTerminalOptions } from "../../stores/terminalStore";
+import { isProjectFileDirty, useFileExplorerStore } from "../../stores/fileExplorerStore";
 import { useHistoryStore } from "../../stores/historyStore";
 import { useSettingsStore } from "../../stores/settingsStore";
 import type { TerminalPaneSplitDirection } from "../../stores/terminalPaneTree";
@@ -20,10 +21,12 @@ import { logError } from "../../lib/logger";
 import { SidebarHeader } from "./SidebarHeader";
 import { ProjectTree } from "./ProjectTree";
 import { SidebarFooter } from "./SidebarFooter";
+import { FileExplorerSidebar } from "../files/FileExplorerSidebar";
 import {
   ArrowLeftRight,
   Check,
   Copy,
+  FileCode,
   FolderOpen,
   FolderPlus,
   ListClockIcon,
@@ -124,6 +127,8 @@ export function Sidebar({ onOpenSettings, onOpenStats, compactMode = false }: Si
   const sidebarToolbarVisibility = useSettingsStore((s) => s.sidebarToolbarVisibility);
   const updateSetting = useSettingsStore((s) => s.update);
   const persistedSidebarWidth = useSettingsStore((s) => s.sidebarWidth);
+  const openFileProject = useFileExplorerStore((s) => s.openProject);
+  const fileProject = useFileExplorerStore((s) => s.project);
   const closeHistory = useHistoryStore((s) => s.closeHistory);
   const openHistory = useHistoryStore((s) => s.openHistory);
   const triggerGlobalSearchFocus = useHistoryStore((s) => s.triggerGlobalSearchFocus);
@@ -634,6 +639,20 @@ export function Sidebar({ onOpenSettings, onOpenStats, compactMode = false }: Si
     }
   }, [t]);
 
+  const handleOpenProjectFiles = useCallback(async (project: Project) => {
+    try {
+      if (fileProject?.id !== project.id && isProjectFileDirty()) {
+        const confirmed = window.confirm(t("sidebar.toast.unsavedFileConfirm"));
+        if (!confirmed) return;
+      }
+      await openFileProject(project);
+      closeHistory();
+    } catch (err) {
+      logError("Failed to open project file browser", err);
+      toast.error(t("sidebar.toast.openProjectFilesFailed"), { description: String(err) });
+    }
+  }, [closeHistory, fileProject?.id, openFileProject, t]);
+
   const handleOpenProjectHistory = useCallback(
     (project: Project) => {
       void openHistory({
@@ -927,28 +946,32 @@ export function Sidebar({ onOpenSettings, onOpenStats, compactMode = false }: Si
       </div>
 
       <div className={`${compactMode ? "min-h-[220px]" : "min-h-0"} flex-1 overflow-hidden`}>
-        <TreeContext.Provider value={treeActions}>
-          <ProjectTree
-            tree={tree}
-            initialLoading={initialLoading}
-            loadError={loadError}
-            collapsed={compactMode ? false : sidebarCollapsed}
-            density={sidebarDensity}
-            newGroupParentId={newGroupParentId}
-            onCreateRootGroup={(name) => handleCreateGroup(null, name)}
-            onCancelRootGroup={handleCancelNewGroup}
-            onQuickAddProject={() => {
-              ensureSidebarExpanded();
-              setAddToGroupId(null);
-              setShowAdd(true);
-            }}
-            onRetry={() => {
-              setInitialLoading(true);
-              void loadProjects();
-            }}
-            onExpandSidebar={expandSidebar}
-          />
-        </TreeContext.Provider>
+        {fileProject && !sidebarCollapsed ? (
+          <FileExplorerSidebar />
+        ) : (
+          <TreeContext.Provider value={treeActions}>
+            <ProjectTree
+              tree={tree}
+              initialLoading={initialLoading}
+              loadError={loadError}
+              collapsed={compactMode ? false : sidebarCollapsed}
+              density={sidebarDensity}
+              newGroupParentId={newGroupParentId}
+              onCreateRootGroup={(name) => handleCreateGroup(null, name)}
+              onCancelRootGroup={handleCancelNewGroup}
+              onQuickAddProject={() => {
+                ensureSidebarExpanded();
+                setAddToGroupId(null);
+                setShowAdd(true);
+              }}
+              onRetry={() => {
+                setInitialLoading(true);
+                void loadProjects();
+              }}
+              onExpandSidebar={expandSidebar}
+            />
+          </TreeContext.Provider>
+        )}
       </div>
 
       <div className="ui-sidebar-footer shrink-0">
@@ -1062,6 +1085,17 @@ export function Sidebar({ onOpenSettings, onOpenStats, compactMode = false }: Si
                 >
                   <FolderOpen size={14} strokeWidth={1.5} />
                   {t("sidebar.menu.openDirectory")}
+                </button>
+                <button
+                  className="context-menu-item"
+                  role="menuitem"
+                  onClick={() => {
+                    void handleOpenProjectFiles(contextMenu.project);
+                    setContextMenu(null);
+                  }}
+                >
+                  <FileCode size={14} strokeWidth={1.5} />
+                  {t("sidebar.menu.browseFiles")}
                 </button>
                 <button
                   className="context-menu-item"
