@@ -9,6 +9,7 @@ import { getTerminalTheme } from "../lib/terminalThemes";
 import { useSettingsStore } from "./settingsStore";
 import { useSessionStore } from "./sessionStore";
 import { defaultShellForOs, getOsPlatform, normalizeShellForOs, normalizeShellKey, type OsPlatform, type ShellKey } from "../lib/shell";
+import { buildPtyEnvVars } from "../lib/ptyEnv";
 import { getCodexProviderOverride, isExactCodexProject } from "../lib/providerSwitching";
 import { useProjectStore } from "./projectStore";
 import {
@@ -72,7 +73,6 @@ export interface ShellRuntimePayload {
   origin?: "osc" | "input";
 }
 
-const SHELL_RUNTIME_MONITORING_ENV = "CLI_MANAGER_SHELL_RUNTIME_MONITORING";
 const TAB_STATUS_PRIORITY: Record<TabNotificationState, number> = {
   none: 0,
   done: 1,
@@ -586,21 +586,6 @@ function buildTabStatusUpdate(
   };
 }
 
-// Shell 注入支持：这些 shell 由 pty/manager.rs 注入 shell integration
-// （powershell/pwsh：prompt 函数；gitbash：rcfile；cmd：PROMPT 环境变量）。
-// bash（System32 WSL 启动器）与 wsl 无法可靠注入，不在此列。
-// 事件接受不按 shell 过滤——任何 shell 里用户自带的 OSC 133/633 集成
-// （oh-my-posh、VS Code shell integration 等）同样可信。
-function supportsShellRuntimeInjection(shell?: string | null): boolean {
-  const normalized = normalizeShellKey(shell);
-  return (
-    normalized === "powershell" ||
-    normalized === "pwsh" ||
-    normalized === "cmd" ||
-    normalized === "gitbash"
-  );
-}
-
 function isShellRuntimeMonitoringEnabled(): boolean {
   return useSettingsStore.getState().shellRuntimeMonitoringEnabled;
 }
@@ -674,16 +659,6 @@ async function shouldEnableHookEnv(): Promise<boolean> {
   }
 }
 
-function buildPtyEnvVars(envVars?: Record<string, string> | null, shell?: string | null): Record<string, string> | null {
-  const next = { ...(envVars ?? {}) };
-  if (isShellRuntimeMonitoringEnabled() && supportsShellRuntimeInjection(shell)) {
-    next[SHELL_RUNTIME_MONITORING_ENV] = "1";
-  } else {
-    delete next[SHELL_RUNTIME_MONITORING_ENV];
-  }
-  return Object.keys(next).length > 0 ? next : null;
-}
-
 function getCodexProviderLaunchConfig(projectId?: string, startupCmd?: string | null) {
   if (!projectId) return null;
   const project = useProjectStore.getState().projects.find((item) => item.id === projectId);
@@ -723,7 +698,10 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     try {
       sessionId = await invoke<string>("pty_create", {
         cwd: cwd ?? null,
-        envVars: buildPtyEnvVars(envVars ?? null, resolvedShell),
+        envVars: buildPtyEnvVars(envVars ?? null, resolvedShell, {
+          os,
+          shellRuntimeMonitoringEnabled: isShellRuntimeMonitoringEnabled(),
+        }),
         shell: resolvedShell,
         hookEnvEnabled: await shouldEnableHookEnv(),
         codexProvider: getCodexProviderLaunchConfig(projectId, startupCmd),
@@ -1034,7 +1012,10 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     try {
       splitSessionId = await invoke<string>("pty_create", {
         cwd: options?.cwd ?? null,
-        envVars: buildPtyEnvVars(options?.envVars ?? null, resolvedShell),
+        envVars: buildPtyEnvVars(options?.envVars ?? null, resolvedShell, {
+          os,
+          shellRuntimeMonitoringEnabled: isShellRuntimeMonitoringEnabled(),
+        }),
         shell: resolvedShell,
         hookEnvEnabled: await shouldEnableHookEnv(),
         codexProvider: getCodexProviderLaunchConfig(options?.projectId, options?.startupCmd),
@@ -1277,7 +1258,10 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
       try {
         newSessionId = await invoke<string>("pty_create", {
           cwd: ps.cwd ?? null,
-          envVars: buildPtyEnvVars(ps.envVars ?? null, resolvedShell),
+          envVars: buildPtyEnvVars(ps.envVars ?? null, resolvedShell, {
+            os,
+            shellRuntimeMonitoringEnabled: isShellRuntimeMonitoringEnabled(),
+          }),
           shell: resolvedShell,
           hookEnvEnabled: await shouldEnableHookEnv(),
           codexProvider: getCodexProviderLaunchConfig(ps.projectId, ps.startupCmd),
