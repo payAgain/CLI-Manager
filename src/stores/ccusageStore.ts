@@ -104,8 +104,10 @@ export function resolveCcusageWslTarget(
 export function resolveCcusageRuntimeScope(
   source: CcusageSource,
   claudeConfigDir: string | null | undefined,
-  codexConfigDir: string | null | undefined
+  codexConfigDir: string | null | undefined,
+  useWsl = true
 ): CcusageRuntimeScope {
+  if (!useWsl) return { kind: "host" };
   const claudeDistro = parseWslDistro(claudeConfigDir);
   const codexDistro = parseWslDistro(codexConfigDir);
 
@@ -235,9 +237,10 @@ function checkToolStatus(claudeConfigDir: string | null, codexConfigDir: string 
 function refreshReportFromBackend(
   source: CcusageSource,
   claudeConfigDir: string | null,
-  codexConfigDir: string | null
+  codexConfigDir: string | null,
+  useWsl: boolean
 ): Promise<CcusageReport> {
-  const runtimeKey = runtimeScopeKey(resolveCcusageRuntimeScope(source, claudeConfigDir, codexConfigDir));
+  const runtimeKey = runtimeScopeKey(resolveCcusageRuntimeScope(source, claudeConfigDir, codexConfigDir, useWsl));
   const key = JSON.stringify([source, runtimeKey, claudeConfigDir ?? "", codexConfigDir ?? ""]);
   const existing = inFlightReportRefreshes.get(key);
   if (existing) return existing;
@@ -247,6 +250,7 @@ function refreshReportFromBackend(
       source,
       claudeConfigDir,
       codexConfigDir,
+      useWsl,
     });
     const report: CcusageReport = {
       source: response.source,
@@ -312,7 +316,14 @@ export const useCcusageStore = create<CcusageStore>((set, get) => ({
   loadCachedReport: async () => {
     const source = get().source;
     const settings = useSettingsStore.getState();
-    const runtimeKey = runtimeScopeKey(resolveCcusageRuntimeScope(source, settings.claudeHookConfigDir, settings.codexHookConfigDir));
+    const runtimeKey = runtimeScopeKey(
+      resolveCcusageRuntimeScope(
+        source,
+        settings.claudeHookConfigDir,
+        settings.codexHookConfigDir,
+        settings.ccusageUseWsl
+      )
+    );
     set({ loadingCache: true, error: null });
     try {
       const report = await readCachedReport(source, runtimeKey);
@@ -333,7 +344,8 @@ export const useCcusageStore = create<CcusageStore>((set, get) => ({
       const report = await refreshReportFromBackend(
         source,
         settings.claudeHookConfigDir,
-        settings.codexHookConfigDir
+        settings.codexHookConfigDir,
+        settings.ccusageUseWsl
       );
       if (get().source === source) {
         set({ report, refreshing: false });

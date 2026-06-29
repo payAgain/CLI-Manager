@@ -24,7 +24,6 @@ import {
   type DarkThemePalette,
   type LanguagePreference,
   type LightThemePalette,
-  type TerminalToolbarVisibilitySettings,
   type ThemeMode,
 } from "../../../stores/settingsStore";
 import { LANGUAGE_OPTIONS, useI18n, type TranslationKey } from "../../../lib/i18n";
@@ -169,19 +168,6 @@ const DARK_PALETTE_OPTIONS: {
     swatches: ["#161616", "#f2f4f8", "#78a9ff"],
   },
 ];
-
-const TERMINAL_TOOLBAR_OPTIONS: { key: TerminalToolbarOptionKey; labelKey: TranslationKey }[] = [
-  { key: "templates", labelKey: "settings.general.toolbar.templates" },
-  { key: "commandHistory", labelKey: "settings.general.toolbar.commandHistory" },
-  { key: "fullscreen", labelKey: "settings.general.toolbar.fullscreen" },
-  { key: "sessionHistory", labelKey: "settings.general.toolbar.sessionHistory" },
-  { key: "replay", labelKey: "settings.general.toolbar.replay" },
-  { key: "files", labelKey: "settings.general.toolbar.files" },
-  { key: "stats", labelKey: "settings.general.toolbar.stats" },
-  { key: "gitChanges", labelKey: "settings.general.toolbar.gitChanges" },
-];
-
-type TerminalToolbarOptionKey = keyof TerminalToolbarVisibilitySettings;
 
 const HEX_COLOR_PATTERN = /^#[0-9a-fA-F]{6}$/;
 
@@ -422,9 +408,10 @@ export function GeneralSettingsPage() {
   const uiFontSize = useSettingsStore((s) => s.uiFontSize);
   const uiTextColor = useSettingsStore((s) => s.uiTextColor);
   const ccusageAnalyticsEnabled = useSettingsStore((s) => s.ccusageAnalyticsEnabled);
+  const ccusageUseWsl = useSettingsStore((s) => s.ccusageUseWsl);
   const claudeHookConfigDir = useSettingsStore((s) => s.claudeHookConfigDir);
   const codexHookConfigDir = useSettingsStore((s) => s.codexHookConfigDir);
-  const terminalToolbarVisibility = useSettingsStore((s) => s.terminalToolbarVisibility);
+  const sidebarToolbarVisibility = useSettingsStore((s) => s.sidebarToolbarVisibility);
   const setTheme = useSettingsStore((s) => s.setTheme);
   const update = useSettingsStore((s) => s.update);
   const ccusageToolStatus = useCcusageStore((s) => s.toolStatus);
@@ -534,10 +521,6 @@ export function GeneralSettingsPage() {
     } catch (err) {
       toast.error(t("settings.general.ccusageWslCopyFailed"), { description: String(err) });
     }
-  };
-
-  const updateToolbarVisibility = (key: keyof TerminalToolbarVisibilitySettings, checked: boolean) => {
-    void update("terminalToolbarVisibility", { ...terminalToolbarVisibility, [key]: checked });
   };
 
   const defaultUiTextColor = getDefaultUiTextColor(resolvedTheme, lightThemePalette, darkThemePalette);
@@ -803,39 +786,6 @@ export function GeneralSettingsPage() {
       <section className="ui-surface-card rounded-2xl border border-border p-4">
         <Stack gap="sm">
             <Text size="sm" fw={600} c="var(--on-surface)">
-              {t("settings.general.toolbar")}
-            </Text>
-
-            <Text size="xs" fw={600} c="var(--on-surface-variant)" mt="xs">
-              {t("settings.general.terminalToolbar")}
-            </Text>
-            <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="xs">
-              {TERMINAL_TOOLBAR_OPTIONS.map((option) => (
-                <Card key={option.key} className="border border-border bg-surface-container-lowest" p="sm" radius="lg">
-                  <Group justify="space-between" align="center" gap="md" wrap="nowrap">
-                    <Text size="xs" c="var(--on-surface-variant)">
-                      {t(option.labelKey)}
-                    </Text>
-                    <Switch
-                      color="cliPrimary"
-                      checked={terminalToolbarVisibility[option.key]}
-                      onChange={(event) => updateToolbarVisibility(option.key, event.currentTarget.checked)}
-                      aria-label={
-                        terminalToolbarVisibility[option.key]
-                          ? t("settings.general.toolbar.hide", { item: t(option.labelKey) })
-                          : t("settings.general.toolbar.show", { item: t(option.labelKey) })
-                      }
-                    />
-                  </Group>
-                </Card>
-              ))}
-            </SimpleGrid>
-        </Stack>
-      </section>
-
-      <section className="ui-surface-card rounded-2xl border border-border p-4">
-        <Stack gap="sm">
-            <Text size="sm" fw={600} c="var(--on-surface)">
               {t("settings.general.usageAnalysis")}
             </Text>
             <Card className="border border-border bg-surface-container-lowest" p="sm" radius="lg">
@@ -846,6 +796,28 @@ export function GeneralSettingsPage() {
                   </Text>
                   <Text mt={4} size="xs" lh={1.55} c="var(--text-muted)">
                     {t("settings.general.ccusageDashboardDescription")}
+                  </Text>
+                </Box>
+                <Switch
+                  color="cliPrimary"
+                  checked={ccusageAnalyticsEnabled}
+                  onChange={(event) => void update("ccusageAnalyticsEnabled", event.currentTarget.checked)}
+                  aria-label={
+                    ccusageAnalyticsEnabled
+                      ? t("settings.general.disableCcusageDashboard")
+                      : t("settings.general.enableCcusageDashboard")
+                  }
+                />
+              </Group>
+            </Card>
+            <Card className="border border-border bg-surface-container-lowest" p="sm" radius="lg">
+              <Group justify="space-between" align="center" gap="md" wrap="nowrap">
+                <Box>
+                  <Text size="xs" c="var(--on-surface-variant)">
+                    {t("settings.general.ccusageUseWsl")}
+                  </Text>
+                  <Text mt={4} size="xs" lh={1.55} c="var(--text-muted)">
+                    {t("settings.general.ccusageUseWslDescription")}
                   </Text>
                 </Box>
                 <Group gap="xs" align="center" wrap="nowrap">
@@ -860,8 +832,8 @@ export function GeneralSettingsPage() {
                     aria-label={t("settings.general.ccusageWslButton")}
                   >
                     <Group gap={6} wrap="nowrap">
-                      <Text span ff="monospace" size="11px" fw={700}>
-                        WSL
+                      <Text span size="11px" fw={700}>
+                        {t("settings.general.ccusageWslButton")}
                       </Text>
                       <Badge variant="light" color={wslStatusMeta.color} size="xs">
                         {t(wslStatusMeta.labelKey)}
@@ -870,15 +842,40 @@ export function GeneralSettingsPage() {
                   </Button>
                   <Switch
                     color="cliPrimary"
-                    checked={ccusageAnalyticsEnabled}
-                    onChange={(event) => void update("ccusageAnalyticsEnabled", event.currentTarget.checked)}
+                    checked={ccusageUseWsl}
+                    onChange={(event) => void update("ccusageUseWsl", event.currentTarget.checked)}
                     aria-label={
-                      ccusageAnalyticsEnabled
-                        ? t("settings.general.disableCcusageDashboard")
-                        : t("settings.general.enableCcusageDashboard")
+                      ccusageUseWsl
+                        ? t("settings.general.disableCcusageUseWsl")
+                        : t("settings.general.enableCcusageUseWsl")
                     }
                   />
                 </Group>
+              </Group>
+            </Card>
+            <Card className="border border-border bg-surface-container-lowest" p="sm" radius="lg">
+              <Group justify="space-between" align="center" gap="md" wrap="nowrap">
+                <Box>
+                  <Text size="xs" c="var(--on-surface-variant)">
+                    {t("settings.general.showStatsButton")}
+                  </Text>
+                  <Text mt={4} size="xs" lh={1.55} c="var(--text-muted)">
+                    {t("settings.general.showStatsButtonDescription")}
+                  </Text>
+                </Box>
+                <Switch
+                  color="cliPrimary"
+                  checked={sidebarToolbarVisibility.stats}
+                  onChange={(event) => void update("sidebarToolbarVisibility", {
+                    ...sidebarToolbarVisibility,
+                    stats: event.currentTarget.checked,
+                  })}
+                  aria-label={
+                    sidebarToolbarVisibility.stats
+                      ? t("settings.general.hideStatsButton")
+                      : t("settings.general.showStatsButtonAria")
+                  }
+                />
               </Group>
             </Card>
         </Stack>

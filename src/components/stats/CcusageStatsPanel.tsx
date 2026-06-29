@@ -1583,6 +1583,7 @@ export function CcusageStatsPanel({ open, onClose }: CcusageStatsPanelProps) {
   const refreshReport = useCcusageStore((s) => s.refreshReport);
   const claudeConfigDir = useSettingsStore((s) => s.claudeHookConfigDir);
   const codexConfigDir = useSettingsStore((s) => s.codexHookConfigDir);
+  const ccusageUseWsl = useSettingsStore((s) => s.ccusageUseWsl);
   const [hostInstallConfirmOpen, setHostInstallConfirmOpen] = useState(false);
   const [timeWindow, setTimeWindow] = useState<CcusageTimeWindowState>(DEFAULT_TIME_WINDOW);
 
@@ -1590,7 +1591,7 @@ export function CcusageStatsPanel({ open, onClose }: CcusageStatsPanelProps) {
     if (!open) return;
     void checkStatus().catch(() => {});
     void loadCachedReport().catch(() => {});
-  }, [open, source, claudeConfigDir, codexConfigDir, checkStatus, loadCachedReport]);
+  }, [open, source, ccusageUseWsl, claudeConfigDir, codexConfigDir, checkStatus, loadCachedReport]);
 
   useEffect(() => {
     if (!open) return;
@@ -1626,17 +1627,18 @@ export function CcusageStatsPanel({ open, onClose }: CcusageStatsPanelProps) {
   const sourceLabel = sourceOption.labelKey ? t(sourceOption.labelKey) : sourceOption.label;
   const sourceDescription = t(sourceOption.descriptionKey);
   const runtimeScope = useMemo(
-    () => resolveCcusageRuntimeScope(source, claudeConfigDir, codexConfigDir),
-    [claudeConfigDir, codexConfigDir, source]
+    () => resolveCcusageRuntimeScope(source, claudeConfigDir, codexConfigDir, ccusageUseWsl),
+    [ccusageUseWsl, claudeConfigDir, codexConfigDir, source]
   );
   const wslTarget = useMemo(
     () => resolveCcusageWslTarget(claudeConfigDir, codexConfigDir),
     [claudeConfigDir, codexConfigDir]
   );
   const hostReady = toolStatus?.host.bunxAvailable === true;
+  const activeWslDistro = runtimeScope.kind === "wsl" ? runtimeScope.distro : null;
   const wslReady =
-    Boolean(wslTarget.distro) &&
-    toolStatus?.wsl?.distro === wslTarget.distro &&
+    Boolean(activeWslDistro) &&
+    toolStatus?.wsl?.distro === activeWslDistro &&
     toolStatus.wsl.bunxAvailable === true;
   const sourceToolReady =
     runtimeScope.kind === "host"
@@ -1650,9 +1652,9 @@ export function CcusageStatsPanel({ open, onClose }: CcusageStatsPanelProps) {
       : runtimeScope.reason === "host-wsl"
         ? "ccusage.mixedRuntimeHostWsl"
         : "ccusage.mixedRuntimeMultiWsl";
-  const showWslManualHint = !wslReady && (Boolean(wslTarget.distro) || wslTarget.conflicts.length > 0);
-  const showPrepareCard = !hostReady || showWslManualHint || Boolean(mixedRuntimeMessageKey);
-  const wslStatus = toolStatus?.wsl?.distro === wslTarget.distro ? toolStatus.wsl : null;
+  const showWslManualHint = ccusageUseWsl && runtimeScope.kind === "wsl" && !wslReady;
+  const showPrepareCard = !sourceToolReady || showWslManualHint || Boolean(mixedRuntimeMessageKey);
+  const wslStatus = activeWslDistro && toolStatus?.wsl?.distro === activeWslDistro ? toolStatus.wsl : null;
 
   if (!open) return null;
 
@@ -1711,7 +1713,7 @@ export function CcusageStatsPanel({ open, onClose }: CcusageStatsPanelProps) {
               {t("ccusage.refresh")}
             </Button>
 
-            {!hostReady && (
+            {runtimeScope.kind === "host" && !hostReady && (
               <Button
                 onClick={() => setHostInstallConfirmOpen(true)}
                 disabled={checkingStatus || installingTools}
@@ -1748,21 +1750,21 @@ export function CcusageStatsPanel({ open, onClose }: CcusageStatsPanelProps) {
                 <div className="mt-2 space-y-1.5 text-[12px] leading-6 text-text-secondary">
                   <div>{t("ccusage.reportExplanation")}</div>
                   <div>{t("ccusage.toolVersions", { bun: toolStatus?.host.bunVersion ?? t("ccusage.notDetected"), bunx: toolStatus?.host.bunxVersion ?? t("ccusage.notDetected") })}</div>
-                  {wslTarget.distro && (
+                  {activeWslDistro && (
                     <div>
                       {t("ccusage.wslToolVersions", {
-                        distro: wslTarget.distro,
+                        distro: activeWslDistro,
                         bun: wslStatus?.bunVersion ?? t("ccusage.notDetected"),
                         bunx: wslStatus?.bunxVersion ?? t("ccusage.notDetected"),
                       })}
                     </div>
                   )}
-                  {wslTarget.conflicts.length > 0 && (
+                  {ccusageUseWsl && wslTarget.conflicts.length > 0 && (
                     <div>{t("ccusage.installWslConflict", { distros: wslTarget.conflicts.join(", ") })}</div>
                   )}
                   {mixedRuntimeMessageKey && <div>{t(mixedRuntimeMessageKey)}</div>}
                   <div>{t("ccusage.installNote")}</div>
-                  {wslTarget.distro && <div>{t("ccusage.installWslNote", { distro: wslTarget.distro })}</div>}
+                  {activeWslDistro && <div>{t("ccusage.installWslNote", { distro: activeWslDistro })}</div>}
                 </div>
               </Card>
             )}

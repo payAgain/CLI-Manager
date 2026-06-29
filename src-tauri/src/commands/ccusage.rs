@@ -264,13 +264,37 @@ fn resolve_config_dir(value: Option<String>, label: &str) -> Result<Option<Confi
     }))
 }
 
+fn resolve_config_dir_for_runtime(
+    value: Option<String>,
+    label: &str,
+    use_wsl: bool,
+) -> Result<Option<ConfigDir>, String> {
+    let Some(path) = existing_dir(value, label)? else {
+        return Ok(None);
+    };
+    let raw = path.to_string_lossy().into_owned();
+    if use_wsl && crate::wsl::is_wsl_config_dir(&raw) {
+        let (distro, linux_path) = crate::wsl::parse_wsl_unc_path(&raw)
+            .ok_or_else(|| format!("无法解析 {label} 的 WSL 配置目录"))?;
+        return Ok(Some(ConfigDir {
+            runtime: RuntimeTarget::Wsl { distro },
+            path: linux_path,
+        }));
+    }
+    Ok(Some(ConfigDir {
+        runtime: RuntimeTarget::Host,
+        path: raw,
+    }))
+}
+
 fn resolve_runtime_for_source(
     source: &str,
     claude_config_dir: Option<String>,
     codex_config_dir: Option<String>,
+    use_wsl: bool,
 ) -> Result<(RuntimeTarget, Vec<(&'static str, String)>), String> {
-    let claude = resolve_config_dir(claude_config_dir, "Claude")?;
-    let codex = resolve_config_dir(codex_config_dir, "Codex")?;
+    let claude = resolve_config_dir_for_runtime(claude_config_dir, "Claude", use_wsl)?;
+    let codex = resolve_config_dir_for_runtime(codex_config_dir, "Codex", use_wsl)?;
     let mut envs = base_envs();
 
     if source != "codex" {
@@ -405,11 +429,12 @@ pub async fn ccusage_refresh_report(
     source: String,
     claude_config_dir: Option<String>,
     codex_config_dir: Option<String>,
+    use_wsl: bool,
 ) -> Result<CcusageReportResponse, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let source = normalize_source(source)?;
         let (target, envs) =
-            resolve_runtime_for_source(&source, claude_config_dir, codex_config_dir)?;
+            resolve_runtime_for_source(&source, claude_config_dir, codex_config_dir, use_wsl)?;
         let daily_payload =
             ccusage_report_payload(&target, &source, DAILY_REPORT_KIND, &envs, true)?;
         let session_payload =
