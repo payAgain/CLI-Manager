@@ -5,6 +5,7 @@ import { listen } from "@tauri-apps/api/event";
 import { toast } from "sonner";
 import { copyAiText } from "../../lib/aiClipboard";
 import { formatAiPathBlock, formatAiRootTree, formatAiTree, formatTerminalDragPath, TERMINAL_FILE_PATH_MIME } from "../../lib/aiPathFormatter";
+import { debugConsoleWarn } from "../../lib/debugConsole";
 import { useI18n, type TranslationKey } from "../../lib/i18n";
 import { beginTerminalFileDrag, endTerminalFileDrag } from "../../lib/terminalFileDrag";
 import type { GitFileChange, ProjectFileContentMatch, ProjectFileEntry, ProjectFileSearchMode } from "../../lib/types";
@@ -762,7 +763,7 @@ export function FileExplorerSidebar({ mode = "sidebar", onClosePanel, onBackToPr
     });
 
     void invoke("file_watch_start", { projectPath: project.path }).catch((err) => {
-      console.warn("[FileExplorerSidebar] file_watch_start failed, falling back to polling:", err);
+      debugConsoleWarn("[FileExplorerSidebar] file_watch_start failed, falling back to polling:", err);
       if (!disposed) startFallback();
     });
 

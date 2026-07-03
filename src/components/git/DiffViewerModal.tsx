@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { X, Undo2 } from "../icons";
 import { parseDiff, Diff, Hunk, tokenize, Decoration, getChangeKey } from "react-diff-view";
 import type { ChangeData } from "react-diff-view";
+import { debugConsoleWarn } from "../../lib/debugConsole";
 import { useI18n } from "../../lib/i18n";
 import { useSettingsStore } from "../../stores/settingsStore";
 import { refractor, detectLanguage } from "./diffHighlight";
@@ -123,7 +124,7 @@ export function GitDiffViewer({
           try {
             return { file, tokens: tokenize(file.hunks, { highlight: true, refractor, language }) };
           } catch (highlightErr) {
-            console.warn("[DiffViewerModal] 语法高亮失败，回退无高亮:", highlightErr);
+            debugConsoleWarn("[DiffViewerModal] 语法高亮失败，回退无高亮:", highlightErr);
           }
         }
         return { file, tokens: tokenize(file.hunks) };

@@ -68,7 +68,10 @@ export async function initLogging() {
   try {
     await attachConsole();
   } catch (err) {
-    console.warn("Failed to attach Tauri console logger:", err);
+    const { useSettingsStore } = await import("../stores/settingsStore");
+    if (useSettingsStore.getState().debugMode) {
+      console.warn("Failed to attach Tauri console logger:", err);
+    }
   }
   void info("Logger initialized");
 }

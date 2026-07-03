@@ -15,6 +15,7 @@ import { ConfirmDialog } from "../ConfirmDialog";
 import { useFileExplorerStore } from "../../stores/fileExplorerStore";
 import { useTerminalStore } from "../../stores/terminalStore";
 import { TERM, EmptyHint, panelColorTint } from "../stats/termStatsUi";
+import { debugConsoleWarn } from "../../lib/debugConsole";
 import { useI18n, type TranslationKey } from "../../lib/i18n";
 import { findProjectByPath } from "../../lib/terminalProject";
 import type { GitTreeNode, GitPullStrategy } from "../../lib/types";
@@ -180,7 +181,7 @@ export function GitChangesPanel({ open, projectPath, visible = true, embedded = 
 
     // 启动 watcher；失败则降级为慢轮询。
     void invoke("git_watch_start", { projectPath }).catch((err) => {
-      console.warn("[GitChangesPanel] git_watch_start 失败，降级慢轮询:", err);
+      debugConsoleWarn("[GitChangesPanel] git_watch_start 失败，降级慢轮询:", err);
       if (!disposed) startFallback();
     });
 

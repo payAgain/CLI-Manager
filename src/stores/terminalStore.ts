@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { toast } from "sonner";
 import type { SubagentTranscriptSource, TerminalSession, Project } from "../lib/types";
+import { debugConsoleWarn } from "../lib/debugConsole";
 import { logError, logInfo, logWarn } from "../lib/logger";
 import { isDirectCodexStartupCommand, normalizeDirectCodexStartupCommand, withCodexLightTuiTheme } from "../lib/projectStartupCommand";
 import { getTerminalTheme } from "../lib/terminalThemes";
@@ -1881,7 +1882,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
         nextContent = prevTail + content;
       }
       if (droppedChars > 0) {
-        console.warn("[oom-diagnostics:webview]", {
+        debugConsoleWarn("[oom-diagnostics:webview]", {
           area: "subagentTranscript",
           phase: "appendTrim",
           key,

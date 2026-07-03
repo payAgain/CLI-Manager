@@ -25,6 +25,7 @@ import {
   resolveAutoTerminalThemeId,
   type TerminalThemeGroupId,
 } from "../../../lib/terminalThemes";
+import { debugConsoleWarn } from "../../../lib/debugConsole";
 import { normalizeTerminalFontFamily } from "../../../lib/terminalFontFamily";
 import { normalizeShellKey, getOsPlatform } from "../../../lib/shell";
 import type { OsPlatform } from "../../../lib/shell";
@@ -148,7 +149,7 @@ export function ThemeSettingsPage() {
         if (!cancelled) setSystemFonts(fonts);
       })
       .catch((err) => {
-        console.warn("Failed to list system fonts:", err);
+        debugConsoleWarn("Failed to list system fonts:", err);
         if (!cancelled) setSystemFontsError(text("系统字体读取失败，已使用内置字体选项。", "Failed to read system fonts. Built-in font options are used."));
       })
       .finally(() => {

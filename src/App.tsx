@@ -33,6 +33,7 @@ import { useUpdateStore } from "./stores/updateStore";
 import { useReplayStore } from "./stores/replayStore";
 import { useTerminalStore, type CliHookPayload } from "./stores/terminalStore";
 import { useModelPricingStore } from "./stores/modelPricingStore";
+import { debugConsoleWarn } from "./lib/debugConsole";
 import { createPerfMarker, logWarn } from "./lib/logger";
 import { getContrastRatioFromHex, MIN_APPLY_CONTRAST_RATIO } from "./lib/contrast";
 import { translateCurrent, useI18n } from "./lib/i18n";
@@ -231,7 +232,7 @@ async function sendSystemNotification(payload: CliHookPayload, tabId: string | n
       permissionGranted = permission === "granted";
     }
     if (!permissionGranted) {
-      console.warn("[System Notification] Permission not granted");
+      debugConsoleWarn("[System Notification] Permission not granted");
       return;
     }
 
@@ -244,7 +245,7 @@ async function sendSystemNotification(payload: CliHookPayload, tabId: string | n
       await invoke("send_notification_via_windows", { title, body });
     }
   } catch (err) {
-    console.warn("[System Notification] Failed to send:", err);
+    debugConsoleWarn("[System Notification] Failed to send:", err);
   }
 }
 

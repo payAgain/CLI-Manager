@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
+import { debugConsoleLog, debugConsoleWarn } from "../lib/debugConsole";
 import type { GitFileChange, GitTreeNode, GitBranchStatus, GitPullStrategy } from "../lib/types";
 import { useSettingsStore } from "./settingsStore";
 
@@ -232,7 +233,7 @@ export const useGitStore = create<GitStore>((set, get) => ({
     if (silent) {
       set({ currentProjectPath: projectPath });
     } else {
-      console.log(`[GitStore] 开始获取 Git 变更, projectPath: "${projectPath}"`);
+      debugConsoleLog(`[GitStore] 开始获取 Git 变更, projectPath: "${projectPath}"`);
       set({ loading: true, error: null, currentProjectPath: projectPath });
     }
 
@@ -279,7 +280,7 @@ export const useGitStore = create<GitStore>((set, get) => ({
         set({ branchStatus });
       }
     } catch (err) {
-      console.warn(`[GitStore] 获取分支状态失败:`, err);
+      debugConsoleWarn(`[GitStore] 获取分支状态失败:`, err);
       if (get().currentProjectPath === projectPath) {
         set({ branchStatus: null });
       }

@@ -24,6 +24,7 @@ import {
 import { backgroundAssetUrl } from "../lib/assetUrl";
 import { TERMINAL_FILE_PATH_MIME } from "../lib/aiPathFormatter";
 import { resolveManualDirectCodexEnterData } from "../lib/codexManualInput";
+import { debugConsoleWarn } from "../lib/debugConsole";
 import { useI18n } from "../lib/i18n";
 import { normalizeTerminalFontFamily } from "../lib/terminalFontFamily";
 import { endTerminalFileDrag, getTerminalFileDragText } from "../lib/terminalFileDrag";
@@ -1047,7 +1048,7 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
       const now = Date.now();
       if (now - activeWriteQueueLastDropLogAtRef.current >= ACTIVE_WRITE_QUEUE_LOG_INTERVAL_MS) {
         activeWriteQueueLastDropLogAtRef.current = now;
-        console.warn("[oom-diagnostics:webview]", {
+        debugConsoleWarn("[oom-diagnostics:webview]", {
           area: "xterm",
           phase: "activeWriteQueueTrim",
           sessionId,
