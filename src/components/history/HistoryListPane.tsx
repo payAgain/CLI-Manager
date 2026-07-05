@@ -519,6 +519,7 @@ export function HistoryListPane({
     count: rows.length,
     getScrollElement: () => sessionListRef.current,
     estimateSize: (index) => rowHeight(rows[index] ?? { type: "loading", id: "fallback" }),
+    measureElement: (element) => element.getBoundingClientRect().height,
     overscan: 10,
     getItemKey: (index) => rows[index]?.id ?? index,
   });
@@ -777,9 +778,10 @@ export function HistoryListPane({
             return (
               <div
                 key={virtualRow.key}
+                ref={rowVirtualizer.measureElement}
+                data-index={virtualRow.index}
                 className="absolute left-0 top-0 w-full"
                 style={{
-                  height: virtualRow.size,
                   transform: `translateY(${virtualRow.start}px)`,
                 }}
               >
