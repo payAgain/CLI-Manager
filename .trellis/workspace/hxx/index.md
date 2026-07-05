@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 25
-- **Last Active**: 2026-07-03
+- **Total Sessions**: 26
+- **Last Active**: 2026-07-05
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~849 | Active |
+| `journal-1.md` | ~882 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 26 | 2026-07-05 | Git 多子仓库监控与嵌套仓库兼容 | `0d7ed9c` | `master` |
 | 25 | 2026-07-03 | Fix subagent split theme adaptation | `b942c35`, `ebedb2c`, `a5c9357` | `master` |
 | 24 | 2026-06-30 | 优化 Replay 侧栏 UI 与快照查看 | `81c3258` | `master` |
 | 23 | 2026-06-30 | 完成 Issue 70 项目列表搜索与终端聚焦 | `56b696b`, `5fc43a3` | `master` |
