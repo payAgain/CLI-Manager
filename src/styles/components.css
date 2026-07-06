@@ -452,7 +452,8 @@
     );
   box-shadow:
     inset 0 1px 0 color-mix(in srgb, var(--terminal-theme-foreground, #f8fafc) 12%, transparent),
-    0 14px 36px color-mix(in srgb, var(--terminal-theme-accent, var(--primary)) 16%, transparent);
+    0 12px 24px rgba(0, 0, 0, 0.22),
+    0 2px 8px rgba(0, 0, 0, 0.18);
 }
 
 .ui-terminal-well .ui-empty-state-title {
@@ -473,7 +474,8 @@
   background: linear-gradient(180deg, #111827, #030712);
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.18),
-    0 14px 32px rgba(17, 24, 39, 0.18);
+    0 12px 24px rgba(17, 24, 39, 0.14),
+    0 2px 8px rgba(17, 24, 39, 0.12);
 }
 
 .ui-terminal-well[data-terminal-theme-tone="light"] .ui-empty-state-title {
