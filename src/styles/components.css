@@ -589,6 +589,31 @@
   border-left-color: color-mix(in srgb, var(--terminal-tab-accent-muted) 44%, transparent);
 }
 
+[data-theme="light"] .ui-terminal-pane-chrome .ui-terminal-tab-scroll-button,
+[data-theme="light"] .ui-terminal-pane-chrome .ui-terminal-tab-list-button {
+  color: color-mix(in srgb, var(--on-surface-variant) 82%, var(--on-surface) 18%);
+  border-color: color-mix(in srgb, var(--terminal-tab-border) 62%, transparent);
+  background-color: color-mix(in srgb, var(--surface-container-lowest) 72%, #fffaf2 28%);
+  box-shadow: none;
+}
+
+[data-theme="light"] .ui-terminal-pane-chrome .ui-terminal-tab-scroll-button:hover:not(:disabled),
+[data-theme="light"] .ui-terminal-pane-chrome .ui-terminal-tab-list-button:hover:not(:disabled) {
+  color: var(--on-surface);
+  border-color: color-mix(in srgb, var(--terminal-tab-accent) 32%, var(--terminal-tab-border) 68%);
+  background-color: color-mix(in srgb, var(--surface-container-lowest) 86%, var(--terminal-tab-accent) 14%);
+  box-shadow: none;
+}
+
+[data-theme="light"] .ui-terminal-pane-chrome .ui-terminal-tab-scroll-button-left {
+  border-right-color: color-mix(in srgb, var(--terminal-tab-border) 62%, transparent);
+}
+
+[data-theme="light"] .ui-terminal-pane-chrome .ui-terminal-tab-scroll-button-right,
+[data-theme="light"] .ui-terminal-pane-chrome .ui-terminal-tab-list-button {
+  border-left-color: color-mix(in srgb, var(--terminal-tab-border) 62%, transparent);
+}
+
 .ui-terminal-actions {
   border-left: 0;
   background-color: transparent;
@@ -3319,6 +3344,65 @@
     inset 0 1px 0 color-mix(in srgb, var(--terminal-theme-foreground, #f8fafc) 16%, transparent);
 }
 
+[data-theme="light"] .ui-terminal-chrome {
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--surface-container-lowest) 94%, #fff8ed 6%) 0%,
+      color-mix(in srgb, var(--surface-container-low) 82%, #fffaf2 18%) 100%
+    );
+  outline-color: color-mix(in srgb, var(--border) 42%, transparent);
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, white 80%, transparent),
+    inset 0 -1px 0 color-mix(in srgb, var(--border) 38%, transparent);
+}
+
+[data-theme="light"] .ui-terminal-pane-chrome {
+  --terminal-tab-accent: color-mix(in srgb, var(--primary) 82%, #2563eb 18%);
+  --terminal-tab-accent-muted: color-mix(in srgb, var(--terminal-tab-accent) 24%, var(--border) 76%);
+  --terminal-tab-border: color-mix(in srgb, var(--border) 76%, #fffaf2 24%);
+  --terminal-tab-hover-bg: color-mix(in srgb, var(--surface-container-low) 76%, #fffaf2 24%);
+  --terminal-tab-selected-bg: var(--surface-container-lowest);
+  color: var(--on-surface);
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--surface-container-lowest) 92%, #fff8ed 8%) 0%,
+      color-mix(in srgb, var(--surface-container-low) 84%, #fffaf2 16%) 100%
+    );
+  outline-color: color-mix(in srgb, var(--border) 36%, transparent);
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, white 82%, transparent),
+    inset 0 -1px 0 color-mix(in srgb, var(--border) 42%, transparent);
+}
+
+[data-theme="light"] .ui-terminal-pane-chrome .ui-tab-trigger {
+  color: color-mix(in srgb, var(--on-surface-variant) 82%, var(--on-surface) 18%);
+  border-color: color-mix(in srgb, var(--terminal-tab-border) 64%, transparent);
+  background-color: color-mix(in srgb, var(--surface-container-low) 70%, #fffaf2 30%);
+  box-shadow: none;
+  transform: none;
+}
+
+[data-theme="light"] .ui-terminal-pane-chrome .ui-tab-trigger:hover:not([data-selected="true"]) {
+  color: var(--on-surface);
+  border-color: color-mix(in srgb, var(--terminal-tab-border) 84%, transparent);
+  background-color: var(--terminal-tab-hover-bg);
+  box-shadow: none;
+  transform: none;
+}
+
+[data-theme="light"] .ui-terminal-pane-chrome .ui-tab-trigger[data-selected="true"] {
+  color: var(--on-surface);
+  border-color: color-mix(in srgb, var(--terminal-tab-accent) 42%, var(--terminal-tab-border) 58%);
+  background-color: var(--terminal-tab-selected-bg);
+  box-shadow:
+    0 1px 3px color-mix(in srgb, var(--terminal-tab-accent) 14%, transparent),
+    inset 0 0 0 1px color-mix(in srgb, var(--terminal-tab-accent) 18%, transparent),
+    inset 0 1px 0 color-mix(in srgb, white 86%, transparent);
+  transform: none;
+}
+
 .ui-terminal-pane-chrome .ui-tab-trigger[data-session-kind="file-editor"] {
   color: color-mix(in srgb, var(--terminal-theme-foreground, #f8fafc) 94%, var(--terminal-tab-accent) 6%);
 }
@@ -3718,6 +3802,16 @@
 
 .ui-terminal-tab-title {
   text-shadow: 0 1px 0 color-mix(in srgb, black 10%, transparent);
+}
+
+[data-theme="light"] .ui-terminal-pane-chrome .ui-terminal-tab-close,
+[data-theme="light"] .ui-terminal-pane-chrome .text-on-surface-variant,
+[data-theme="light"] .ui-terminal-pane-chrome .text-text-muted {
+  color: color-mix(in srgb, var(--on-surface-variant) 86%, var(--on-surface) 14%);
+}
+
+[data-theme="light"] .ui-terminal-pane-chrome .ui-terminal-tab-title {
+  text-shadow: none;
 }
 
 .ui-terminal-tab-list-item {
