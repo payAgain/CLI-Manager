@@ -16,6 +16,7 @@ import { openWindowsTerminal } from "../../lib/externalTerminal";
 import { resolveProjectStartupCommand } from "../../lib/projectStartupCommand";
 import { shouldSidebarBootstrapProjects } from "../../lib/projectLoadPolicy";
 import { getProviderSwitchAppType, parseProjectEnvVars } from "../../lib/providerSwitching";
+import { appendSyncedHistoryContextArg } from "../../lib/syncedHistoryContext";
 import { TreeContext, type TreeActions } from "./TreeContext";
 import { Portal } from "../ui/Portal";
 import { toast } from "sonner";
@@ -129,6 +130,30 @@ function getSyncedSessionKeysForProject(
   return groupSyncedExternalSessions(syncedSessions, [project])
     .byProjectId.get(project.id)
     ?.flatMap((group) => group.sessions.map((session) => session.key)) ?? [];
+}
+
+function getSyncedHistoryGroupForProject(
+  project: Project,
+  syncedSessions: ReturnType<typeof useExternalSessionSyncStore.getState>["syncedSessions"]
+) {
+  const source = getProviderSwitchAppType(project);
+  if (!source) return null;
+  return groupSyncedExternalSessions(syncedSessions, [project])
+    .byProjectId.get(project.id)
+    ?.find((group) => group.sessions[0]?.source === source) ?? null;
+}
+
+async function buildSyncedAwareProjectSplitOptions(project: Project): Promise<SplitTerminalOptions> {
+  const options = buildProjectSplitOptions(project);
+  const source = getProviderSwitchAppType(project) ?? undefined;
+  const syncedGroup = getSyncedHistoryGroupForProject(
+    project,
+    useExternalSessionSyncStore.getState().syncedSessions
+  );
+  return {
+    ...options,
+    startupCmd: await appendSyncedHistoryContextArg(source, options.startupCmd, syncedGroup, options.shell),
+  };
 }
 
 function collectGroupProjectIds(groupId: string, groups: Group[], projects: Project[]): Set<string> {
@@ -693,19 +718,29 @@ export function Sidebar({
 
   const openProjectExternally = useCallback(async (items: Project[]) => {
     if (items.length === 0) return;
-    await openWindowsTerminal(
-      items.map((project) => ({
+    const launchItems = await Promise.all(items.map(async (project) => {
+      const source = getProviderSwitchAppType(project) ?? undefined;
+      const startupCmd = await appendSyncedHistoryContextArg(
+        source,
+        resolveProjectStartupCommand(project, { includeCodexProviderProfile: false }),
+        getSyncedHistoryGroupForProject(project, useExternalSessionSyncStore.getState().syncedSessions),
+        project.shell || undefined
+      );
+      return {
         cwd: project.path,
         title: project.cli_tool ? `${project.name} (${project.cli_tool})` : project.name,
-        startupCmd: resolveProjectStartupCommand(project, { includeCodexProviderProfile: false }),
+        startupCmd,
         shell: project.shell || undefined,
-      }))
+      };
+    }));
+    await openWindowsTerminal(
+      launchItems
     );
     closeHistory();
   }, [closeHistory]);
 
   const openProjectInternal = async (project: Project, targetPaneId?: string) => {
-    const options = buildProjectSplitOptions(project);
+    const options = await buildSyncedAwareProjectSplitOptions(project);
 
     await createSession(
       options.projectId,
@@ -741,7 +776,7 @@ export function Sidebar({
   const handleSplitProject = useCallback(
     async (project: Project, direction: TerminalPaneSplitDirection) => {
       if (!activeSessionId || compactMode || useExternalTerminal) return;
-      await splitTerminal(activeSessionId, direction, buildProjectSplitOptions(project));
+      await splitTerminal(activeSessionId, direction, await buildSyncedAwareProjectSplitOptions(project));
       closeHistory();
     },
     [activeSessionId, closeHistory, compactMode, splitTerminal, useExternalTerminal]

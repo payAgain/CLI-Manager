@@ -13,6 +13,7 @@ import { useSessionStore } from "./sessionStore";
 import { defaultShellForOs, getOsPlatform, normalizeShellForOs, normalizeShellKey, type OsPlatform, type ShellKey } from "../lib/shell";
 import { getClaudeProviderOverride, getCodexProviderOverride, getProviderSwitchAppType, isExactCodexProject, parseProjectEnvVars } from "../lib/providerSwitching";
 import { useProjectStore } from "./projectStore";
+import { appendSyncedHistoryContextArg } from "../lib/syncedHistoryContext";
 import {
   addSessionToPaneTree,
   collectPaneLeaves,
@@ -1267,9 +1268,9 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
 
     const sortedSessions = [...group.sessions].sort((a, b) => b.updatedAt - a.updatedAt);
     const latestSession = sortedSessions[0];
-    const startupCmd = sourceTool(firstSession.source);
     const cwd = latestSession?.cwd || group.cwd || project?.path;
     const shell = project?.shell && project.shell !== "powershell" ? project.shell : undefined;
+    const startupCmd = await appendSyncedHistoryContextArg(sourceTool(firstSession.source), sourceTool(firstSession.source), group, shell);
     const envVars = project ? parseProjectEnvVars(project) : undefined;
     const launch = await createDetachedPtyProcess({
       projectId: project?.id,
