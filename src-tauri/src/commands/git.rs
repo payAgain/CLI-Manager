@@ -1973,6 +1973,16 @@ pub struct GitBranchStatus {
     pub pending_op: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitBranchInfo {
+    pub name: String,
+    pub branch_type: String,
+    pub current: bool,
+    pub upstream: Option<String>,
+    pub remote: Option<String>,
+}
+
 /// 查询当前分支名、upstream 及 ahead/behind。全只读，不触网。
 ///
 /// 边界：非仓库 → 错误；unborn（无提交）→ branch=None 全 0；
@@ -2083,6 +2093,11 @@ fn map_git_cli_error(stderr: &str) -> String {
         "not_fast_forward"
     } else if s.contains("no upstream") || s.contains("has no upstream") {
         "no_upstream"
+    } else if s.contains("would be overwritten by checkout")
+        || s.contains("would be overwritten by merge")
+        || s.contains("please commit your changes or stash them")
+    {
+        "checkout_conflict"
     } else if s.contains("could not read from remote")
         || s.contains("does not appear to be a git repository")
         || s.contains("no configured push destination")
@@ -2144,7 +2159,140 @@ fn validate_branch_name(branch: &str) -> Result<(), String> {
     if branch.chars().any(|c| c.is_whitespace() || c.is_control()) {
         return Err("invalid_branch".into());
     }
+    if branch.contains("..")
+        || branch.contains("//")
+        || branch.contains("@{")
+        || branch.ends_with('/')
+        || branch.ends_with('.')
+        || branch
+            .chars()
+            .any(|c| matches!(c, '~' | '^' | ':' | '?' | '*' | '[' | '\\'))
+    {
+        return Err("invalid_branch".into());
+    }
     Ok(())
+}
+
+fn validate_branch_name_with_git(project_path: &str, branch: &str) -> Result<(), String> {
+    validate_branch_name(branch)?;
+    run_git_cli(project_path, &["check-ref-format", "--branch", branch])
+        .map(|_| ())
+        .map_err(|_| "invalid_branch".to_string())
+}
+
+fn split_remote_branch(branch: &str) -> Option<(&str, &str)> {
+    let (remote, name) = branch.split_once('/')?;
+    (!remote.is_empty() && !name.is_empty()).then_some((remote, name))
+}
+
+#[tauri::command]
+pub async fn git_list_branches(project_path: String) -> Result<Vec<GitBranchInfo>, String> {
+    tokio::task::spawn_blocking(move || {
+        let path = Path::new(&project_path);
+        if !path.exists() {
+            return Err("path_not_found".to_string());
+        }
+        let repo = open_git_repo(path).map_err(|e| format!("open_repo_failed: {e}"))?;
+        let current = repo_branch_name(&repo);
+        let mut branches = Vec::new();
+
+        let locals = repo
+            .branches(Some(git2::BranchType::Local))
+            .map_err(|e| format!("branch_list_failed: {e}"))?;
+        for item in locals {
+            let (branch, _) = item.map_err(|e| format!("branch_list_failed: {e}"))?;
+            let Some(name) = branch
+                .name()
+                .map_err(|e| format!("branch_name_failed: {e}"))?
+                .map(|value| value.to_string())
+            else {
+                continue;
+            };
+            let upstream = branch
+                .upstream()
+                .ok()
+                .and_then(|up| up.name().ok().flatten().map(|value| value.to_string()));
+            branches.push(GitBranchInfo {
+                current: current.as_deref() == Some(name.as_str()),
+                name,
+                branch_type: "local".to_string(),
+                upstream,
+                remote: None,
+            });
+        }
+
+        let remotes = repo
+            .branches(Some(git2::BranchType::Remote))
+            .map_err(|e| format!("branch_list_failed: {e}"))?;
+        for item in remotes {
+            let (branch, _) = item.map_err(|e| format!("branch_list_failed: {e}"))?;
+            let Some(name) = branch
+                .name()
+                .map_err(|e| format!("branch_name_failed: {e}"))?
+                .map(|value| value.to_string())
+            else {
+                continue;
+            };
+            if name.ends_with("/HEAD") {
+                continue;
+            }
+            let remote = split_remote_branch(&name).map(|(remote, _)| remote.to_string());
+            branches.push(GitBranchInfo {
+                name,
+                branch_type: "remote".to_string(),
+                current: false,
+                upstream: None,
+                remote,
+            });
+        }
+
+        branches.sort_by(|a, b| {
+            a.branch_type
+                .cmp(&b.branch_type)
+                .then_with(|| a.name.cmp(&b.name))
+        });
+        Ok(branches)
+    })
+    .await
+    .map_err(|e| format!("task_failed: {e}"))?
+}
+
+#[tauri::command]
+pub async fn git_fetch(project_path: String) -> Result<String, String> {
+    tokio::task::spawn_blocking(move || run_git_cli(&project_path, &["fetch", "--prune"]))
+        .await
+        .map_err(|e| format!("task_failed: {e}"))?
+}
+
+#[tauri::command]
+pub async fn git_checkout_branch(
+    project_path: String,
+    branch: String,
+    remote: bool,
+) -> Result<String, String> {
+    tokio::task::spawn_blocking(move || {
+        validate_branch_name_with_git(&project_path, &branch)?;
+        if remote {
+            if split_remote_branch(&branch).is_none() {
+                return Err("invalid_branch".to_string());
+            }
+            run_git_cli(&project_path, &["checkout", "--track", &branch])
+        } else {
+            run_git_cli(&project_path, &["checkout", &branch])
+        }
+    })
+    .await
+    .map_err(|e| format!("task_failed: {e}"))?
+}
+
+#[tauri::command]
+pub async fn git_create_branch(project_path: String, branch: String) -> Result<String, String> {
+    tokio::task::spawn_blocking(move || {
+        validate_branch_name_with_git(&project_path, &branch)?;
+        run_git_cli(&project_path, &["checkout", "-b", &branch])
+    })
+    .await
+    .map_err(|e| format!("task_failed: {e}"))?
 }
 
 /// 推送当前分支。set_upstream=true 时 `push -u origin <branch>` 建立跟踪。
@@ -2304,7 +2452,7 @@ mod tests {
         collect_git_changes_from_repo, git_fork_worktree_snapshot, git_restore_worktree_snapshot,
         is_nested_repo_entry, parse_wsl_git_status, parse_wsl_numstat,
         remove_untracked_snapshot_file, scan_git_repository_paths, should_skip_diff_line_stats,
-        validate_repo_relative_path, validate_snapshot_branch_name,
+        validate_branch_name, validate_repo_relative_path, validate_snapshot_branch_name,
         GIT_DIFF_LINE_STATS_STATUS_LIMIT,
     };
     use git2::{IndexAddOption, Repository, Signature};
@@ -2428,6 +2576,35 @@ mod tests {
     fn accepts_normal_relative_path() {
         assert!(validate_repo_relative_path("src/main.rs").is_ok());
         assert!(validate_repo_relative_path("a/b/c.txt").is_ok());
+    }
+
+    #[test]
+    fn accepts_valid_branch_names() {
+        assert!(validate_branch_name("feature/git-panel").is_ok());
+        assert!(validate_branch_name("origin/main").is_ok());
+    }
+
+    #[test]
+    fn rejects_invalid_branch_names() {
+        assert_eq!(validate_branch_name("").unwrap_err(), "empty_branch");
+        assert_eq!(validate_branch_name("-bad").unwrap_err(), "invalid_branch");
+        assert_eq!(
+            validate_branch_name("bad branch").unwrap_err(),
+            "invalid_branch"
+        );
+        assert_eq!(
+            validate_branch_name("bad..branch").unwrap_err(),
+            "invalid_branch"
+        );
+        assert_eq!(
+            validate_branch_name("bad:branch").unwrap_err(),
+            "invalid_branch"
+        );
+        assert_eq!(
+            validate_branch_name("bad\\branch").unwrap_err(),
+            "invalid_branch"
+        );
+        assert_eq!(validate_branch_name("bad/").unwrap_err(), "invalid_branch");
     }
 
     #[test]

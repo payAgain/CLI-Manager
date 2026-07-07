@@ -564,3 +564,11 @@ export interface GitBranchStatus {
   /** 进行中的操作："merge" / "rebase"；无则 null。驱动冲突横幅与「中止/继续」入口。 */
   pendingOp: "merge" | "rebase" | null;
 }
+
+export interface GitBranchInfo {
+  name: string;
+  branchType: "local" | "remote";
+  current: boolean;
+  upstream: string | null;
+  remote: string | null;
+}

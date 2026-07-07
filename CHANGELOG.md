@@ -42,6 +42,10 @@
 - **Worktree 丢弃权限失败修复**：丢弃 worktree 前会先关闭关联终端页签，后端对 Windows 文件锁导致的 `Permission denied` / `failed to delete` 做有限重试；若 Git 登记已被上次删除清掉但只残留空目录，也会按 stale 记录清理并删除 `wt/` 分支。
 - **Worktree 损坏目录丢弃修复**：当 Git 仍登记了 worktree 的 path/branch，但目录内 `.git` 已缺失或 Git 返回 `is not a working tree` 时，丢弃流程会按已登记 stale worktree 清理目录、执行 `worktree prune` 并删除对应 `wt/` 分支。
 
+### Git 变更
+
+- **分支工作流增强**：Git 变更面板当前分支区域新增分支菜单，支持查看本地/远程分支、搜索分支、切换本地分支、从远程分支 checkout 并建立跟踪分支、从当前 HEAD 新建并切换分支，以及执行安全 `fetch --prune` 刷新远端信息；checkout 遇到本地改动会被覆盖时不会强制切换，会提示先提交或暂存。分支菜单输入状态已从主面板渲染中隔离，长分支列表按前 80 条渲染并提示继续搜索，降低输入和滚动卡顿。
+
 ### 修复
 
 - **项目加载失败迁移修复**：启动加载项目列表前会预检并修复已知 SQLite migration 13-15 分支编号漂移，将 `cli_args`、Worktree 隔离表和历史收藏快照的迁移记录对齐到当前版本，避免出现 `migration 13 was previously applied but has been modified` 后项目树加载失败。

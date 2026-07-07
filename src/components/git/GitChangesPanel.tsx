@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { CSSProperties } from "react";
+import type { CSSProperties, KeyboardEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { toast } from "sonner";
-import { RefreshCw, GitBranch, Undo2, Files, FilePen, FilePlus, FileMinus, GitCommitHorizontal, ArrowUp, ArrowDown, Upload, Download, ChevronDown, GitMerge, Check, X, FolderTree, FolderGit2, Layers } from "lucide-react";
+import { RefreshCw, GitBranch, Undo2, Files, FilePen, FilePlus, FileMinus, GitCommitHorizontal, ArrowUp, ArrowDown, Upload, Download, ChevronDown, GitMerge, Check, X, FolderTree, FolderGit2, Layers, Plus, Search } from "lucide-react";
 import { useGitStore } from "../../stores/gitStore";
 import { useProjectStore } from "../../stores/projectStore";
 import { useSettingsStore } from "../../stores/settingsStore";
@@ -18,7 +18,7 @@ import { TERM, EmptyHint, panelColorTint } from "../stats/termStatsUi";
 import { debugConsoleWarn } from "../../lib/debugConsole";
 import { useI18n, type TranslationKey } from "../../lib/i18n";
 import { findProjectByPath } from "../../lib/terminalProject";
-import type { GitTreeNode, GitPullStrategy } from "../../lib/types";
+import type { GitTreeNode, GitPullStrategy, GitBranchInfo } from "../../lib/types";
 
 interface GitChangesPanelProps {
   open: boolean;
@@ -30,6 +30,7 @@ interface GitChangesPanelProps {
 // 降级慢轮询间隔：仅当 fs-watcher 初始化失败（网络盘/WSL 等 notify 不可用）时启用。
 const FALLBACK_POLL_INTERVAL_MS = 15000;
 const FILTER_LABEL_HIDE_WIDTH = 260;
+const BRANCH_MENU_SECTION_LIMIT = 80;
 const TERMINAL_PANEL_SCROLLBAR_STYLE = {
   "--ui-scrollbar-thumb": TERM.border,
   "--ui-scrollbar-track": TERM.bg,
@@ -44,6 +45,8 @@ function formatGitNetError(prefix: string, raw: string, t: Translate): string {
   if (raw.includes("no_upstream")) return t("git.error.noUpstream", { prefix });
   if (raw.includes("no_remote")) return t("git.error.noRemote", { prefix });
   if (raw.includes("pull_conflict")) return t("git.error.pullConflict", { prefix });
+  if (raw.includes("checkout_conflict")) return t("git.error.checkoutConflict", { prefix });
+  if (raw.includes("invalid_branch")) return t("git.error.invalidBranch", { prefix });
   if (raw.includes("git_not_found")) return t("git.error.gitNotFound", { prefix });
   return t("git.error.generic", { prefix, message: raw.replace(/^[a-z_]+:\s*/, "") });
 }
@@ -61,6 +64,195 @@ function collectDirectoryPaths(nodes: GitTreeNode[], treeId: string): string[] {
 
   visit(nodes);
   return paths;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function makeBranchSearchMatcher(query: string): RegExp | null {
+  const trimmed = query.trim();
+  if (!trimmed) return null;
+  return new RegExp(escapeRegExp(trimmed), "i");
+}
+
+function branchMatchesSearch(branch: GitBranchInfo, matcher: RegExp | null): boolean {
+  if (!matcher) return true;
+  return matcher.test(branch.name) || (branch.upstream ? matcher.test(branch.upstream) : false);
+}
+
+interface GitBranchMenuProps {
+  branches: GitBranchInfo[];
+  branchLoading: boolean;
+  fetching: boolean;
+  branchActionBusy: boolean;
+  t: Translate;
+  onClose: () => void;
+  onFetch: () => void;
+  onCheckout: (branch: GitBranchInfo) => void;
+  onCreate: (branch: string) => void;
+}
+
+function GitBranchMenu({
+  branches,
+  branchLoading,
+  fetching,
+  branchActionBusy,
+  t,
+  onClose,
+  onFetch,
+  onCheckout,
+  onCreate,
+}: GitBranchMenuProps) {
+  const [branchQuery, setBranchQuery] = useState("");
+  const branchSearchMatcher = useMemo(() => makeBranchSearchMatcher(branchQuery), [branchQuery]);
+  const branchQueryValue = branchQuery.trim();
+
+  const localBranches = useMemo(
+    () => branches.filter((branch) => branch.branchType === "local" && branchMatchesSearch(branch, branchSearchMatcher)),
+    [branches, branchSearchMatcher],
+  );
+  const remoteBranches = useMemo(
+    () => branches.filter((branch) => branch.branchType === "remote" && branchMatchesSearch(branch, branchSearchMatcher)),
+    [branches, branchSearchMatcher],
+  );
+  const visibleLocalBranches = localBranches.slice(0, BRANCH_MENU_SECTION_LIMIT);
+  const visibleRemoteBranches = remoteBranches.slice(0, BRANCH_MENU_SECTION_LIMIT);
+  const firstCheckoutBranch = visibleLocalBranches.find((branch) => !branch.current) ?? visibleRemoteBranches[0] ?? null;
+  const localBranchExists = branchQueryValue
+    ? branches.some((branch) => branch.branchType === "local" && branch.name === branchQueryValue)
+    : false;
+  const canCreateBranchFromQuery = branchQueryValue.length > 0 && !localBranchExists;
+  const hasSearchResults = localBranches.length > 0 || remoteBranches.length > 0;
+
+  const handleSearchKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    if (firstCheckoutBranch) onCheckout(firstCheckoutBranch);
+  };
+
+  return (
+    <>
+      <div className="fixed inset-0 z-[19]" onClick={onClose} aria-hidden="true" />
+      <div
+        className="ui-thin-scroll absolute bottom-full left-0 z-20 mb-1 flex max-h-[360px] w-[280px] max-w-[calc(100vw-24px)] flex-col overflow-y-auto rounded border py-1 shadow-lg"
+        style={{ backgroundColor: TERM.bg, borderColor: TERM.dim }}
+        role="menu"
+      >
+        <div className="flex flex-col gap-1 border-b px-2 pb-2 pt-1.5" style={{ borderColor: TERM.dim }}>
+          <button
+            type="button"
+            onClick={onFetch}
+            disabled={branchActionBusy}
+            className="ui-focus-ring flex items-center justify-between gap-2 rounded px-2 py-1 text-left text-[11px] transition-opacity hover:opacity-80 disabled:opacity-40"
+            style={{ color: TERM.cyan, border: `1px solid ${panelColorTint(TERM.cyan, 28)}` }}
+          >
+            <span className="flex items-center gap-1.5">
+              <RefreshCw size={11} className={fetching ? "animate-spin" : ""} />
+              {fetching ? t("git.branch.fetching") : t("git.branch.fetch")}
+            </span>
+          </button>
+
+          <div className="flex items-center gap-1 rounded px-2 py-1" style={{ border: `1px solid ${TERM.dim}` }}>
+            <Search size={12} className="shrink-0" style={{ color: TERM.dim }} />
+            <input
+              value={branchQuery}
+              onChange={(event) => setBranchQuery(event.target.value)}
+              onKeyDown={handleSearchKeyDown}
+              placeholder={t("git.branch.searchPlaceholder")}
+              className="min-w-0 flex-1 bg-transparent text-[11px] outline-none"
+              style={{ color: TERM.fg }}
+            />
+          </div>
+
+          {canCreateBranchFromQuery && (
+            <button
+              type="button"
+              onClick={() => onCreate(branchQueryValue)}
+              disabled={branchActionBusy}
+              className="ui-focus-ring flex items-center gap-1.5 rounded px-2 py-1 text-left text-[11px] transition-opacity hover:opacity-80 disabled:opacity-40"
+              style={{ color: TERM.green, border: `1px solid ${panelColorTint(TERM.green, 34)}` }}
+              title={t("git.branch.create")}
+              aria-label={t("git.branch.create")}
+            >
+              <Plus size={12} />
+              <span className="min-w-0 flex-1 truncate">{t("git.branch.createFromSearch", { branch: branchQueryValue })}</span>
+            </button>
+          )}
+        </div>
+
+        {!hasSearchResults && branchSearchMatcher ? (
+          <div className="px-3 py-2 text-[11px]" style={{ color: TERM.dim }}>{t("git.branch.noSearchResults")}</div>
+        ) : (
+          <>
+            <div className="px-2 py-1 text-[10px] font-bold uppercase tracking-wide" style={{ color: TERM.dim }}>
+              {t("git.branch.local")}
+            </div>
+            {branchLoading && branches.length === 0 ? (
+              <div className="px-3 py-1 text-[11px]" style={{ color: TERM.dim }}>{t("common.loading")}</div>
+            ) : localBranches.length === 0 ? (
+              <div className="px-3 py-1 text-[11px]" style={{ color: TERM.dim }}>{t("git.branch.emptyLocal")}</div>
+            ) : (
+              <>
+                {visibleLocalBranches.map((item) => (
+                  <button
+                    key={`local:${item.name}`}
+                    type="button"
+                    role="menuitem"
+                    onClick={() => onCheckout(item)}
+                    disabled={branchActionBusy || item.current}
+                    className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[11px] transition-opacity hover:opacity-80 disabled:opacity-50"
+                    style={{
+                      color: item.current ? TERM.cyan : TERM.fg,
+                      backgroundColor: item.current ? panelColorTint(TERM.cyan, 12) : "transparent",
+                    }}
+                  >
+                    <span className="min-w-0 flex-1 truncate">{item.name}</span>
+                    {item.upstream && <span className="shrink-0 text-[9px]" style={{ color: TERM.dim }}>{item.upstream}</span>}
+                    {item.current && <Check size={11} className="shrink-0" />}
+                  </button>
+                ))}
+                {localBranches.length > visibleLocalBranches.length && (
+                  <div className="px-3 py-1 text-[10px]" style={{ color: TERM.dim }}>
+                    {t("git.branch.moreResults", { count: localBranches.length - visibleLocalBranches.length })}
+                  </div>
+                )}
+              </>
+            )}
+
+            <div className="mt-1 border-t px-2 py-1 text-[10px] font-bold uppercase tracking-wide" style={{ color: TERM.dim, borderColor: TERM.dim }}>
+              {t("git.branch.remote")}
+            </div>
+            {remoteBranches.length === 0 ? (
+              <div className="px-3 py-1 text-[11px]" style={{ color: TERM.dim }}>{t("git.branch.emptyRemote")}</div>
+            ) : (
+              <>
+                {visibleRemoteBranches.map((item) => (
+                  <button
+                    key={`remote:${item.name}`}
+                    type="button"
+                    role="menuitem"
+                    onClick={() => onCheckout(item)}
+                    disabled={branchActionBusy}
+                    className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[11px] transition-opacity hover:opacity-80 disabled:opacity-50"
+                    style={{ color: TERM.fg }}
+                  >
+                    <span className="min-w-0 flex-1 truncate">{item.name}</span>
+                    <span className="shrink-0 text-[9px]" style={{ color: TERM.dim }}>{t("git.branch.checkoutRemote")}</span>
+                  </button>
+                ))}
+                {remoteBranches.length > visibleRemoteBranches.length && (
+                  <div className="px-3 py-1 text-[10px]" style={{ color: TERM.dim }}>
+                    {t("git.branch.moreResults", { count: remoteBranches.length - visibleRemoteBranches.length })}
+                  </div>
+                )}
+              </>
+            )}
+          </>
+        )}
+      </div>
+    </>
+  );
 }
 
 export function GitChangesPanel({ open, projectPath, visible = true, embedded = false }: GitChangesPanelProps) {
@@ -88,9 +280,17 @@ export function GitChangesPanel({ open, projectPath, visible = true, embedded = 
     commit,
     committing,
     branchStatus,
+    branches,
     pushing,
     pulling,
+    fetching,
+    branchLoading,
+    checkingOutBranch,
+    creatingBranch,
     push,
+    fetchRemote,
+    checkoutBranch,
+    createBranch,
     pull,
     pullAbort,
     rebaseContinue,
@@ -103,6 +303,7 @@ export function GitChangesPanel({ open, projectPath, visible = true, embedded = 
     activeRepoPath,
     setActiveRepo,
     fetchRepositories,
+    fetchBranches,
   } = useGitStore();
   const { gitGroupBy, update: updateSettings } = useSettingsStore();
   const openFileProject = useFileExplorerStore((state) => state.openProject);
@@ -114,6 +315,7 @@ export function GitChangesPanel({ open, projectPath, visible = true, embedded = 
   const [discardTarget, setDiscardTarget] = useState<{ path: string; name: string; status: string } | null>(null);
   const [commitMsg, setCommitMsg] = useState("");
   const [pullMenuOpen, setPullMenuOpen] = useState(false);
+  const [branchMenuOpen, setBranchMenuOpen] = useState(false);
   const [groupByMenuOpen, setGroupByMenuOpen] = useState(false);
   const [repoMenuOpen, setRepoMenuOpen] = useState(false);
   const [hideFilterLabels, setHideFilterLabels] = useState(false);
@@ -130,10 +332,11 @@ export function GitChangesPanel({ open, projectPath, visible = true, embedded = 
       fetchChanges(projectPath);
       // 枚举项目根下的多仓库（面板打开 / 项目切换时刷新；fetchChanges 已先设定 currentProjectPath）。
       void fetchRepositories(projectPath);
+      void fetchBranches(projectPath);
     } else if (!open) {
       reset();
     }
-  }, [panelActive, open, projectPath, fetchChanges, fetchRepositories, reset]);
+  }, [panelActive, open, projectPath, fetchChanges, fetchRepositories, fetchBranches, reset]);
 
   useEffect(() => {
     const filterRow = filterRowRef.current;
@@ -297,6 +500,7 @@ export function GitChangesPanel({ open, projectPath, visible = true, embedded = 
   // 冲突态：存在冲突文件(C) 或 仓库处于合并/变基中 → 显示冲突横幅与中止/继续入口。
   const hasConflicts = changes.some((c) => c.status === "C");
   const pendingOp = branchStatus?.pendingOp ?? null;
+  const branchActionBusy = fetching || checkingOutBranch || creatingBranch;
 
   const handleToggleSelectAll = () => {
     if (selectAllState === "checked") {
@@ -356,6 +560,42 @@ export function GitChangesPanel({ open, projectPath, visible = true, embedded = 
     } catch (err) {
       const m = err instanceof Error ? err.message : String(err);
       toast.error(formatGitNetError(t("git.error.pushFailed"), m, t));
+    }
+  };
+
+  const handleFetchRemote = async () => {
+    if (branchActionBusy) return;
+    try {
+      await fetchRemote();
+      toast.success(t("git.toast.fetched"));
+    } catch (err) {
+      const m = err instanceof Error ? err.message : String(err);
+      toast.error(formatGitNetError(t("git.error.fetchFailed"), m, t));
+    }
+  };
+
+  const handleCheckoutBranch = async (branch: GitBranchInfo) => {
+    if (branchActionBusy || branch.current) return;
+    try {
+      await checkoutBranch(branch.name, branch.branchType === "remote");
+      setBranchMenuOpen(false);
+      toast.success(t("git.toast.checkedOutBranch", { branch: branch.name }));
+    } catch (err) {
+      const m = err instanceof Error ? err.message : String(err);
+      toast.error(formatGitNetError(t("git.error.checkoutFailed"), m, t));
+    }
+  };
+
+  const handleCreateBranch = async (branchName: string) => {
+    const branch = branchName.trim();
+    if (!branch || branchActionBusy) return;
+    try {
+      await createBranch(branch);
+      setBranchMenuOpen(false);
+      toast.success(t("git.toast.createdBranch", { branch }));
+    } catch (err) {
+      const m = err instanceof Error ? err.message : String(err);
+      toast.error(formatGitNetError(t("git.error.createBranchFailed"), m, t));
     }
   };
 
@@ -736,9 +976,34 @@ export function GitChangesPanel({ open, projectPath, visible = true, embedded = 
         const showPull = !detached && hasUpstream && behind > 0;
         return (
           <div className="flex shrink-0 items-center justify-between gap-2 border-t px-2 py-1.5" style={{ borderColor: TERM.dim }}>
-            <span className="flex min-w-0 items-center gap-1.5 text-[11px]" style={{ color: TERM.fg }}>
-              <GitBranch size={12} strokeWidth={2} style={{ color: TERM.dim }} className="shrink-0" />
-              <span className="truncate">{detached ? "detached HEAD" : branchLabel}</span>
+            <span className="relative flex min-w-0 items-center gap-1.5 text-[11px]" style={{ color: TERM.fg }}>
+              <button
+                type="button"
+                onClick={() => setBranchMenuOpen((value) => !value)}
+                className="ui-focus-ring flex min-w-0 items-center gap-1 rounded px-1 py-0.5 transition-colors"
+                style={{ color: TERM.fg, backgroundColor: branchMenuOpen ? panelColorTint(TERM.cyan, 10) : "transparent" }}
+                title={t("git.branch.switch")}
+                aria-label={t("git.branch.switch")}
+                aria-haspopup="menu"
+                aria-expanded={branchMenuOpen}
+              >
+                <GitBranch size={12} strokeWidth={2} style={{ color: TERM.dim }} className="shrink-0" />
+                <span className="truncate">{detached ? t("git.branch.detached") : branchLabel}</span>
+                <ChevronDown size={10} className="shrink-0" />
+              </button>
+              {branchMenuOpen && (
+                <GitBranchMenu
+                  branches={branches}
+                  branchLoading={branchLoading}
+                  fetching={fetching}
+                  branchActionBusy={branchActionBusy}
+                  t={t}
+                  onClose={() => setBranchMenuOpen(false)}
+                  onFetch={() => void handleFetchRemote()}
+                  onCheckout={(item) => void handleCheckoutBranch(item)}
+                  onCreate={(branch) => void handleCreateBranch(branch)}
+                />
+              )}
               {!detached && hasUpstream && (
                 <span className="flex shrink-0 items-center gap-1.5" style={{ color: TERM.dim }}>
                   <span className="flex items-center" style={{ color: ahead > 0 ? TERM.fg : TERM.dim }}>
