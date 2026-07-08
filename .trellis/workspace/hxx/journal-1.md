@@ -981,3 +981,37 @@ Added a Git changes right-click delete action for untracked files and directorie
 ### Next Steps
 
 - None - task complete
+
+
+## Session 30: Hook notification focused suppression setting
+
+**Date**: 2026-07-08
+**Task**: Hook notification focused suppression setting
+**Branch**: `master`
+
+### Summary
+
+Added a Hook setting to suppress OS notifications while CLI-Manager is focused, refreshed GitNexus metadata, validated with TypeScript and static checks, and archived the Trellis task.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `0ec2c7f` | (see git log) |
+| `58cab76` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 29
+- **Total Sessions**: 30
 - **Last Active**: 2026-07-08
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~983 | Active |
+| `journal-1.md` | ~1017 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 30 | 2026-07-08 | Hook notification focused suppression setting | `0ec2c7f`, `58cab76` | `master` |
 | 29 | 2026-07-08 | Git untracked delete menu | `99265f5` | `master` |
 | 28 | 2026-07-07 | V1.2.6 Git branch workflow Stage A | `9f2a103`, `4983802`, `4977506` | `master` |
 | 27 | 2026-07-05 | 性能优化：终端渲染与退出提速 | `8994fa5` | `feat/performance-optimization-split-lag-exit-memory` |
