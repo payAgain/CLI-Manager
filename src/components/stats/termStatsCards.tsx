@@ -490,19 +490,51 @@ export function TodayUsageCard({
           {t("common.loading")}
         </div>
       ) : stats && stats.sessions > 0 ? (
-        <div className="grid grid-cols-2 gap-1.5">
-          <StatChip
-            dotColor={TERM_PANEL.yellow}
-            label="Token"
-            value={formatCompactCount(stats.totalTokens)}
-            valueColor={TERM_PANEL.yellow}
-          />
-          <StatChip
-            dotColor={TERM_PANEL.green}
-            label={t("termStats.cost")}
-            value={formatCost(stats.totalCostUsd)}
-            valueColor={TERM_PANEL.green}
-          />
+        <div className="space-y-1.5">
+          <div className="grid grid-cols-2 gap-1.5">
+            <StatChip
+              dotColor={TERM_PANEL.yellow}
+              label="Token"
+              value={formatCompactCount(stats.totalTokens)}
+              valueColor={TERM_PANEL.yellow}
+            />
+            <StatChip
+              dotColor={TERM_PANEL.green}
+              label={t("termStats.cost")}
+              value={formatCost(stats.totalCostUsd)}
+              valueColor={TERM_PANEL.green}
+            />
+          </div>
+          <div className="grid grid-cols-2 gap-1.5">
+            <StatChip
+              dotColor={TERM_PANEL.green}
+              label={t("termStats.input")}
+              value={formatCompactCount(stats.inputTokens)}
+            />
+            <StatChip
+              dotColor={TERM_PANEL.yellow}
+              label={t("termStats.output")}
+              value={formatCompactCount(stats.outputTokens)}
+            />
+            <StatChip
+              dotColor={TERM_PANEL.blue}
+              label={t("termStats.cacheHit")}
+              value={formatCompactCount(stats.cacheReadTokens)}
+            />
+            <StatChip
+              dotColor={TERM_PANEL.magenta}
+              label={t("termStats.cacheWrite")}
+              value={formatCompactCount(stats.cacheCreationTokens)}
+            />
+            {stats.unpricedTokens > 0 && (
+              <StatChip
+                dotColor={TERM_PANEL.red}
+                label={t("termStats.unpriced")}
+                value={formatCompactCount(stats.unpricedTokens)}
+                valueColor={TERM_PANEL.red}
+              />
+            )}
+          </div>
         </div>
       ) : (
         <div className="text-[11px]" style={{ color: TERM_PANEL.dim }}>

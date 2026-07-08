@@ -589,6 +589,11 @@ export interface TodayProjectStats {
   sessions: number;
   totalTokens: number;
   totalCostUsd: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
+  unpricedTokens: number;
 }
 
 export interface FetchHistoryStatsOptions {
@@ -770,6 +775,11 @@ export async function fetchTodayProjectStats(
         stats.total_cache_read_tokens +
         stats.total_cache_creation_tokens,
       totalCostUsd: stats.total_cost_usd,
+      inputTokens: stats.total_input_tokens,
+      outputTokens: stats.total_output_tokens,
+      cacheReadTokens: stats.total_cache_read_tokens,
+      cacheCreationTokens: stats.total_cache_creation_tokens,
+      unpricedTokens: stats.total_unpriced_tokens,
     };
   } catch {
     return null;
