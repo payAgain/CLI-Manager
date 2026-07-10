@@ -39,6 +39,10 @@ Allowed project strategies:
 
 ```ts
 type WorktreeIsolationStrategy = "prompt" | "disabled" | "autoParallel" | "always";
+
+interface Settings {
+  projectWorktreeConfigEnabled: boolean; // defaults to true
+}
 ```
 
 #### Backend commands
@@ -130,6 +134,9 @@ type TreeNode =
 
 #### Isolation strategy
 
+- `settingsStore.projectWorktreeConfigEnabled=false` is a global frontend gate. Project create/edit forms hide the Worktree configuration section, and normal/split project launches must return the equivalent of strategy `disabled` before Git validation, prompts, or automatic creation.
+- The global gate does not erase project Worktree fields, delete existing Worktree records, hide existing Worktree tree entries, or disable explicit manual Worktree actions.
+
 | Strategy | Required behavior |
 |---|---|
 | `prompt` | If the project has a configured CLI tool and at least one existing same-project terminal session, ask whether to open in an isolated worktree. Direct-open must preserve legacy behavior. |
@@ -181,6 +188,7 @@ type TreeNode =
 |---|---|
 | `project_path` missing or not a Git repo | Return `path_not_found` / `open_repo_failed`; frontend opens normally only when validation says false. |
 | WSL UNC path or unsupported remote path | Return `unsupported_wsl`; no prompt/auto isolation. |
+| `projectWorktreeConfigEnabled=false` | Open the project directly; do not validate Git, prompt, or auto-create a Worktree. Preserve stored project Worktree fields. |
 | Invalid task name | Return `invalid_task_name`; no directory or branch is created. |
 | Branch already exists | Return Git failure; frontend asks for a different name or auto-generates a collision suffix. |
 | Worktree path already exists | Return `worktree_path_exists`; frontend must not reuse silently. |
@@ -200,6 +208,7 @@ type TreeNode =
 
 - Good: Project A has `cli_tool=codex` and one existing open Project A terminal. Opening another Project A terminal under `prompt` shows a worktree prompt; choosing isolate creates `wt/task-*`, opens the new PTY in that path, and displays a tab badge.
 - Base: Project A has `worktree_strategy=disabled`. Opening a terminal uses the original project path and existing startup command behavior, even when a CLI tool and same-project terminal already exist.
+- Base: global Worktree configuration is disabled while Project A stores `worktree_strategy=prompt` or `always`. Normal and split launches open directly, the project form hides Worktree controls, and the stored strategy remains unchanged.
 - Base: Project A has `cli_tool=codex` but no existing same-project terminals. Under `autoParallel`, opening a terminal uses the original project path and existing startup command behavior.
 - Base: Project A has no configured CLI tool. Ordinary shell/startup-command terminals never trigger `prompt` or `autoParallel` just because a prior tab exists or a command is running.
 - Base: Project A has `worktree_deps_prompt_enabled=0`. Creating/opening a worktree skips automatic dependency detection and never shows the dependency prompt.
@@ -220,6 +229,7 @@ type TreeNode =
 - Frontend static checks:
   - `npx tsc --noEmit` must pass after adding `WorktreeRecord`, `TreeNode` union changes, and `TerminalSession.worktreeId`.
   - new project defaults keep `worktree_strategy="disabled"` and `worktree_deps_prompt_enabled=0`.
+  - global Worktree configuration disabled gates both normal project opening and split-project opening before `shouldIsolateNewSession` can trigger prompt/auto behavior.
 - Rust checks:
   - `cargo check --manifest-path src-tauri/Cargo.toml`.
   - `cargo test --manifest-path src-tauri/Cargo.toml`.

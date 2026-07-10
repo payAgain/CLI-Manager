@@ -737,14 +737,19 @@ function App() {
       await useWorktreeStore.getState().loadWorktrees();
       await useWorktreeStore.getState().markMissingWorktrees();
 
-      // 3. 检测上次遗留的可恢复工作区标签：有则弹窗询问是否恢复，无则静默清空（保持现状体验）。
+      // 3. 恢复功能关闭时清理当前环境快照；开启时检测遗留标签并询问是否恢复。
       //    注意：此处不再无条件 clear()。原 clear 的初衷是"防止重建 PTY 并重跑 startupCmd"，
       //    但 Issue #123 的需求方已明确接受"恢复时重跑 startupCmd 换取无缝手感"这一取舍，故改为问询式恢复。
       const persistedSessions = useSessionStore.getState().sessions;
+      const terminalSessionRestoreEnabled = useSettingsStore.getState().terminalSessionRestoreEnabled;
       const hasRestorable = persistedSessions.some(
         (session) => (session.kind ?? "pty") === "pty"
       );
-      if (hasRestorable) {
+      if (!terminalSessionRestoreEnabled) {
+        await useSessionStore.getState().clear().catch((err) => {
+          logWarn("Failed to clear disabled terminal session restore snapshot", err);
+        });
+      } else if (hasRestorable) {
         if (!cancelled) setRestorePromptOpen(true);
       } else {
         await useSessionStore.getState().clear().catch((err) => {

@@ -11,7 +11,8 @@
 
 ### 2. Signatures
 
-- 持久化：`sessionStore.saveSessions(sessions)` 写 `~/.cli-manager/sessions.json` 的 `sessions` key（整对象落盘，仅按 `kind` 过滤伪会话，**不删字段**）。
+- 持久化：`sessionStore.saveSessions(sessions)` 写当前运行环境会话文件的 `sessions` key（安装版 `~/.cli-manager/sessions.json`，`tauri dev` 为 `~/.cli-manager/sessions.dev.json`；整对象落盘，仅按 `kind` 过滤伪会话，**不删字段**）。
+- 恢复开关：`settingsStore.terminalSessionRestoreEnabled: boolean`，默认 `true`。
 - 恢复入口：`terminalStore.restoreSessions(projectMap, projectHealth)`（由 `App.tsx` 启动问询弹窗 confirm 后调用；**非 dead code**，务必保持接线）。
 - 节流落盘：`sessionSnapshotPersistence.ts` — `registerTerminalSnapshotSource(sessionId, serialize)` / `markTerminalSnapshotDirty(id)` / `flushTerminalSnapshotsNow()`。
 - 分流判定：`detectCliResumeKind(startupCmd, project) -> "codex" | "claude" | null`。
@@ -28,6 +29,8 @@
 - resume 命令必须经 `prepareStartupCommandForPty` + `formatStartupInputForPty` 包装，禁止裸写。
 - 持续保存：定时节流 10s(`SNAPSHOT_THROTTLE_MS`)，脏检测跳过无新输出的终端，单终端尾部限行 `SNAPSHOT_MAX_LINES=2000`，仅有真实 PTY 会话时启动定时器。正常退出前 `flushTerminalSnapshotsNow()` 在 `pty_close_all` 之前强制落盘最终画面。
 - 启动问询：有可恢复真实 PTY 会话 → 弹窗询问；无 → 静默进入不弹窗。拒绝 → `sessionStore.clear()` 只清工作区快照，**不碰 SQLite `session_meta`**。
+- 环境隔离：Tauri `cfg(dev)` 必须选择 `sessions.dev.json`；安装包继续使用 `sessions.json`。开发版不得读取、迁移或清理安装版会话快照。
+- 开关关闭：启动时必须清理当前环境快照，不得显示恢复弹窗或调用 `terminalStore.restoreSessions`。重新开启后只恢复此后新保存的快照。
 - 恢复不等于任务续跑：PTY 子进程随应用关闭即销毁，退出期间不后台执行。CLI 会话靠 resume 续**对话上下文**（非续被打断的那次生成）。
 
 ### 4. Validation & Error Matrix
@@ -37,18 +40,23 @@
 - 项目不存在 / 路径无效 → 跳过或 toast 警告，不 crash。
 - 快照序列化单个失败 → 标回脏下轮重试，不拖垮整轮落盘。
 - 无可恢复会话 → 不弹窗、不空转定时器。
+- `terminalSessionRestoreEnabled=false` → 清理当前环境快照，不弹窗，不影响另一运行环境的 sessions 文件。
 
 ### 5. Good/Base/Bad Cases
 
 - Good: codex 会话关闭重开 → 走 `codex resume --no-alt-screen <id>`，CLI 自己重画上次对话且可继续。
 - Base: shell 会话关闭重开 → 贴回历史画面，可继续输入。
+- Base: 开发版启动时安装版存在 `sessions.json` → 不读取该文件，只检查 `sessions.dev.json`。
+- Base: 恢复开关关闭 → 当前环境快照被清理，启动不提示，SQLite 历史会话不受影响。
 - Bad: 给 codex/claude 会话贴 `initialTerminalOutput` 再裸重跑 → 历史被 TUI 重绘覆盖（本任务真机复现）。
 - Bad: `restoreSessions` 重建时漏带 `cliSessionId` → resume 永远走兜底 `--last`，可能续错会话。
 
 ### 6. Tests Required
 
 - `npx tsc --noEmit`（前端唯一静态校验）。
+- Rust：会话文件名选择测试必须断言安装环境为 `sessions.json`、开发环境为 `sessions.dev.json`。
 - 手动：codex/claude 会话关闭重开走 resume、历史不被清屏覆盖、可继续；shell 会话贴回历史；无会话不弹窗；拒绝后再启动不再询问同批旧标签且 `session_meta` 不受影响；强杀后恢复到 ≤10s 前快照。
+- 手动：分别运行安装版与 `tauri dev`，确认两边的恢复提示和清理操作互不影响；关闭恢复开关后重启确认不再提示。
 
 ### 7. Wrong vs Correct
 
