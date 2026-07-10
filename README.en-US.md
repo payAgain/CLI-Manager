@@ -379,7 +379,7 @@ Go to the [Releases](https://github.com/dark-hxx/CLI-Manager/releases) page and 
 
 #### Prerequisites
 
-- Node.js >= 18
+- Node.js >= 20
 - Rust >= 1.70
 - Operating system: Windows 10/11 | macOS | Linux
 
