@@ -47,6 +47,7 @@ import {
   useSettingsStore,
   type BatchLaunchPaneDirection,
   type CloseBehavior,
+  type TerminalSettingsSectionKey,
   type UnsplitBehavior,
 } from "../../../stores/settingsStore";
 import { TerminalBackgroundSection } from "./TerminalBackgroundSection";
@@ -60,15 +61,7 @@ import { useI18n } from "../../../lib/i18n";
 
 const SWATCH_KEYS = ["background", "foreground", "red", "green", "blue", "cyan"] as const;
 const TERMINAL_FONT_FALLBACK = "monospace";
-type TerminalSettingsSectionKey = "behavior" | "shells" | "themes" | "background";
 type TerminalThemeLibraryMode = "light" | "dark" | "system";
-
-const DEFAULT_EXPANDED_SECTIONS: Record<TerminalSettingsSectionKey, boolean> = {
-  behavior: true,
-  shells: false,
-  themes: false,
-  background: false,
-};
 
 const FONT_FAMILY_OPTIONS: { value: string; label: string; labelEn?: string }[] = [
   { value: "Cascadia Code, Consolas, monospace", label: "Cascadia Code（推荐）", labelEn: "Cascadia Code (Recommended)" },
@@ -146,38 +139,42 @@ function CollapsibleSettingsSection({
   collapsible?: boolean;
 }) {
   const headerContent = (
-    <Box>
-      <Text size="sm" fw={600} c="var(--on-surface)">
-        {title}
-      </Text>
-      {description && (
-        <Text mt={4} size="xs" c="var(--on-surface-variant)">
-          {description}
+    <>
+      <Box>
+        <Text size="sm" fw={600} c="var(--on-surface)">
+          {title}
         </Text>
+        {description && (
+          <Text mt={4} size="xs" c="var(--on-surface-variant)">
+            {description}
+          </Text>
+        )}
+      </Box>
+      {collapsible && (
+        <ChevronDown
+          size={18}
+          strokeWidth={1.8}
+          className={`shrink-0 text-text-muted transition-transform ${open ? "rotate-180" : ""}`}
+        />
       )}
-    </Box>
+    </>
   );
 
   return (
-    <section className={`ui-surface-card rounded-2xl border border-border p-4 ${className}`}>
+    <section className={`ui-surface-card rounded-2xl border border-border overflow-hidden ${className}`}>
       {collapsible ? (
         <button
           type="button"
           onClick={onToggle}
-          className="ui-focus-ring flex w-full items-center justify-between gap-3 rounded-lg text-left outline-none"
+          className="ui-focus-ring flex w-full items-center justify-between gap-3 p-4 text-left outline-none transition-colors hover:bg-surface-container-highest/50"
           aria-expanded={open}
         >
           {headerContent}
-          <ChevronDown
-            size={18}
-            strokeWidth={1.8}
-            className={`shrink-0 text-text-muted transition-transform ${open ? "rotate-180" : ""}`}
-          />
         </button>
       ) : (
-        headerContent
+        <div className="p-4">{headerContent}</div>
       )}
-      {(!collapsible || open) && <Box mt="md">{children}</Box>}
+      {(!collapsible || open) && <Box px="md" pb="md">{children}</Box>}
     </section>
   );
 }
@@ -205,6 +202,7 @@ export function ThemeSettingsPage() {
   const batchLaunchPaneDirection = useSettingsStore((s) => s.batchLaunchPaneDirection);
   const projectScopedTerminalViewEnabled = useSettingsStore((s) => s.projectScopedTerminalViewEnabled);
   const terminalShellProfiles = useSettingsStore((s) => s.terminalShellProfiles);
+  const terminalSettingsSectionsExpanded = useSettingsStore((s) => s.terminalSettingsSectionsExpanded);
   const update = useSettingsStore((s) => s.update);
   const setTerminalThemeMode = useSettingsStore((s) => s.setTerminalThemeMode);
   const [query, setQuery] = useState("");
@@ -214,15 +212,14 @@ export function ThemeSettingsPage() {
   const [systemFonts, setSystemFonts] = useState<SystemFontFamily[]>([]);
   const [systemFontsLoading, setSystemFontsLoading] = useState(false);
   const [systemFontsError, setSystemFontsError] = useState<string | null>(null);
-  const [expandedSections, setExpandedSections] =
-    useState<Record<TerminalSettingsSectionKey, boolean>>(DEFAULT_EXPANDED_SECTIONS);
   const [shellScanLoading, setShellScanLoading] = useState(false);
   const [shellScanError, setShellScanError] = useState<string | null>(null);
   const [customShellName, setCustomShellName] = useState("");
   const [customShellPath, setCustomShellPath] = useState("");
 
   const toggleSection = (key: TerminalSettingsSectionKey) => {
-    setExpandedSections((current) => ({ ...current, [key]: !current[key] }));
+    const nextExpanded = { ...terminalSettingsSectionsExpanded, [key]: !terminalSettingsSectionsExpanded[key] };
+    void update("terminalSettingsSectionsExpanded", nextExpanded);
   };
 
   const scanTerminalShellProfiles = async (platform = osPlatform) => {
@@ -635,7 +632,7 @@ export function ThemeSettingsPage() {
       <section className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
         <CollapsibleSettingsSection
           title={text("终端行为", "Terminal Behavior")}
-          open={expandedSections.behavior}
+          open={terminalSettingsSectionsExpanded.behavior}
           onToggle={() => toggleSection("behavior")}
           className="xl:col-start-1 xl:row-start-1"
         >
@@ -940,7 +937,7 @@ export function ThemeSettingsPage() {
         <CollapsibleSettingsSection
           title={text("Shell / 终端类型", "Shell / Terminal Types")}
           description={text("扫描并启用可在新建项目中选择的终端。", "Scan and enable terminal types shown when creating projects.")}
-          open={expandedSections.shells}
+          open={terminalSettingsSectionsExpanded.shells}
           onToggle={() => toggleSection("shells")}
           className="xl:col-start-1 xl:row-start-2"
         >
@@ -957,7 +954,7 @@ export function ThemeSettingsPage() {
 
         <CollapsibleSettingsSection
           title={text("终端主题库", "Terminal Theme Library")}
-          open={expandedSections.themes}
+          open={terminalSettingsSectionsExpanded.themes}
           onToggle={() => toggleSection("themes")}
           className="xl:col-start-1 xl:row-start-3"
         >
@@ -1101,7 +1098,7 @@ export function ThemeSettingsPage() {
         <div className="min-w-0 xl:col-start-1 xl:row-start-4">
           <CollapsibleSettingsSection
             title={text("终端背景", "Terminal Background")}
-            open={expandedSections.background}
+            open={terminalSettingsSectionsExpanded.background}
             onToggle={() => toggleSection("background")}
           >
           <TerminalBackgroundSection embedded />

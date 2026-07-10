@@ -76,6 +76,8 @@ export type SystemResourceCardKey =
   | "processes";
 export type TerminalPanelWidthKey = "merged" | "stats" | "git" | "replay" | "files" | "systemResources";
 export type TerminalPanelWidthSettings = Record<TerminalPanelWidthKey, number>;
+export type TerminalSettingsSectionKey = "behavior" | "shells" | "themes" | "background";
+export type TerminalSettingsSectionsExpanded = Record<TerminalSettingsSectionKey, boolean>;
 export const UI_FONT_SIZE_MIN = 11;
 export const UI_FONT_SIZE_MAX = 18;
 export const UI_FONT_SIZE_DEFAULT = 13;
@@ -93,6 +95,18 @@ export const TERMINAL_PANEL_WIDTH_DEFAULTS: TerminalPanelWidthSettings = {
   replay: 300,
   files: 220,
   systemResources: 300,
+};
+export const TERMINAL_SETTINGS_SECTION_KEYS: readonly TerminalSettingsSectionKey[] = [
+  "behavior",
+  "shells",
+  "themes",
+  "background",
+];
+export const TERMINAL_SETTINGS_SECTIONS_EXPANDED_DEFAULT: TerminalSettingsSectionsExpanded = {
+  behavior: true,
+  shells: false,
+  themes: false,
+  background: false,
 };
 export type ShortcutAction =
   | "newTerminal"
@@ -275,6 +289,8 @@ interface Settings {
   disableHardwareAcceleration: boolean;
   terminalBackground: TerminalBackgroundSettings;
   terminalShellProfiles: TerminalShellProfile[];
+  /** 终端设置页各可折叠区块的展开状态记忆。 */
+  terminalSettingsSectionsExpanded: TerminalSettingsSectionsExpanded;
   terminalInputSuggestionsEnabled: boolean;
   terminalInputSuggestionProvider: TerminalInputSuggestionProvider;
   terminalInputSuggestionLlmEnabled: boolean;
@@ -411,6 +427,7 @@ const DEFAULTS: Settings = {
     overlayDarken: 30,
   },
   terminalShellProfiles: [],
+  terminalSettingsSectionsExpanded: { ...TERMINAL_SETTINGS_SECTIONS_EXPANDED_DEFAULT },
   terminalInputSuggestionsEnabled: true,
   terminalInputSuggestionProvider: "local",
   terminalInputSuggestionLlmEnabled: false,
@@ -618,6 +635,18 @@ export function migrateTerminalPanelWidths(value: unknown): TerminalPanelWidthSe
     files: clampNumber(raw.files, TERMINAL_PANEL_WIDTH_DEFAULTS.files, TERMINAL_PANEL_WIDTH_MAX, TERMINAL_PANEL_WIDTH_DEFAULTS.files),
     systemResources: clampNumber(raw.systemResources, TERMINAL_PANEL_WIDTH_DEFAULTS.systemResources, TERMINAL_PANEL_WIDTH_MAX, TERMINAL_PANEL_WIDTH_DEFAULTS.systemResources),
   };
+}
+
+export function migrateTerminalSettingsSectionsExpanded(value: unknown): TerminalSettingsSectionsExpanded {
+  const defaults = TERMINAL_SETTINGS_SECTIONS_EXPANDED_DEFAULT;
+  if (typeof value !== "object" || value === null) {
+    return { ...defaults };
+  }
+  const raw = value as Partial<Record<TerminalSettingsSectionKey, unknown>>;
+  return TERMINAL_SETTINGS_SECTION_KEYS.reduce<TerminalSettingsSectionsExpanded>((next, key) => {
+    next[key] = typeof raw[key] === "boolean" ? raw[key] : defaults[key];
+    return next;
+  }, { ...defaults });
 }
 
 export function migrateTerminalStatsCardVisibility(value: unknown): TerminalStatsCardVisibilitySettings {
@@ -966,6 +995,9 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
     entries.systemResourceCardOrder = migrateSystemResourceCardOrder(entries.systemResourceCardOrder);
     entries.terminalBackground = migrateTerminalBackground(entries.terminalBackground);
     entries.terminalShellProfiles = migrateTerminalShellProfiles(entries.terminalShellProfiles);
+    entries.terminalSettingsSectionsExpanded = migrateTerminalSettingsSectionsExpanded(
+      entries.terminalSettingsSectionsExpanded
+    );
 
     const currentDefaultShell = typeof entries.defaultShell === "string" ? entries.defaultShell.trim() : "";
     entries.defaultShell = currentDefaultShell || DEFAULTS.defaultShell;
