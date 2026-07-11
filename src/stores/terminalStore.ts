@@ -6,7 +6,7 @@ import type { SubagentTranscriptSource, TerminalSession, Project } from "../lib/
 import { debugConsoleWarn } from "../lib/debugConsole";
 import { sourceTool, type SyncedHistoryGroup } from "../lib/externalSessionGrouping";
 import { logError, logInfo, logWarn } from "../lib/logger";
-import { isDirectCodexStartupCommand, normalizeDirectCodexStartupCommand, withCodexLightTuiTheme } from "../lib/projectStartupCommand";
+import { appendResumeCliArgs, isDirectCodexStartupCommand, normalizeDirectCodexStartupCommand, withCodexLightTuiTheme } from "../lib/projectStartupCommand";
 import { getTerminalTheme } from "../lib/terminalThemes";
 import { useSettingsStore } from "./settingsStore";
 import { useSessionStore } from "./sessionStore";
@@ -17,14 +17,10 @@ import { appendSyncedHistoryContextArg } from "../lib/syncedHistoryContext";
 import { translateCurrent } from "../lib/i18n";
 import {
   addSessionToPaneTree,
-  collectPaneLeaves,
-  createSinglePaneTree,
-  findFirstSessionId,
   findPaneLeaf,
   findPaneLeafBySession,
   getNextSessionIdForShortcut as resolveNextSessionIdForShortcut,
   moveSessionToPane as moveSessionToPaneTree,
-  removeSessionFromPaneTree,
   reorderSessionInPane,
   resizePaneSplit,
   setPaneActiveSession,
@@ -36,6 +32,20 @@ import {
   type TerminalPaneNode,
   type TerminalPaneSplitDirection,
 } from "./terminalPaneTree";
+import {
+  collectWorkspanSessionIds,
+  createTerminalWorkspan,
+  findWorkspanByPane,
+  findWorkspanBySession,
+  mergeTerminalWorkspansAtPaneEdge,
+  removeSessionFromTerminalWorkspans,
+  reorderTerminalWorkspans,
+  restoreTerminalWorkspans,
+  sanitizeTerminalWorkspans,
+  syncTerminalWorkspanLayout,
+  updateTerminalWorkspan,
+  type TerminalWorkspan,
+} from "./terminalWorkspan";
 
 export type SessionStatus = "running" | "exited" | "error";
 export type CliHookSource = "claude" | "codex";
@@ -169,6 +179,8 @@ interface TerminalStore {
   activeSessionId: string | null;
   paneTree: TerminalPaneNode | null;
   activePaneId: string | null;
+  workspans: TerminalWorkspan[];
+  activeWorkspanId: string | null;
   sessionStatuses: Record<string, SessionStatus>;
   statusListeners: Record<string, UnlistenFn>;
   tabNotifications: Record<string, TabNotificationState>;
@@ -180,6 +192,9 @@ interface TerminalStore {
   createSession: (projectId?: string, cwd?: string, title?: string, startupCmd?: string, envVars?: Record<string, string>, shell?: string, paneId?: string, worktreeId?: string) => Promise<string>;
   closeSession: (id: string) => Promise<void>;
   setActive: (id: string) => void;
+  setActiveWorkspan: (id: string) => void;
+  reorderWorkspans: (fromId: string, toId: string) => void;
+  mergeWorkspanAtPaneEdge: (sourceId: string, targetId: string, targetPaneId: string, edge: TerminalPaneDropEdge) => void;
   updateSessionCwd: (sessionId: string, cwd: string) => void;
   updateSessionTerminalSnapshot: (sessionId: string, initialTerminalOutput: string) => void;
   markAttentionInputHandled: (sessionId: string) => void;
@@ -214,9 +229,11 @@ let restoreInProgress = false;
 // setActive 防抖：高频切换标签时合并持久化写入
 let saveActiveIdTimer: ReturnType<typeof setTimeout> | null = null;
 let paneIdSeq = 0;
+let workspanIdSeq = 0;
 let subagentSeq = 0;
 const subagentCloseTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const subagentDiscoveryTimers = new Map<string, ReturnType<typeof setInterval>>();
+const subagentTranscriptRetryTimers = new Map<string, ReturnType<typeof setInterval>>();
 const SUBAGENT_CLOSE_DELAY_MS = 1500;
 const SUBAGENT_CHILD_JSONL_CLOSE_DELAY_MS = 10_000;
 const SUBAGENT_DISCOVERY_INTERVAL_MS = 1000;
@@ -231,6 +248,37 @@ type WindowWithPtyOrphanTimer = Window & {
 function createPaneId() {
   paneIdSeq += 1;
   return `pane-${Date.now().toString(36)}-${paneIdSeq.toString(36)}`;
+}
+
+function createWorkspanId() {
+  workspanIdSeq += 1;
+  return `workspan-${Date.now().toString(36)}-${workspanIdSeq.toString(36)}`;
+}
+
+function buildWorkspanMirror(
+  workspans: TerminalWorkspan[],
+  requestedActiveWorkspanId: string | null
+): Pick<TerminalStore, "workspans" | "activeWorkspanId" | "paneTree" | "activePaneId" | "activeSessionId"> {
+  const activeWorkspan = workspans.find((workspan) => workspan.id === requestedActiveWorkspanId)
+    ?? workspans[0]
+    ?? null;
+  return {
+    workspans,
+    activeWorkspanId: activeWorkspan?.id ?? null,
+    paneTree: activeWorkspan?.paneTree ?? null,
+    activePaneId: activeWorkspan?.activePaneId ?? null,
+    activeSessionId: activeWorkspan?.activeSessionId ?? null,
+  };
+}
+
+function persistWorkspanState(
+  workspans: TerminalWorkspan[],
+  activeWorkspanId: string | null,
+  sessions: TerminalSession[]
+) {
+  void useSessionStore.getState().saveWorkspans(workspans, activeWorkspanId, sessions).catch((err) => {
+    logError("Failed to persist terminal workspans", err);
+  });
 }
 
 function createFileEditorSessionId(projectId: string): string {
@@ -400,9 +448,53 @@ function shouldSubscribeSubagentSource(previous: SubagentTranscriptSource | unde
 }
 
 function shouldAttemptDerivedChildTranscript(payload: CliHookPayload, source: SubagentTranscriptSource): boolean {
-  if (source.kind === "child-jsonl" || !trimOptional(payload.agentId)) return false;
-  if (payload.event === "AgentToolStop") return true;
-  return payload.source === "claude" && payload.event === "ToolStop";
+  if (payload.source !== "claude" || source.kind === "child-jsonl") return false;
+  return Boolean(trimOptional(payload.agentId) && trimOptional(payload.cwd) && trimOptional(payload.sessionId));
+}
+
+function stopSubagentTranscriptRetry(sessionId: string, reason: string) {
+  const timer = subagentTranscriptRetryTimers.get(sessionId);
+  if (!timer) return;
+  clearInterval(timer);
+  subagentTranscriptRetryTimers.delete(sessionId);
+  logInfo("[subagent_transcript] stopped transcript discovery retry", { sessionId, reason });
+}
+
+function startSubagentTranscriptRetry(sessionId: string, attempt: () => Promise<boolean>) {
+  if (subagentTranscriptRetryTimers.has(sessionId)) return;
+
+  const startTime = Date.now();
+  let running = false;
+  const intervalId = setInterval(() => {
+    const elapsed = Date.now() - startTime;
+    const store = useTerminalStore.getState();
+    const transcript = store.subagentTranscripts[sessionId];
+    if (
+      elapsed > SUBAGENT_DISCOVERY_TTL_MS ||
+      !store.sessions.some((session) => session.id === sessionId) ||
+      transcript?.source.kind === "child-jsonl"
+    ) {
+      stopSubagentTranscriptRetry(sessionId, elapsed > SUBAGENT_DISCOVERY_TTL_MS ? "ttl_expired" : "inactive");
+      return;
+    }
+    if (running) return;
+
+    running = true;
+    void attempt()
+      .then((subscribed) => {
+        if (subscribed) stopSubagentTranscriptRetry(sessionId, "subscribed");
+      })
+      .finally(() => {
+        running = false;
+      });
+  }, SUBAGENT_DISCOVERY_INTERVAL_MS);
+
+  subagentTranscriptRetryTimers.set(sessionId, intervalId);
+  logInfo("[subagent_transcript] started transcript discovery retry", {
+    sessionId,
+    intervalMs: SUBAGENT_DISCOVERY_INTERVAL_MS,
+    ttlMs: SUBAGENT_DISCOVERY_TTL_MS,
+  });
 }
 
 /** AgentToolStart pending 兜底：短时轮询 subagents 目录发现新 child JSONL。 */
@@ -699,6 +791,48 @@ function prepareStartupCommandForPty(command: string | undefined, shell: ShellKe
   return withCodexLightTuiTheme(command);
 }
 
+// startupCmd 里 codex/claude 可能出现在任意位置（如 `wsl codex`、`claude --settings ...`），
+// 与 isDirectCodexStartupCommand（要求 codex 位于命令开头）不同，这里用更宽松的整词匹配做类型判定。
+const CODEX_COMMAND_PATTERN = /(?:^|\s)codex(?:\.(?:cmd|exe|ps1))?(?:\s|$)/i;
+const CLAUDE_COMMAND_PATTERN = /(?:^|\s)claude(?:\.(?:cmd|exe|ps1))?(?:\s|$)/i;
+
+// 恢复会话时判定它是否为 codex/claude 这类 TUI CLI 会话。判定依据 = startupCmd 文本 + 项目 cli_tool 配置。
+// 判不出（如普通 pwsh/bash）返回 null，走 shell 分支（静态贴回 scrollback）。
+function detectCliResumeKind(
+  startupCmd: string | undefined,
+  project: Project | undefined
+): "claude" | "codex" | null {
+  const cmd = startupCmd?.trim() ?? "";
+  const projectKind = project ? getProviderSwitchAppType(project) : null;
+  // codex 优先：codex 项目可能带自定义 startupCmd，仍应当 codex resume。
+  if (projectKind === "codex" || (project ? isExactCodexProject(project) : false) || CODEX_COMMAND_PATTERN.test(cmd)) {
+    return "codex";
+  }
+  if (projectKind === "claude" || CLAUDE_COMMAND_PATTERN.test(cmd)) {
+    return "claude";
+  }
+  return null;
+}
+
+// 构造 CLI 会话的 resume 启动命令。为什么不贴 scrollback 而改走 resume：codex/claude 启动用绝对光标
+// 定位整屏重绘，会盖掉我们贴回的历史文本（见 research/tui-startup-clear-sequences.md），因此改由 CLI
+// 自己 resume 重画上次对话。有 cliSessionId 走带 id 的 resume；无 id 兜底续最近一次（用户已拍板）。
+function buildCliResumeStartupCommand(
+  kind: "claude" | "codex",
+  cliSessionId: string | undefined,
+  project: Project | undefined
+): string {
+  const id = cliSessionId?.trim();
+  const hasValidId = !!id && !/\s/.test(id) && !/[\r\n]/.test(id);
+  if (kind === "codex") {
+    const base = hasValidId ? `codex resume --no-alt-screen ${id}` : "codex resume --no-alt-screen --last";
+    return appendResumeCliArgs(base, "codex", project ?? null);
+  }
+  const base = hasValidId ? `claude --resume ${id}` : "claude --continue";
+  return appendResumeCliArgs(base, "claude", project ?? null);
+}
+
+
 function buildDirectCodexLaunchCommand(command: string): string {
   const normalized = normalizeDirectCodexStartupCommand(command) ?? command.trim();
   return `\x0c${normalized}`;
@@ -846,6 +980,8 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
   activeSessionId: null,
   paneTree: null,
   activePaneId: null,
+  workspans: [],
+  activeWorkspanId: null,
   sessionStatuses: {},
   statusListeners: {},
   tabNotifications: {},
@@ -914,20 +1050,34 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
       }));
     });
 
-    const newSessions = [...get().sessions, session];
-    const paneResult = addSessionToPaneTree(get().paneTree, paneId ?? get().activePaneId, sessionId, createPaneId);
+    const state = get();
+    const newSessions = [...state.sessions, session];
+    let workspans: TerminalWorkspan[];
+    let activeWorkspanId: string;
+    const targetWorkspan = paneId ? findWorkspanByPane(state.workspans, paneId) : null;
+    if (paneId && targetWorkspan) {
+      const paneResult = addSessionToPaneTree(targetWorkspan.paneTree, paneId, sessionId, createPaneId);
+      workspans = updateTerminalWorkspan(state.workspans, targetWorkspan.id, (workspan) => (
+        syncTerminalWorkspanLayout(workspan, paneResult.tree, paneResult.activePaneId, sessionId)
+      ));
+      activeWorkspanId = targetWorkspan.id;
+    } else {
+      const workspan = createTerminalWorkspan(createWorkspanId(), createPaneId(), sessionId);
+      workspans = [...state.workspans, workspan];
+      activeWorkspanId = workspan.id;
+    }
+    const mirror = buildWorkspanMirror(workspans, activeWorkspanId);
     set({
       sessions: newSessions,
-      activeSessionId: sessionId,
-      paneTree: paneResult.tree,
-      activePaneId: paneResult.activePaneId,
-      sessionStatuses: { ...get().sessionStatuses, [sessionId]: "running" },
-      statusListeners: { ...get().statusListeners, [sessionId]: unlisten },
+      ...mirror,
+      sessionStatuses: { ...state.sessionStatuses, [sessionId]: "running" },
+      statusListeners: { ...state.statusListeners, [sessionId]: unlisten },
     });
 
     // 持久化到 sessionStore
     await useSessionStore.getState().saveSessions(newSessions);
     await useSessionStore.getState().saveActiveSessionId(sessionId);
+    await useSessionStore.getState().saveWorkspans(workspans, activeWorkspanId, newSessions);
 
     if (launchStartupCmd) {
       setTimeout(() => {
@@ -947,8 +1097,9 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
   },
 
   closeSession: async (id) => {
+    const state = get();
     const ptySessionIds = [id];
-    const closingSession = get().sessions.find((s) => s.id === id);
+    const closingSession = state.sessions.find((s) => s.id === id);
     const isTranscript = closingSession?.kind === "subagent-transcript";
     const isFileEditor = closingSession?.kind === "file-editor";
     const closeTimer = subagentCloseTimers.get(id);
@@ -956,24 +1107,28 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
       clearTimeout(closeTimer);
       subagentCloseTimers.delete(id);
     }
+    stopSubagentTranscriptRetry(id, "session_closed");
 
     // 必须在 set sessions 之前记录原索引，否则后续 findIndex 永远返回 -1，
     // 导致 persistedSplits 永远清不掉（历史 bug）。
-    const closedIndex = get().sessions.findIndex((s) => s.id === id);
-    const remaining = get().sessions.filter((s) => s.id !== id);
-    const newStatuses = { ...get().sessionStatuses };
-    const newListeners = { ...get().statusListeners };
-    const newNotifications = { ...get().tabNotifications };
-    const newTabStatuses = { ...get().tabStatuses };
-    const newTabStatusDetails = { ...get().tabStatusDetails };
-    const newSubagentTranscripts = { ...get().subagentTranscripts };
+    const closedIndex = state.sessions.findIndex((s) => s.id === id);
+    const remaining = state.sessions.filter((s) => s.id !== id);
+    const newStatuses = { ...state.sessionStatuses };
+    const newListeners = { ...state.statusListeners };
+    const newNotifications = { ...state.tabNotifications };
+    const newTabStatuses = { ...state.tabStatuses };
+    const newTabStatusDetails = { ...state.tabStatusDetails };
+    const newSubagentTranscripts = { ...state.subagentTranscripts };
     delete newSubagentTranscripts[id];
-    const nextPaneTree = removeSessionFromPaneTree(get().paneTree, id);
-    const nextActiveId =
-      get().activeSessionId === id
-        ? findFirstSessionId(nextPaneTree)
-        : get().activeSessionId;
-    const activePane = nextActiveId ? findPaneLeafBySession(nextPaneTree, nextActiveId) : null;
+    const owner = findWorkspanBySession(state.workspans, id);
+    const ownerIndex = owner ? state.workspans.findIndex((workspan) => workspan.id === owner.id) : -1;
+    const workspans = removeSessionFromTerminalWorkspans(state.workspans, id);
+    const ownerStillExists = owner ? workspans.some((workspan) => workspan.id === owner.id) : false;
+    let activeWorkspanId = state.activeWorkspanId;
+    if (owner?.id === state.activeWorkspanId && !ownerStillExists) {
+      activeWorkspanId = workspans[Math.min(Math.max(ownerIndex, 0), Math.max(workspans.length - 1, 0))]?.id ?? null;
+    }
+    const mirror = buildWorkspanMirror(workspans, activeWorkspanId);
 
     delete newStatuses[id];
     delete newListeners[id];
@@ -982,20 +1137,18 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     delete newTabStatusDetails[id];
 
     // Drop in-memory background overrides for closed sessions (R8).
-    const prevHidden = get().hiddenBackgroundSessionIds;
+    const prevHidden = state.hiddenBackgroundSessionIds;
     let newHidden = prevHidden;
     if (prevHidden.has(id)) {
       newHidden = new Set(prevHidden);
       newHidden.delete(id);
     }
 
-    get().statusListeners[id]?.();
+    state.statusListeners[id]?.();
 
     set({
       sessions: remaining,
-      activeSessionId: nextActiveId,
-      paneTree: nextPaneTree,
-      activePaneId: activePane?.id ?? collectPaneLeaves(nextPaneTree)[0]?.id ?? null,
+      ...mirror,
       sessionStatuses: newStatuses,
       statusListeners: newListeners,
       tabNotifications: newNotifications,
@@ -1008,8 +1161,9 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
 
     try {
       await useSessionStore.getState().saveSessions(remaining);
-      const nextActiveSession = nextActiveId ? remaining.find((session) => session.id === nextActiveId) : undefined;
-      await useSessionStore.getState().saveActiveSessionId(isPersistableSession(nextActiveSession) ? nextActiveId : null);
+      const nextActiveSession = mirror.activeSessionId ? remaining.find((session) => session.id === mirror.activeSessionId) : undefined;
+      await useSessionStore.getState().saveActiveSessionId(isPersistableSession(nextActiveSession) ? mirror.activeSessionId : null);
+      await useSessionStore.getState().saveWorkspans(workspans, mirror.activeWorkspanId, remaining);
 
       // 更新 splits（移除已关闭主会话对应的 split），使用关闭前记录的索引
       if (closedIndex >= 0) {
@@ -1037,9 +1191,51 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
   },
 
   setActive: (id) => {
-    const paneResult = setPaneActiveSession(get().paneTree, id);
-    set({ activeSessionId: id, paneTree: paneResult.tree, activePaneId: paneResult.activePaneId ?? get().activePaneId });
+    const state = get();
+    const owner = findWorkspanBySession(state.workspans, id);
+    if (!owner) return;
+    const paneResult = setPaneActiveSession(owner.paneTree, id);
+    const workspans = updateTerminalWorkspan(state.workspans, owner.id, (workspan) => (
+      syncTerminalWorkspanLayout(workspan, paneResult.tree, paneResult.activePaneId ?? workspan.activePaneId, id)
+    ));
+    const mirror = buildWorkspanMirror(workspans, owner.id);
+    set(mirror);
     scheduleSaveActiveId(id);
+    persistWorkspanState(workspans, owner.id, state.sessions);
+  },
+
+  setActiveWorkspan: (id) => {
+    const state = get();
+    if (!state.workspans.some((workspan) => workspan.id === id)) return;
+    const mirror = buildWorkspanMirror(state.workspans, id);
+    set(mirror);
+    scheduleSaveActiveId(mirror.activeSessionId);
+    persistWorkspanState(state.workspans, id, state.sessions);
+  },
+
+  reorderWorkspans: (fromId, toId) => {
+    const state = get();
+    const workspans = reorderTerminalWorkspans(state.workspans, fromId, toId);
+    if (workspans === state.workspans) return;
+    set({ workspans });
+    persistWorkspanState(workspans, state.activeWorkspanId, state.sessions);
+  },
+
+  mergeWorkspanAtPaneEdge: (sourceId, targetId, targetPaneId, edge) => {
+    const state = get();
+    const result = mergeTerminalWorkspansAtPaneEdge(
+      state.workspans,
+      sourceId,
+      targetId,
+      targetPaneId,
+      edge,
+      createPaneId
+    );
+    if (!result.changed) return;
+    const mirror = buildWorkspanMirror(result.workspans, result.activeWorkspanId);
+    set({ ...mirror, splits: {} });
+    scheduleSaveActiveId(mirror.activeSessionId);
+    persistWorkspanState(result.workspans, result.activeWorkspanId, state.sessions);
   },
 
   markAttentionInputHandled: (sessionId) => {
@@ -1128,32 +1324,48 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
   },
 
   reorderSessions: (fromId, toId) => {
-    const pane = findPaneLeafBySession(get().paneTree, fromId);
+    const state = get();
+    const owner = findWorkspanBySession(state.workspans, fromId);
+    const pane = owner ? findPaneLeafBySession(owner.paneTree, fromId) : null;
     if (!pane || !pane.sessionIds.includes(toId)) return;
-    const nextTree = reorderSessionInPane(get().paneTree, pane.id, fromId, toId);
-    set({ paneTree: nextTree, activePaneId: pane.id, activeSessionId: fromId });
+    const nextTree = reorderSessionInPane(owner!.paneTree, pane.id, fromId, toId);
+    const workspans = updateTerminalWorkspan(state.workspans, owner!.id, (workspan) => (
+      syncTerminalWorkspanLayout(workspan, nextTree, pane.id, fromId)
+    ));
+    set(buildWorkspanMirror(workspans, owner!.id));
     scheduleSaveActiveId(fromId);
+    persistWorkspanState(workspans, owner!.id, state.sessions);
   },
 
   moveSessionToPane: (sessionId, targetPaneId, beforeSessionId) => {
-    const sourcePane = findPaneLeafBySession(get().paneTree, sessionId);
-    const targetPane = findPaneLeaf(get().paneTree, targetPaneId);
+    const state = get();
+    const owner = findWorkspanBySession(state.workspans, sessionId);
+    const targetOwner = findWorkspanByPane(state.workspans, targetPaneId);
+    if (!owner || owner.id !== targetOwner?.id) return;
+    const sourcePane = findPaneLeafBySession(owner.paneTree, sessionId);
+    const targetPane = findPaneLeaf(owner.paneTree, targetPaneId);
     if (!sourcePane || !targetPane || sourcePane.id === targetPane.id) return;
-    const result = moveSessionToPaneTree(get().paneTree, sourcePane.id, targetPane.id, sessionId, beforeSessionId);
-    set({ paneTree: result.tree, activePaneId: result.activePaneId, activeSessionId: sessionId });
+    const result = moveSessionToPaneTree(owner.paneTree, sourcePane.id, targetPane.id, sessionId, beforeSessionId);
+    const workspans = updateTerminalWorkspan(state.workspans, owner.id, (workspan) => (
+      syncTerminalWorkspanLayout(workspan, result.tree, result.activePaneId, sessionId)
+    ));
+    set(buildWorkspanMirror(workspans, owner.id));
     scheduleSaveActiveId(sessionId);
+    persistWorkspanState(workspans, owner.id, state.sessions);
   },
 
   splitSessionToPaneEdge: (sessionId, targetPaneId, edge) => {
-    const result = splitExistingSessionToPaneEdge(get().paneTree, sessionId, targetPaneId, edge, createPaneId);
+    const state = get();
+    const owner = findWorkspanBySession(state.workspans, sessionId);
+    if (!owner || owner.id !== findWorkspanByPane(state.workspans, targetPaneId)?.id) return;
+    const result = splitExistingSessionToPaneEdge(owner.paneTree, sessionId, targetPaneId, edge, createPaneId);
     if (!result.changed) return;
-    set({
-      paneTree: result.tree,
-      activePaneId: result.activePaneId,
-      activeSessionId: result.activeSessionId,
-      splits: {},
-    });
+    const workspans = updateTerminalWorkspan(state.workspans, owner.id, (workspan) => (
+      syncTerminalWorkspanLayout(workspan, result.tree, result.activePaneId, result.activeSessionId)
+    ));
+    set({ ...buildWorkspanMirror(workspans, owner.id), splits: {} });
     scheduleSaveActiveId(result.activeSessionId);
+    persistWorkspanState(workspans, owner.id, state.sessions);
   },
 
   renameSession: (id, title) => {
@@ -1173,15 +1385,20 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
 
   splitPaneEmpty: (paneId, direction) => {
     const state = get();
-    if (!state.paneTree) return;
-    const result = splitPaneEmptyTree(state.paneTree, paneId, direction, createPaneId);
-    set({ paneTree: result.tree, activePaneId: result.activePaneId });
+    const owner = findWorkspanByPane(state.workspans, paneId);
+    if (!owner?.paneTree) return;
+    const result = splitPaneEmptyTree(owner.paneTree, paneId, direction, createPaneId);
+    const workspans = updateTerminalWorkspan(state.workspans, owner.id, (workspan) => (
+      syncTerminalWorkspanLayout(workspan, result.tree, result.activePaneId, workspan.activeSessionId)
+    ));
+    set(buildWorkspanMirror(workspans, owner.id));
   },
 
   splitTerminal: async (sessionId, direction, options) => {
-    const paneTree = get().paneTree;
-    const targetPane = findPaneLeafBySession(paneTree, sessionId);
-    if (!targetPane || !paneTree) return null;
+    const initialState = get();
+    const owner = findWorkspanBySession(initialState.workspans, sessionId);
+    const targetPane = owner ? findPaneLeafBySession(owner.paneTree, sessionId) : null;
+    if (!targetPane || !owner?.paneTree) return null;
 
     const os = await getOsPlatform();
     const resolvedShell = resolveShellForPty(options?.shell, !!options?.projectId, os);
@@ -1228,13 +1445,25 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
       }));
     });
 
-    const paneResult = splitPaneLeaf(paneTree, targetPane.id, direction, splitSessionId, createPaneId);
-    const newSessions = [...get().sessions, splitSession];
+    const currentState = get();
+    const currentOwner = findWorkspanBySession(currentState.workspans, sessionId);
+    const currentTargetPane = currentOwner ? findPaneLeafBySession(currentOwner.paneTree, sessionId) : null;
+    if (!currentOwner?.paneTree || !currentTargetPane) {
+      unlisten();
+      await invoke("pty_close", { sessionId: splitSessionId }).catch((err) => {
+        logError("pty_close invoke failed for abandoned split terminal", { sessionId: splitSessionId, err });
+      });
+      return null;
+    }
+
+    const paneResult = splitPaneLeaf(currentOwner.paneTree, currentTargetPane.id, direction, splitSessionId, createPaneId);
+    const newSessions = [...currentState.sessions, splitSession];
+    const workspans = updateTerminalWorkspan(currentState.workspans, currentOwner.id, (workspan) => (
+      syncTerminalWorkspanLayout(workspan, paneResult.tree, paneResult.activePaneId, splitSessionId)
+    ));
     set((state) => ({
       sessions: newSessions,
-      activeSessionId: splitSessionId,
-      paneTree: paneResult.tree,
-      activePaneId: paneResult.activePaneId,
+      ...buildWorkspanMirror(workspans, currentOwner.id),
       splits: {},
       sessionStatuses: { ...state.sessionStatuses, [splitSessionId]: "running" },
       statusListeners: { ...state.statusListeners, [splitSessionId]: unlisten },
@@ -1243,6 +1472,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     await useSessionStore.getState().saveSessions(newSessions);
     await useSessionStore.getState().saveActiveSessionId(splitSessionId);
     await useSessionStore.getState().saveSplits([]);
+    await useSessionStore.getState().saveWorkspans(workspans, currentOwner.id, newSessions);
 
     if (launchStartupCmd) {
       setTimeout(() => {
@@ -1265,12 +1495,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     const editorSessionId = createFileEditorSessionId(project.id);
     const existing = get().sessions.find((session) => session.id === editorSessionId);
     if (existing) {
-      const paneResult = setPaneActiveSession(get().paneTree, editorSessionId);
-      set({
-        activeSessionId: editorSessionId,
-        activePaneId: paneResult.activePaneId ?? get().activePaneId,
-        paneTree: paneResult.tree,
-      });
+      get().setActive(editorSessionId);
       return editorSessionId;
     }
 
@@ -1286,19 +1511,30 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
         project,
       },
     };
-    const sessions = [...get().sessions, editorSession];
-    const tree = get().paneTree;
-    const activePaneId = get().activePaneId;
-    const paneResult = addSessionToPaneTree(tree, activePaneId, editorSessionId, createPaneId);
+    const state = get();
+    const sessions = [...state.sessions, editorSession];
+    const activeWorkspan = state.workspans.find((workspan) => workspan.id === state.activeWorkspanId) ?? null;
+    let workspans: TerminalWorkspan[];
+    let activeWorkspanId: string;
+    if (activeWorkspan?.paneTree) {
+      const paneResult = addSessionToPaneTree(activeWorkspan.paneTree, activeWorkspan.activePaneId, editorSessionId, createPaneId);
+      workspans = updateTerminalWorkspan(state.workspans, activeWorkspan.id, (workspan) => (
+        syncTerminalWorkspanLayout(workspan, paneResult.tree, paneResult.activePaneId, editorSessionId)
+      ));
+      activeWorkspanId = activeWorkspan.id;
+    } else {
+      const workspan = createTerminalWorkspan(createWorkspanId(), createPaneId(), editorSessionId);
+      workspans = [...state.workspans, workspan];
+      activeWorkspanId = workspan.id;
+    }
 
     set({
       sessions,
-      activeSessionId: editorSessionId,
-      activePaneId: paneResult.activePaneId,
-      paneTree: paneResult.tree,
+      ...buildWorkspanMirror(workspans, activeWorkspanId),
       splits: {},
     });
     void useSessionStore.getState().saveSessions(sessions).catch(() => {});
+    persistWorkspanState(workspans, activeWorkspanId, sessions);
     return editorSessionId;
   },
 
@@ -1312,13 +1548,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
       (session) => session.kind === "synced-history" && session.syncedHistory?.key === group.key && get().sessionStatuses[session.id]
     );
     if (existing) {
-      const paneResult = setPaneActiveSession(get().paneTree, existing.id);
-      set({
-        activeSessionId: existing.id,
-        activePaneId: paneResult.activePaneId ?? get().activePaneId,
-        paneTree: paneResult.tree,
-      });
-      scheduleSaveActiveId(existing.id);
+      get().setActive(existing.id);
       return existing.id;
     }
 
@@ -1369,50 +1599,68 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
         sessionStatuses: { ...state.sessionStatuses, [launch.sessionId]: status },
       }));
     });
-    const sessions = [...get().sessions, historySession];
-    const paneResult = addSessionToPaneTree(get().paneTree, get().activePaneId, launch.sessionId, createPaneId);
+    const state = get();
+    const sessions = [...state.sessions, historySession];
+    const activeWorkspan = state.workspans.find((workspan) => workspan.id === state.activeWorkspanId) ?? null;
+    let workspans: TerminalWorkspan[];
+    let activeWorkspanId: string;
+    if (activeWorkspan?.paneTree) {
+      const paneResult = addSessionToPaneTree(activeWorkspan.paneTree, activeWorkspan.activePaneId, launch.sessionId, createPaneId);
+      workspans = updateTerminalWorkspan(state.workspans, activeWorkspan.id, (workspan) => (
+        syncTerminalWorkspanLayout(workspan, paneResult.tree, paneResult.activePaneId, launch.sessionId)
+      ));
+      activeWorkspanId = activeWorkspan.id;
+    } else {
+      const workspan = createTerminalWorkspan(createWorkspanId(), createPaneId(), launch.sessionId);
+      workspans = [...state.workspans, workspan];
+      activeWorkspanId = workspan.id;
+    }
 
     set({
       sessions,
-      activeSessionId: launch.sessionId,
-      activePaneId: paneResult.activePaneId,
-      paneTree: paneResult.tree,
-      sessionStatuses: { ...get().sessionStatuses, [launch.sessionId]: "running" },
-      statusListeners: { ...get().statusListeners, [launch.sessionId]: unlisten },
+      ...buildWorkspanMirror(workspans, activeWorkspanId),
+      sessionStatuses: { ...state.sessionStatuses, [launch.sessionId]: "running" },
+      statusListeners: { ...state.statusListeners, [launch.sessionId]: unlisten },
       splits: {},
     });
     void useSessionStore.getState().saveSessions(sessions).catch(() => {});
     void useSessionStore.getState().saveActiveSessionId(null).catch(() => {});
+    persistWorkspanState(workspans, activeWorkspanId, sessions);
     return launch.sessionId;
   },
 
   unsplitTerminal: async (sessionId) => {
-    const pane = findPaneLeafBySession(get().paneTree, sessionId);
-    if (!pane) return;
+    const state = get();
+    const owner = findWorkspanBySession(state.workspans, sessionId);
+    const pane = owner ? findPaneLeafBySession(owner.paneTree, sessionId) : null;
+    if (!pane || !owner) return;
     const behavior = useSettingsStore.getState().unsplitBehavior;
-    const result = unsplitPaneLeaf(get().paneTree, pane.id, behavior);
+    const result = unsplitPaneLeaf(owner.paneTree, pane.id, behavior);
     const closedSessionIds = result.closedSessionIds;
     const transcriptClosedIds = new Set(
-      get().sessions
+      state.sessions
         .filter((s) => closedSessionIds.includes(s.id) && s.kind === "subagent-transcript")
         .map((s) => s.id)
     );
     const fileEditorClosedIds = new Set(
-      get().sessions
+      state.sessions
         .filter((s) => closedSessionIds.includes(s.id) && s.kind === "file-editor")
         .map((s) => s.id)
     );
     for (const closedSessionId of closedSessionIds) {
-      get().statusListeners[closedSessionId]?.();
+      if (transcriptClosedIds.has(closedSessionId)) {
+        stopSubagentTranscriptRetry(closedSessionId, "pane_unsplit");
+      }
+      state.statusListeners[closedSessionId]?.();
     }
 
-    const newStatuses = { ...get().sessionStatuses };
-    const newListeners = { ...get().statusListeners };
-    const newNotifications = { ...get().tabNotifications };
-    const newTabStatuses = { ...get().tabStatuses };
-    const newTabStatusDetails = { ...get().tabStatusDetails };
-    const newSubagentTranscripts = { ...get().subagentTranscripts };
-    const newHidden = new Set(get().hiddenBackgroundSessionIds);
+    const newStatuses = { ...state.sessionStatuses };
+    const newListeners = { ...state.statusListeners };
+    const newNotifications = { ...state.tabNotifications };
+    const newTabStatuses = { ...state.tabStatuses };
+    const newTabStatusDetails = { ...state.tabStatusDetails };
+    const newSubagentTranscripts = { ...state.subagentTranscripts };
+    const newHidden = new Set(state.hiddenBackgroundSessionIds);
     for (const closedSessionId of closedSessionIds) {
       delete newStatuses[closedSessionId];
       delete newListeners[closedSessionId];
@@ -1424,12 +1672,14 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     }
 
     const closedSet = new Set(closedSessionIds);
-    const remaining = get().sessions.filter((session) => !closedSet.has(session.id));
+    const remaining = state.sessions.filter((session) => !closedSet.has(session.id));
+    const workspans = updateTerminalWorkspan(state.workspans, owner.id, (workspan) => (
+      syncTerminalWorkspanLayout(workspan, result.tree, result.activePaneId, result.activeSessionId)
+    ));
+    const mirror = buildWorkspanMirror(workspans, owner.id);
     set({
       sessions: remaining,
-      activeSessionId: result.activeSessionId,
-      paneTree: result.tree,
-      activePaneId: result.activePaneId,
+      ...mirror,
       sessionStatuses: newStatuses,
       statusListeners: newListeners,
       tabNotifications: newNotifications,
@@ -1441,13 +1691,14 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     });
 
     await useSessionStore.getState().saveSessions(remaining);
-    const nextActiveSession = result.activeSessionId
-      ? remaining.find((session) => session.id === result.activeSessionId)
+    const nextActiveSession = mirror.activeSessionId
+      ? remaining.find((session) => session.id === mirror.activeSessionId)
       : undefined;
     await useSessionStore.getState().saveActiveSessionId(
-      isPersistableSession(nextActiveSession) ? result.activeSessionId : null
+      isPersistableSession(nextActiveSession) ? mirror.activeSessionId : null
     );
     await useSessionStore.getState().saveSplits([]);
+    await useSessionStore.getState().saveWorkspans(workspans, mirror.activeWorkspanId, remaining);
 
     for (const closedSessionId of closedSessionIds) {
       if (fileEditorClosedIds.has(closedSessionId)) {
@@ -1466,7 +1717,15 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
   },
 
   setSplitRatio: (splitId, ratio) => {
-    set((state) => ({ paneTree: resizePaneSplit(state.paneTree, splitId, ratio) }));
+    const state = get();
+    const activeWorkspan = state.workspans.find((workspan) => workspan.id === state.activeWorkspanId);
+    if (!activeWorkspan) return;
+    const paneTree = resizePaneSplit(activeWorkspan.paneTree, splitId, ratio);
+    const workspans = updateTerminalWorkspan(state.workspans, activeWorkspan.id, (workspan) => (
+      syncTerminalWorkspanLayout(workspan, paneTree, workspan.activePaneId, workspan.activeSessionId)
+    ));
+    set(buildWorkspanMirror(workspans, activeWorkspan.id));
+    persistWorkspanState(workspans, activeWorkspan.id, state.sessions);
   },
 
   getNextSessionIdForShortcut: (delta) => {
@@ -1482,6 +1741,8 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
       const sessionStore = useSessionStore.getState();
       const persistedSessions = sessionStore.sessions;
       const persistedActiveId = sessionStore.activeSessionId;
+      const persistedWorkspans = sessionStore.workspans;
+      const persistedActiveWorkspanId = sessionStore.activeWorkspanId;
 
       if (persistedSessions.length === 0) return;
 
@@ -1537,16 +1798,44 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
 
       newIdMap[ps.id] = newSessionId;
 
-      const restoredStartupCmd = normalizeDirectCodexStartupCommand(ps.startupCmd);
-      const launchStartupCmd = prepareStartupCommandForPty(restoredStartupCmd, normalizeShellKey(resolvedShell) ?? null);
+      const shellKey = normalizeShellKey(resolvedShell) ?? null;
+      // 恢复按会话类型分流：CLI 会话（codex/claude）走原生 resume，普通 shell 会话静态贴回 scrollback。
+      const restoreProject = ps.projectId ? projectMap.get(ps.projectId) : undefined;
+      const cliKind = detectCliResumeKind(ps.startupCmd, restoreProject);
+
+      let launchStartupCmd: string | undefined;
+      let initialTerminalOutput: string | undefined;
+      let deferStartupUntilInitialOutput = false;
+
+      if (cliKind) {
+        // CLI 会话：不贴 initialTerminalOutput（TUI 绝对定位重绘会盖掉它，见
+        // research/tui-startup-clear-sequences.md），改用 resume 让 CLI 自己重画上次对话并可继续。
+        const resumeCmd = buildCliResumeStartupCommand(cliKind, ps.cliSessionId, restoreProject);
+        launchStartupCmd = prepareStartupCommandForPty(resumeCmd, shellKey);
+      } else {
+        // 普通 shell 会话：静态贴回历史滚动内容（shell 不清屏，历史可见），startupCmd 保持首轮行为。
+        const restoredStartupCmd = normalizeDirectCodexStartupCommand(ps.startupCmd);
+        launchStartupCmd = prepareStartupCommandForPty(restoredStartupCmd, shellKey);
+        initialTerminalOutput = ps.initialTerminalOutput;
+        // 有历史画面时：先静态贴回 initialTerminalOutput，再由 XTermTerminal 在贴回完成后重放 startupCmd，
+        // 避免"setTimeout 写入"与"贴回大段文本"竞态导致启动命令淹没在历史输出里。
+        deferStartupUntilInitialOutput = !!ps.initialTerminalOutput && !!launchStartupCmd;
+      }
+
+      const hasInitialOutput = !!initialTerminalOutput;
       const restoredSession: TerminalSession = {
         id: newSessionId,
         projectId: ps.projectId,
+        worktreeId: ps.worktreeId,
         title: ps.title,
         cwd: ps.cwd,
         shell: resolvedShell,
         envVars: ps.envVars,
-        startupCmd: restoredStartupCmd,
+        startupCmd: launchStartupCmd,
+        // 保留 cliSessionId：hook 上报会用它绑定实时统计；下次落盘也需要它继续 resume。
+        cliSessionId: ps.cliSessionId,
+        initialTerminalOutput,
+        deferStartupUntilInitialOutput,
       };
 
       let unlisten: UnlistenFn;
@@ -1569,14 +1858,16 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
       restoredStatuses[newSessionId] = "running";
       restoredListeners[newSessionId] = unlisten;
 
-      // 执行启动命令
-      if (launchStartupCmd) {
+      // 执行启动命令：CLI resume 命令 / 无历史画面的普通命令走这里直接写入；
+      // 有历史画面时（仅 shell 分支）改由 XTermTerminal 在贴回完成后重放（deferStartupUntilInitialOutput），
+      // 这里不再 setTimeout 写入，避免同一条 startupCmd 被执行两次。
+      if (launchStartupCmd && !hasInitialOutput) {
         setTimeout(() => {
-          invoke("pty_write", { sessionId: newSessionId, data: formatStartupInputForPty(launchStartupCmd, normalizeShellKey(resolvedShell) ?? null) }).catch((err) => {
+          invoke("pty_write", { sessionId: newSessionId, data: formatStartupInputForPty(launchStartupCmd!, shellKey) }).catch((err) => {
             logError("Failed to write startup command on restore", {
               sessionId: newSessionId,
               hasStartupCmd: true,
-              startupCmdSummary: summarizeStartupCmd(launchStartupCmd),
+              startupCmdSummary: summarizeStartupCmd(launchStartupCmd!),
               err,
             });
           });
@@ -1592,15 +1883,28 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
       newActiveId = restoredSessions[restoredSessions.length - 1].id;
     }
 
-    const restoredPaneTree = restoredSessions.length > 0
-      ? createSinglePaneTree(restoredSessions.map((session) => session.id), newActiveId, createPaneId)
-      : null;
+    const restoredSessionIds = new Set(restoredSessions.map((session) => session.id));
+    let workspans = sanitizeTerminalWorkspans(
+      restoreTerminalWorkspans(persistedWorkspans, newIdMap),
+      restoredSessionIds
+    );
+    const assignedSessionIds = new Set(workspans.flatMap(collectWorkspanSessionIds));
+    for (const session of restoredSessions) {
+      if (assignedSessionIds.has(session.id)) continue;
+      workspans.push(createTerminalWorkspan(createWorkspanId(), createPaneId(), session.id));
+      assignedSessionIds.add(session.id);
+    }
+    const activeWorkspanId = persistedActiveWorkspanId
+      && workspans.some((workspan) => workspan.id === persistedActiveWorkspanId)
+      ? persistedActiveWorkspanId
+      : newActiveId
+        ? findWorkspanBySession(workspans, newActiveId)?.id ?? workspans[workspans.length - 1]?.id ?? null
+        : workspans[workspans.length - 1]?.id ?? null;
+    const mirror = buildWorkspanMirror(workspans, activeWorkspanId);
 
     set({
       sessions: restoredSessions,
-      activeSessionId: newActiveId,
-      paneTree: restoredPaneTree,
-      activePaneId: restoredPaneTree?.id ?? null,
+      ...mirror,
       sessionStatuses: restoredStatuses,
       statusListeners: restoredListeners,
       splits: {},
@@ -1613,7 +1917,8 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     }));
     await sessionStore.saveSessions(updatedPersistedSessions);
     await sessionStore.saveSplits([]);
-    await sessionStore.saveActiveSessionId(newActiveId);
+    await sessionStore.saveActiveSessionId(mirror.activeSessionId);
+    await sessionStore.saveWorkspans(workspans, mirror.activeWorkspanId, updatedPersistedSessions);
 
     // 显示恢复结果提示
       if (skippedSessions.length > 0) {
@@ -1660,8 +1965,9 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
       return;
     }
 
-    const tree = get().paneTree;
-    if (!tree) return;
+    const parentWorkspan = findWorkspanBySession(get().workspans, parentTabId);
+    const tree = parentWorkspan?.paneTree ?? null;
+    if (!tree || !parentWorkspan) return;
 
     const agentId = trimOptional(payload.agentId);
     const toolUseId = trimOptional(payload.toolUseId);
@@ -1721,6 +2027,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
         if (result.initialContent) {
           useTerminalStore.getState().appendSubagentTranscript(pseudoId, result.initialContent, true);
         }
+        stopSubagentTranscriptRetry(pseudoId, "explicit_child_subscribed");
         logInfo("[subagent_transcript] subscribed child transcript", {
           pseudoId,
           path: result.path,
@@ -1775,6 +2082,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
         if (result.initialContent) {
           useTerminalStore.getState().appendSubagentTranscript(pseudoId, result.initialContent, true);
         }
+        stopSubagentTranscriptRetry(pseudoId, "derived_child_subscribed");
         logInfo("[subagent_transcript] derived child transcript subscription", {
           pseudoId,
           agentId,
@@ -1863,6 +2171,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
         if (result.initialContent) {
           useTerminalStore.getState().appendSubagentTranscript(pseudoId, result.initialContent, true);
         }
+        stopSubagentTranscriptRetry(pseudoId, "codex_rollout_subscribed");
         logInfo("[subagent_transcript] subscribed codex rollout transcript", {
           pseudoId,
           agentId,
@@ -1877,6 +2186,28 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
           err,
         });
         return false;
+      }
+    };
+
+    const subscribeAvailableChild = async () => {
+      if (shouldSubscribe) {
+        await subscribeChild();
+        return;
+      }
+
+      const codexSubscribed = await subscribeCodexRolloutChild();
+      if (
+        !codexSubscribed &&
+        payload.source === "codex" &&
+        payload.event === "SubagentStart" &&
+        source.kind !== "child-jsonl" &&
+        agentId &&
+        payload.sessionId?.trim()
+      ) {
+        startSubagentTranscriptRetry(pseudoId, subscribeCodexRolloutChild);
+      }
+      if (!codexSubscribed && !(await subscribeDerivedChild()) && source.kind !== "child-jsonl") {
+        await subscribeChild();
       }
     };
 
@@ -1917,8 +2248,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
           [pseudoId]: { ...(state.subagentTranscripts[pseudoId] ?? { content: "", ended: false, resetSeq: 0 }), ended: false, source },
         },
       }));
-      if (shouldSubscribe) await subscribeChild();
-      else if (!(await subscribeCodexRolloutChild()) && !(await subscribeDerivedChild()) && source.kind !== "child-jsonl") await subscribeChild();
+      await subscribeAvailableChild();
       return;
     }
 
@@ -1985,17 +2315,24 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
 
     const newSessions = [...sessions, pseudoSession];
     // 不抢焦点：保留当前 activeSessionId（终端），转录在其分屏 pane 中即时可见。
-    set((state) => ({
+    const state = get();
+    const workspans = updateTerminalWorkspan(state.workspans, parentWorkspan.id, (workspan) => (
+      syncTerminalWorkspanLayout(workspan, nextTree, workspan.activePaneId, workspan.activeSessionId)
+    ));
+    const workspanState = state.activeWorkspanId === parentWorkspan.id
+      ? buildWorkspanMirror(workspans, parentWorkspan.id)
+      : { workspans };
+    set({
       sessions: newSessions,
-      paneTree: nextTree,
+      ...workspanState,
       subagentTranscripts: { ...state.subagentTranscripts, [pseudoId]: { content: "", ended: false, resetSeq: 0, source } },
-    }));
+    });
 
     // 持久化（sessionStore 会过滤掉转录伪会话）。
     void useSessionStore.getState().saveSessions(newSessions).catch(() => {});
+    persistWorkspanState(workspans, state.activeWorkspanId, newSessions);
 
-    if (shouldSubscribe) await subscribeChild();
-    else if (!(await subscribeCodexRolloutChild()) && !(await subscribeDerivedChild())) await subscribeChild();
+    await subscribeAvailableChild();
   },
 
   finishSubagentTranscript: (payload) => {
@@ -2016,6 +2353,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
       tabId: payload.tabId,
       agentId: trimOptional(payload.agentId),
     });
+    stopSubagentTranscriptRetry(sessionId, "subagent_finished");
 
     // 停止对应的目录扫描（如果有）
     const parentSessionId = payload.sessionId ?? null;
@@ -2041,7 +2379,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     if (existingTimer) clearTimeout(existingTimer);
     const currentTranscript = get().subagentTranscripts[sessionId];
     const closeDelayMs =
-      currentTranscript?.source.kind === "child-jsonl" || (payload.source === "codex" && trimOptional(payload.agentTranscriptPath))
+      currentTranscript?.source.kind === "child-jsonl" || payload.source === "codex"
         ? SUBAGENT_CHILD_JSONL_CLOSE_DELAY_MS
         : SUBAGENT_CLOSE_DELAY_MS;
     logInfo("[subagent_transcript] schedule transcript close", { sessionId, closeDelayMs, sourceKind: currentTranscript?.source.kind });

@@ -116,6 +116,7 @@ export type ShortcutAction =
   | "commandPalette"
   | "sessionHistory"
   | "copyAi"
+  | "pasteFileToAiTui"
   | "toggleTerminalFullscreen";
 export type TabSwitchShortcutModifier = "Alt" | "Ctrl" | "Shift";
 export type KeyboardShortcutMap = Record<ShortcutAction, string>;
@@ -141,6 +142,7 @@ const SHORTCUT_ACTIONS: readonly ShortcutAction[] = [
   "commandPalette",
   "sessionHistory",
   "copyAi",
+  "pasteFileToAiTui",
   "toggleTerminalFullscreen",
 ];
 
@@ -195,6 +197,7 @@ export const DEFAULT_KEYBOARD_SHORTCUTS: KeyboardShortcutMap = {
   commandPalette: "Ctrl+P",
   sessionHistory: "Ctrl+K",
   copyAi: "Alt+P",
+  pasteFileToAiTui: "Alt+V",
   toggleTerminalFullscreen: "F11",
 };
 
@@ -284,6 +287,8 @@ interface Settings {
   ccusageAnalyticsEnabled: boolean;
   ccusageUseWsl: boolean;
   windowsConptyCompatibilityFixEnabled: boolean;
+  terminalSessionRestoreEnabled: boolean;
+  projectWorktreeConfigEnabled: boolean;
   symlinkCompatibilityEnabled: boolean;
   lowMemoryMode: boolean;
   disableHardwareAcceleration: boolean;
@@ -413,6 +418,8 @@ const DEFAULTS: Settings = {
   ccusageAnalyticsEnabled: false,
   ccusageUseWsl: false,
   windowsConptyCompatibilityFixEnabled: false,
+  terminalSessionRestoreEnabled: true,
+  projectWorktreeConfigEnabled: true,
   symlinkCompatibilityEnabled: false,
   lowMemoryMode: false,
   disableHardwareAcceleration: false,
@@ -1038,6 +1045,14 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
       typeof entries.windowsConptyCompatibilityFixEnabled === "boolean"
         ? entries.windowsConptyCompatibilityFixEnabled
         : DEFAULTS.windowsConptyCompatibilityFixEnabled;
+    entries.terminalSessionRestoreEnabled =
+      typeof entries.terminalSessionRestoreEnabled === "boolean"
+        ? entries.terminalSessionRestoreEnabled
+        : DEFAULTS.terminalSessionRestoreEnabled;
+    entries.projectWorktreeConfigEnabled =
+      typeof entries.projectWorktreeConfigEnabled === "boolean"
+        ? entries.projectWorktreeConfigEnabled
+        : DEFAULTS.projectWorktreeConfigEnabled;
     entries.symlinkCompatibilityEnabled =
       typeof entries.symlinkCompatibilityEnabled === "boolean"
         ? entries.symlinkCompatibilityEnabled

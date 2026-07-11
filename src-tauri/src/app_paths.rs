@@ -9,6 +9,7 @@ const APP_HOME_DIR_NAME: &str = ".cli-manager";
 const DB_FILE_NAME: &str = "cli-manager.db";
 const SETTINGS_STORE_FILE_NAME: &str = "settings.json";
 const SESSIONS_STORE_FILE_NAME: &str = "sessions.json";
+const DEV_SESSIONS_STORE_FILE_NAME: &str = "sessions.dev.json";
 const SYNC_STORE_FILE_NAME: &str = "sync-config.json";
 const EXTERNAL_SESSION_SYNC_STORE_FILE_NAME: &str = "external-session-sync.json";
 const STORE_FILES: [&str; 4] = [
@@ -77,6 +78,14 @@ pub fn db_url() -> Result<String, String> {
     Ok(format!("sqlite:{}", db_path()?.to_string_lossy()))
 }
 
+fn sessions_store_file_name(is_dev: bool) -> &'static str {
+    if is_dev {
+        DEV_SESSIONS_STORE_FILE_NAME
+    } else {
+        SESSIONS_STORE_FILE_NAME
+    }
+}
+
 pub fn data_paths() -> Result<CliManagerDataPaths, String> {
     let data_dir = cli_manager_data_dir()?;
     let db_path = db_path()?;
@@ -92,7 +101,7 @@ pub fn data_paths() -> Result<CliManagerDataPaths, String> {
             .to_string_lossy()
             .into_owned(),
         sessions_store_path: data_dir
-            .join(SESSIONS_STORE_FILE_NAME)
+            .join(sessions_store_file_name(cfg!(dev)))
             .to_string_lossy()
             .into_owned(),
         sync_store_path: data_dir
@@ -240,6 +249,12 @@ pub fn history_backups_dir() -> Result<PathBuf, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn separates_development_and_installed_session_store_files() {
+        assert_eq!(sessions_store_file_name(false), "sessions.json");
+        assert_eq!(sessions_store_file_name(true), "sessions.dev.json");
+    }
 
     #[test]
     fn migrates_missing_store_file_by_copying_legacy_file() {

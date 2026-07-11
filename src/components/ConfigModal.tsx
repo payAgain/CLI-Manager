@@ -78,6 +78,7 @@ export function ConfigModal({ project, cloneFrom, defaultGroupId, onClose }: Pro
   const text = (zh: string, en: string) => (language === "zh-CN" ? zh : en);
   const { createProject, updateProject, groups } = useProjectStore();
   const symlinkCompatibilityEnabled = useSettingsStore((s) => s.symlinkCompatibilityEnabled);
+  const projectWorktreeConfigEnabled = useSettingsStore((s) => s.projectWorktreeConfigEnabled);
   const terminalShellProfiles = useSettingsStore((s) => s.terminalShellProfiles);
   const defaultShell = useSettingsStore((s) => s.defaultShell);
   const isEdit = !!project;
@@ -535,7 +536,10 @@ export function ConfigModal({ project, cloneFrom, defaultGroupId, onClose }: Pro
                 />
               </div>
 
-              <div className="rounded-xl border border-border/70 bg-bg-secondary/60 p-3">
+              <div
+                hidden={!projectWorktreeConfigEnabled}
+                className="rounded-xl border border-border/70 bg-bg-secondary/60 p-3"
+              >
                 <div className="mb-2 text-xs font-semibold text-text-secondary">{t("worktree.settings.title")}</div>
                 <div className="space-y-3">
                   <div>

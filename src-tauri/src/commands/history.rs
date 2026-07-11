@@ -2,7 +2,6 @@ use crate::commands::model_pricing::{find_cached_model_pricing, CachedModelPrici
 use crate::shell_resolver::silent_command;
 use chrono::{DateTime, Datelike, SecondsFormat, Utc};
 use log::{debug, info, warn};
-use memchr::memmem;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sqlx::sqlite::SqliteConnectOptions;
@@ -17,6 +16,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock, RwLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
+
+mod catalog;
 
 /// BufReader 容量；默认 8KB 对几 MB 的 jsonl 文件 syscall 次数偏多。
 const READ_BUF_CAPACITY: usize = 64 * 1024;
@@ -543,6 +544,19 @@ pub struct HistorySearchResult {
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct HistoryIndexStatus {
+    pub roots_key: String,
+    pub phase: String,
+    pub indexed_files: usize,
+    pub total_files: usize,
+    pub generation: u64,
+    pub partial: bool,
+    pub last_completed_at: Option<i64>,
+    pub error: Option<String>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct HistoryPromptItem {
     pub session_id: String,
     pub source: String,
@@ -730,6 +744,63 @@ struct StatsTimeBounds {
 
 #[tauri::command]
 pub async fn history_list_sessions(
+    app: tauri::AppHandle,
+    source: Option<String>,
+    claude_config_dir: Option<String>,
+    codex_config_dir: Option<String>,
+    project_path: Option<String>,
+    query: Option<String>,
+    limit: Option<usize>,
+    offset: Option<usize>,
+) -> Result<Vec<HistorySessionSummary>, String> {
+    let roots = history_roots(claude_config_dir.clone(), codex_config_dir.clone());
+    match catalog::list_sessions(
+        &roots,
+        source.clone(),
+        project_path.clone(),
+        query.clone(),
+        limit,
+        offset,
+    )
+    .await
+    {
+        Ok(mut sessions) => {
+            let targeted_lookup = query
+                .as_deref()
+                .is_some_and(|value| !value.trim().is_empty())
+                && limit == Some(1)
+                && offset.unwrap_or(0) == 0;
+            if targeted_lookup {
+                if let Some(session) = sessions.first_mut() {
+                    let path = PathBuf::from(&session.file_path);
+                    let fingerprint =
+                        tokio::task::spawn_blocking(move || session_file_fingerprint(&path))
+                            .await
+                            .map_err(|err| err.to_string())?;
+                    session.created_at = fingerprint.created_at;
+                    session.updated_at = fingerprint.updated_at;
+                }
+            }
+            let _ = catalog::ensure_refresh(app, roots, false, false).await;
+            Ok(sessions)
+        }
+        Err(err) => {
+            warn!("history catalog list fallback: {err}");
+            history_list_sessions_legacy(
+                source,
+                claude_config_dir,
+                codex_config_dir,
+                project_path,
+                query,
+                limit,
+                offset,
+            )
+            .await
+        }
+    }
+}
+
+async fn history_list_sessions_legacy(
     source: Option<String>,
     claude_config_dir: Option<String>,
     codex_config_dir: Option<String>,
@@ -1262,6 +1333,7 @@ pub async fn history_delete_session(
 
 #[tauri::command]
 pub async fn history_search(
+    app: tauri::AppHandle,
     query: String,
     source: Option<String>,
     claude_config_dir: Option<String>,
@@ -1269,94 +1341,34 @@ pub async fn history_search(
     project_path: Option<String>,
     limit: Option<usize>,
 ) -> Result<Vec<HistorySearchResult>, String> {
-    tokio::task::spawn_blocking(move || {
-        let roots = history_roots(claude_config_dir, codex_config_dir);
-        let normalized_query = query.trim().to_lowercase();
-        if normalized_query.is_empty() {
-            return Ok(Vec::new());
-        }
+    if query.trim().chars().count() < 3 {
+        return Ok(Vec::new());
+    }
+    let roots = history_roots(claude_config_dir, codex_config_dir);
+    let hits = catalog::search_sessions(&roots, &query, source, project_path, limit).await?;
+    let _ = catalog::ensure_refresh(app, roots, false, false).await;
+    Ok(hits)
+}
 
-        let max_hits = limit.unwrap_or(100).max(1);
-        let source_filter = source.map(|v| v.to_lowercase());
-        let target_project_path = project_path
-            .map(|v| normalize_history_path(&v))
-            .filter(|v| !v.is_empty());
-        let mut hits: Vec<HistorySearchResult> = Vec::new();
+#[tauri::command]
+pub async fn history_get_index_status(
+    app: tauri::AppHandle,
+    claude_config_dir: Option<String>,
+    codex_config_dir: Option<String>,
+) -> Result<HistoryIndexStatus, String> {
+    let roots = history_roots(claude_config_dir, codex_config_dir);
+    catalog::ensure_refresh(app, roots, false, false).await
+}
 
-        for entry in refresh_history_index(&roots) {
-            if let Some(filter) = &source_filter {
-                if &entry.file_ref.source != filter {
-                    continue;
-                }
-            }
-            if let Some(project_path) = &target_project_path {
-                if !session_matches_project_path(&entry.file_ref, project_path) {
-                    continue;
-                }
-            }
-            let file_ref = entry.file_ref;
-            let computed = entry.computed;
-            let file_path_str = file_ref.path.to_string_lossy().to_string();
-            let title = computed.title.clone();
-            let session_id = computed.session_id.clone();
-            let source_name = file_ref.source.clone();
-            let project_key = file_ref.project_key.clone();
-            let mut local_full = false;
-
-            if message_content_matches_query(&session_id, &normalized_query) {
-                hits.push(HistorySearchResult {
-                    session_id: session_id.clone(),
-                    source: source_name.clone(),
-                    project_key: project_key.clone(),
-                    title: title.clone(),
-                    file_path: file_path_str.clone(),
-                    role: "sessionId".to_string(),
-                    snippet: session_id.clone(),
-                    timestamp: None,
-                });
-                if hits.len() >= max_hits {
-                    return Ok(hits);
-                }
-            }
-
-            let scan_result =
-                iter_session_messages_filtered(&file_ref.path, &normalized_query, |_, msg| {
-                    if !message_content_matches_query(&msg.content, &normalized_query) {
-                        return true;
-                    }
-                    hits.push(HistorySearchResult {
-                        session_id: session_id.clone(),
-                        source: source_name.clone(),
-                        project_key: project_key.clone(),
-                        title: title.clone(),
-                        file_path: file_path_str.clone(),
-                        role: msg.role,
-                        snippet: excerpt(&msg.content, 180),
-                        timestamp: msg.timestamp,
-                    });
-                    if hits.len() >= max_hits {
-                        local_full = true;
-                        return false;
-                    }
-                    true
-                });
-            if let Err(err) = scan_result {
-                debug!(
-                    "history_search skip unreadable file: path={}, err={}",
-                    file_ref.path.to_string_lossy(),
-                    err
-                );
-                continue;
-            }
-            if local_full {
-                return Ok(hits);
-            }
-        }
-
-        Ok(hits)
-    })
-    .await
-    .map_err(|err| err.to_string())?
+#[tauri::command]
+pub async fn history_refresh_index(
+    app: tauri::AppHandle,
+    claude_config_dir: Option<String>,
+    codex_config_dir: Option<String>,
+    wait: Option<bool>,
+) -> Result<HistoryIndexStatus, String> {
+    let roots = history_roots(claude_config_dir, codex_config_dir);
+    catalog::ensure_refresh(app, roots, true, wait.unwrap_or(true)).await
 }
 
 #[tauri::command]
@@ -2244,6 +2256,7 @@ fn get_history_index() -> &'static RwLock<HistorySessionIndex> {
 }
 
 pub(crate) fn invalidate_history_caches() {
+    catalog::mark_dirty();
     if let Ok(mut cache) = get_files_cache().lock() {
         cache.by_source.clear();
     }
@@ -5504,75 +5517,6 @@ where
     Ok(())
 }
 
-/// 同 `iter_session_messages`，但在 JSON 解析前先用 byte-level memmem 预筛 lower-case query。
-/// 适用于全文搜索热路径：可让大量"必然不命中"的行直接跳过昂贵的 `serde_json::from_str::<Value>`。
-fn iter_session_messages_filtered<F>(
-    path: &Path,
-    lowercase_query: &str,
-    mut callback: F,
-) -> Result<(), String>
-where
-    F: FnMut(usize, HistoryMessage) -> bool,
-{
-    let file = File::open(path).map_err(|err| err.to_string())?;
-    let mut index = 0usize;
-    let finder = memmem::Finder::new(lowercase_query.as_bytes());
-    let query_is_ascii = lowercase_query.is_ascii();
-    for line in BufReader::with_capacity(READ_BUF_CAPACITY, file)
-        .lines()
-        .map_while(Result::ok)
-    {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        // Fast path: raw bytes 直接命中（绝大多数小写场景）
-        let mut maybe_match = finder.find(trimmed.as_bytes()).is_some();
-        // ASCII 查询走无分配大小写匹配；非 ASCII 保留 Unicode lowercase 兜底。
-        if !maybe_match {
-            maybe_match = if query_is_ascii {
-                contains_ascii_case_insensitive(trimmed.as_bytes(), lowercase_query.as_bytes())
-            } else {
-                let lower = trimmed.to_lowercase();
-                finder.find(lower.as_bytes()).is_some()
-            };
-        }
-        if !maybe_match {
-            continue;
-        }
-        let Ok(value) = serde_json::from_str::<Value>(trimmed) else {
-            continue;
-        };
-        if let Some(msg) = parse_message(&value) {
-            if !callback(index, msg) {
-                return Ok(());
-            }
-            index += 1;
-        }
-    }
-    Ok(())
-}
-
-fn contains_ascii_case_insensitive(haystack: &[u8], needle_lowercase: &[u8]) -> bool {
-    if needle_lowercase.is_empty() {
-        return true;
-    }
-    if needle_lowercase.len() > haystack.len() {
-        return false;
-    }
-    haystack
-        .windows(needle_lowercase.len())
-        .any(|window| window.eq_ignore_ascii_case(needle_lowercase))
-}
-
-fn message_content_matches_query(content: &str, lowercase_query: &str) -> bool {
-    if lowercase_query.is_ascii() {
-        return memmem::find(content.as_bytes(), lowercase_query.as_bytes()).is_some()
-            || contains_ascii_case_insensitive(content.as_bytes(), lowercase_query.as_bytes());
-    }
-    content.to_lowercase().contains(lowercase_query)
-}
-
 fn extract_usage_tokens(value: &Value) -> UsageTokenScan {
     let candidates = [
         Some(value),
@@ -8138,22 +8082,6 @@ mod tests {
 
         get_project_cache().lock().unwrap().entries.remove(&key);
         assert_eq!(scan.cwd.as_deref(), Some("D:\\work\\CachedProject"));
-    }
-
-    #[test]
-    fn iter_session_messages_filtered_matches_ascii_case_insensitive() {
-        let temp_dir = TempDir::new().unwrap();
-        let file = temp_dir.path().join("session.jsonl");
-        write_text(&file, r#"{"role":"user","content":"Find MIXED Case Text"}"#);
-        let mut hits = Vec::new();
-
-        iter_session_messages_filtered(&file, "mixed case", |_, msg| {
-            hits.push(msg.content);
-            true
-        })
-        .unwrap();
-
-        assert_eq!(hits, vec!["Find MIXED Case Text".to_string()]);
     }
 
     #[test]

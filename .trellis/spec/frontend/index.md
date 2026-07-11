@@ -21,6 +21,7 @@ This directory contains guidelines for frontend development. Fill in each file w
 | [Quality Guidelines](./quality-guidelines.md) | Code standards, forbidden patterns | Active |
 | [Type Safety](./type-safety.md) | Type patterns, validation | To fill |
 | [History Session Contracts](./history-session-contracts.md) | History favorites, metadata, and snapshot fallback contracts | Active |
+| [Workspace Session Restore Contracts](./workspace-session-restore-contracts.md) | 关闭后恢复工作区终端会话：TUI 走 resume、shell 贴 scrollback、节流落盘与启动问询 | Active |
 
 ---
 

@@ -165,3 +165,69 @@ Filled the frontend Trellis spec files, verified build, and captured current UI/
 ### Next Steps
 
 - None - task complete
+
+
+## Session 5: 优化子任务分屏流式输出
+
+**Date**: 2026-07-10
+**Task**: 优化子任务分屏流式输出
+**Branch**: `master`
+
+### Summary
+
+Claude 启动阶段提前订阅子任务 transcript，Codex rollout 增加有界发现重试，并补齐跨平台契约、变更记录与功能清单。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `04f63bd` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 6: 优化项目列表拖拽排序即时反馈
+
+**Date**: 2026-07-10
+**Task**: 优化项目列表拖拽排序即时反馈
+**Branch**: `master`
+
+### Summary
+
+项目与分组拖拽放手后先乐观更新 Zustand 项目树，再持久化 SQLite；失败时回滚，并同步更新 TEMP 变更记录与功能清单。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `e3bbee6` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

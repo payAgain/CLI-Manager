@@ -13,12 +13,14 @@
 - Backend startup migration: `migrate_legacy_app_files(app: &AppHandle<R>) -> Result<(), String>`.
 - Backend DB repair command: `db_repair_known_migration_drift(app: AppHandle) -> Result<DbMigrationRepairResult, String>`.
 - Stable data directory: `<home>/.cli-manager`.
-- Stable store files: `settings.json`, `sessions.json`, `sync-config.json`, `external-session-sync.json`.
+- Stable store files: `settings.json`, production `sessions.json`, development `sessions.dev.json`, `sync-config.json`, `external-session-sync.json`.
 - Stable SQLite DB: `cli-manager.db`.
 
 ### 3. Contracts
 
 - All durable CLI-Manager user data must resolve under `.cli-manager`, not versioned or identifier-dependent Tauri data folders.
+- `app_get_data_paths().sessionsStorePath` must use `sessions.dev.json` under Tauri `cfg(dev)` and `sessions.json` otherwise. Other stores remain shared unless another contract explicitly isolates them.
+- Legacy store migration continues to migrate `sessions.json` as production user data. It must not copy production or legacy sessions into `sessions.dev.json`.
 - Store migration from legacy Tauri app data must be non-destructive:
   - copy the legacy store file when the target file is missing;
   - merge only missing top-level JSON object keys when the target file already exists;
@@ -34,6 +36,8 @@
 |---|---|
 | Legacy store missing | No-op. |
 | Target store missing | Copy legacy store to `.cli-manager`. |
+| `cfg(dev)` runtime | Return `.cli-manager/sessions.dev.json`; do not read or modify production `sessions.json`. |
+| Installed runtime | Return `.cli-manager/sessions.json`; ignore `sessions.dev.json`. |
 | Both stores are JSON objects | Add only keys missing from target. |
 | Either store is non-object or invalid JSON | Skip merge; do not corrupt target. |
 | Target store has existing key | Keep target value. |
@@ -44,13 +48,16 @@
 ### 5. Good/Base/Bad Cases
 
 - Good: after update, a customized `settings.json` keeps existing values and receives only newly missing legacy keys.
+- Good: running `tauri dev` creates/loads `sessions.dev.json` while an installed app continues using `sessions.json`.
 - Base: clean install has no legacy files and starts with normal defaults.
+- Bad: using `debug_assertions` or a frontend-only check as the environment boundary; Tauri `cfg(dev)` is the authoritative dev/install distinction.
 - Bad: copying a whole legacy `settings.json` over a newer target file.
 - Bad: replacing a current DB that already contains user projects or templates.
 
 ### 6. Tests Required
 
 - Rust unit tests for missing-store copy, JSON object merge, and unchanged target when legacy has no new keys.
+- Rust unit test for development/installed session store file-name selection.
 - Rust unit tests for legacy DB recovery when current DB has no user rows and rejection when current DB has user rows.
 - `cargo check` after backend path or DB repair changes.
 - `cargo test --lib` or focused `cargo test app_paths db_repair --lib` after persistence migration changes.

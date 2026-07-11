@@ -416,6 +416,14 @@ type PaneDropTarget =
 
 **Why**: sortable tab transforms are optimized for in-list reordering and can visually lock a tab to the tab bar. Pane-level drop zones make center move and edge split behavior testable without guessing from DOM position after drop.
 
+**Intent boundary**:
+
+- A Workspan dragged inside the top tab bar remains a sortable tab operation.
+- Once the pointer enters a pane content rectangle, its outer directional regions become split targets. Resolve left/right/top/bottom from the pointer position relative to the pane center, while keeping a neutral center region so entering a pane does not immediately force a split.
+- Session tabs inside a multi-view pane keep the existing center-move and explicit edge-split behavior.
+- Collision detection identifies the pane only. Resolve the Workspan split direction in `onDragOver` and `onDragEnd` from `activatorEvent + delta` and `over.rect`; do not synthesize a pane-edge collision inside the collision detector.
+- The dragged Workspan is the source and the currently visible Workspan is the target. They must be different Workspans.
+
 **Correct**:
 
 ```tsx
@@ -423,6 +431,10 @@ type PaneDropTarget =
   <SplitTerminalView node={paneTree} renderLeaf={renderLeaf} />
   <DragOverlay dropAnimation={null}>{activeTabOverlay}</DragOverlay>
 </DndContext>
+
+const dropTarget = parsePaneDropTarget(String(event.over.id));
+const edge = dropTarget ? resolveWorkspanDropEdge(event, dropTarget) : null;
+if (edge) setActiveDropPreview({ paneId: dropTarget.paneId, edge });
 ```
 
 **Wrong**:
@@ -432,7 +444,7 @@ type PaneDropTarget =
 const horizontalTransform = transform ? { ...transform, y: 0 } : transform;
 ```
 
-**Tests**: For terminal drag UI changes, run `npx tsc --noEmit` and manually verify same-pane reorder, pane-center move, and left/right/top/bottom edge split previews in the Tauri desktop app.
+**Tests**: For terminal drag UI changes, run `npx tsc --noEmit` and manually verify top-bar Workspan sorting, neutral pane center behavior, outer-region Workspan directional splitting, same-pane reorder, pane-center move, and left/right/top/bottom edge split previews in the Tauri desktop app.
 
 ### Convention: Terminal split layout uses flat absolute positioning to preserve component identity
 

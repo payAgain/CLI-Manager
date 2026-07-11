@@ -379,6 +379,19 @@ export interface HistorySearchHit {
   timestamp?: string | null;
 }
 
+export type HistoryIndexPhase = "idle" | "seeding" | "scanning" | "indexing" | "ready" | "error";
+
+export interface HistoryIndexStatus {
+  rootsKey: string;
+  phase: HistoryIndexPhase;
+  indexedFiles: number;
+  totalFiles: number;
+  generation: number;
+  partial: boolean;
+  lastCompletedAt: number | null;
+  error: string | null;
+}
+
 export type PromptScope = "global" | "project" | "session";
 
 export interface HistoryPromptItem {

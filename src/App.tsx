@@ -21,6 +21,7 @@ const CcusageStatsPanel = lazy(() =>
 );
 import { WindowTitleBar } from "./components/WindowTitleBar";
 import { CloseConfirmDialog } from "./components/CloseConfirmDialog";
+import { ConfirmDialog } from "./components/ConfirmDialog";
 import { ExitProgressOverlay, type ExitPhase } from "./components/ExitProgressOverlay";
 import { AppFailureState } from "./components/AppFailureState";
 import { ExternalSessionSyncDialog } from "./components/ExternalSessionSyncDialog";
@@ -28,6 +29,7 @@ import { CircleAlert, CircleCheck, Info, ShieldAlert, X } from "./components/ico
 import { useSettingsStore, type HookEventType } from "./stores/settingsStore";
 import { useProjectStore } from "./stores/projectStore";
 import { useSessionStore } from "./stores/sessionStore";
+import { flushTerminalSnapshotsNow } from "./lib/sessionSnapshotPersistence";
 import { useSyncStore } from "./stores/syncStore";
 import { useHistoryStore } from "./stores/historyStore";
 import { useExternalSessionSyncStore } from "./stores/externalSessionSyncStore";
@@ -453,6 +455,8 @@ function App() {
   const [terminalScope, setTerminalScope] = useState<TerminalScope>(ALL_TERMINALS_SCOPE);
   const [isMacOs, setIsMacOs] = useState(isLikelyMacOs);
   const [initError, setInitError] = useState<string | null>(null);
+  // 启动时若检测到上次遗留的可恢复工作区标签，弹窗询问是否恢复（Issue #123）。
+  const [restorePromptOpen, setRestorePromptOpen] = useState(false);
   const terminalFullscreenMaximizedRef = useRef(false);
   const restoreWindowWidthRef = useRef<number | null>(null);
   const closeBehaviorRef = useRef(closeBehavior);
@@ -733,10 +737,25 @@ function App() {
       await useWorktreeStore.getState().loadWorktrees();
       await useWorktreeStore.getState().markMissingWorktrees();
 
-      // 3. 启动时不恢复历史终端，避免重建 PTY 并重跑 startupCmd。
-      await useSessionStore.getState().clear().catch((err) => {
-        logWarn("Failed to clear restored sessions during startup", err);
-      });
+      // 3. 恢复功能关闭时清理当前环境快照；开启时检测遗留标签并询问是否恢复。
+      //    注意：此处不再无条件 clear()。原 clear 的初衷是"防止重建 PTY 并重跑 startupCmd"，
+      //    但 Issue #123 的需求方已明确接受"恢复时重跑 startupCmd 换取无缝手感"这一取舍，故改为问询式恢复。
+      const persistedSessions = useSessionStore.getState().sessions;
+      const terminalSessionRestoreEnabled = useSettingsStore.getState().terminalSessionRestoreEnabled;
+      const hasRestorable = persistedSessions.some(
+        (session) => (session.kind ?? "pty") === "pty"
+      );
+      if (!terminalSessionRestoreEnabled) {
+        await useSessionStore.getState().clear().catch((err) => {
+          logWarn("Failed to clear disabled terminal session restore snapshot", err);
+        });
+      } else if (hasRestorable) {
+        if (!cancelled) setRestorePromptOpen(true);
+      } else {
+        await useSessionStore.getState().clear().catch((err) => {
+          logWarn("Failed to clear restored sessions during startup", err);
+        });
+      }
 
       startupBaseReady = true;
       if (!cancelled) {
@@ -756,6 +775,25 @@ function App() {
       cancelled = true;
     };
   }, [handleOpenSettings, loadSettings, t]);
+
+  // 用户确认恢复上次会话：重建全部标签 + attach 新 PTY，按会话类型分流（CLI 会话走原生 resume，普通 shell 贴回历史画面）。
+  const handleConfirmRestoreSessions = useCallback(() => {
+    setRestorePromptOpen(false);
+    const { projects, projectHealth } = useProjectStore.getState();
+    const projectMap = new Map(projects.map((project) => [project.id, project]));
+    void useTerminalStore.getState().restoreSessions(projectMap, projectHealth).catch((err) => {
+      logWarn("Failed to restore terminal sessions", err);
+      toast.error(t("notifications.app.initFailed"), { description: String(err) });
+    });
+  }, [t]);
+
+  // 用户拒绝恢复：清除本次工作区恢复快照（不动 session_meta / 历史记录），避免下次继续询问同一批旧标签。
+  const handleRejectRestoreSessions = useCallback(() => {
+    setRestorePromptOpen(false);
+    void useSessionStore.getState().clear().catch((err) => {
+      logWarn("Failed to clear restored sessions after user rejected restore", err);
+    });
+  }, []);
 
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", resolvedTheme);
@@ -942,12 +980,15 @@ function App() {
       });
       await runCloseAutoSync();
       setExitPhase("closing");
+      // Issue #123：正常退出前把各终端最终画面强制落盘，供下次启动问询式恢复。
+      // 必须在 pty_close_all 之前，避免关闭 PTY 触发的重绘/清屏影响 serialize 结果；
+      // 此处不再 clear() 工作区快照——那会让"关闭后恢复"永远拿不到数据。
+      await flushTerminalSnapshotsNow();
       try {
         await invoke("pty_close_all");
       } catch (err) {
         logWarn("Failed to close PTY sessions before exit", err);
       }
-      await useSessionStore.getState().clear();
     } finally {
       await exitApp(source);
     }
@@ -1181,6 +1222,15 @@ function App() {
         onMinimize={handleCloseDialogMinimize}
         onExit={handleCloseDialogExit}
         onClose={() => setCloseDialogOpen(false)}
+      />
+      <ConfirmDialog
+        open={restorePromptOpen}
+        title="恢复上次会话"
+        message="检测到上次遗留的终端标签。是否恢复这些标签（CLI 会话继续上次对话，普通终端贴回历史画面）？"
+        confirmText="恢复"
+        cancelText="不恢复"
+        onConfirm={handleConfirmRestoreSessions}
+        onClose={handleRejectRestoreSessions}
       />
       {exitPhase && <ExitProgressOverlay phase={exitPhase} notice={exitNotice} />}
       <Toaster

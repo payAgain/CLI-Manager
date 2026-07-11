@@ -190,6 +190,7 @@ export function HistoryWorkspace({ active = true }: HistoryWorkspaceProps) {
   const globalQuery = useHistoryStore((s) => s.globalQuery);
   const sessionQuery = useHistoryStore((s) => s.sessionQuery);
   const searchHits = useHistoryStore((s) => s.searchHits);
+  const indexStatus = useHistoryStore((s) => s.indexStatus);
   const backendHasMoreSessions = useHistoryStore((s) => s.hasMoreSessions);
   const focusedMessageIndex = useHistoryStore((s) => s.focusedMessageIndex);
   const focusedMessageSeq = useHistoryStore((s) => s.focusedMessageSeq);
@@ -198,8 +199,8 @@ export function HistoryWorkspace({ active = true }: HistoryWorkspaceProps) {
   const closeHistory = useHistoryStore((s) => s.closeHistory);
   const setSourceFilter = useHistoryStore((s) => s.setSourceFilter);
   const setProjectPathFilter = useHistoryStore((s) => s.setProjectPathFilter);
-  const loadSessions = useHistoryStore((s) => s.loadSessions);
   const loadMoreSessions = useHistoryStore((s) => s.loadMoreSessions);
+  const refreshIndex = useHistoryStore((s) => s.refreshIndex);
   const openSession = useHistoryStore((s) => s.openSession);
   const addConvertedSession = useHistoryStore((s) => s.addConvertedSession);
   const deleteSession = useHistoryStore((s) => s.deleteSession);
@@ -387,7 +388,8 @@ export function HistoryWorkspace({ active = true }: HistoryWorkspaceProps) {
     sessionSearchRef.current?.select();
   }, [active, focusSessionSearchSeq]);
 
-  const normalizedGlobal = globalQuery.trim().toLowerCase();
+  const trimmedGlobalQuery = globalQuery.trim();
+  const normalizedGlobal = [...trimmedGlobalQuery].length >= 3 ? trimmedGlobalQuery.toLowerCase() : "";
 
   const favoriteSearchScope = useMemo(() => {
     const keys = new Set<string>();
@@ -527,16 +529,12 @@ export function HistoryWorkspace({ active = true }: HistoryWorkspaceProps) {
 
   const handleRefreshSessions = useCallback(() => {
     void (async () => {
-      await loadSessions();
-      const query = globalQuery.trim();
-      if (query) {
-        await runGlobalSearch(query);
-      }
+      await refreshIndex();
       await useExternalSessionSyncStore.getState().openManualDialog();
     })().catch((err) => {
       toast.error(t("history.toast.refreshFailed"), { description: String(err) });
     });
-  }, [globalQuery, loadSessions, runGlobalSearch, t]);
+  }, [refreshIndex, t]);
 
   const matchIndices = useMemo(() => {
     const query = debouncedSessionQuery.trim();
@@ -1020,6 +1018,7 @@ export function HistoryWorkspace({ active = true }: HistoryWorkspaceProps) {
           loadMoreSessionMode={loadMoreSessionMode}
           visibleSessionCount={Math.min(visibleSessionCount, filteredSessions.length)}
           searchHits={visibleSearchHits}
+          indexStatus={indexStatus}
           globalSearchRef={globalSearchRef}
           selectionMode={selectionMode}
           selectedCount={selectedSessionKeys.size}

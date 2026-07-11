@@ -223,6 +223,7 @@ export function Sidebar({
   const dismissWorktreeDepsPrompt = useWorktreeStore((s) => s.dismissDepsPrompt);
   const removeWorktree = useWorktreeStore((s) => s.removeWorktree);
   const useExternalTerminal = useSettingsStore((s) => s.useExternalTerminal);
+  const projectWorktreeConfigEnabled = useSettingsStore((s) => s.projectWorktreeConfigEnabled);
   const sidebarDensity = useSettingsStore((s) => s.sidebarDensity);
   const sidebarToolbarVisibility = useSettingsStore((s) => s.sidebarToolbarVisibility);
   const updateSetting = useSettingsStore((s) => s.update);
@@ -998,7 +999,9 @@ export function Sidebar({
   };
 
   const openProjectInternal = async (project: Project, targetPaneId?: string) => {
-    const decision = shouldIsolateNewSession(project, sessions);
+    const decision = projectWorktreeConfigEnabled
+      ? shouldIsolateNewSession(project, sessions)
+      : "none";
     if (decision === "none") {
       await openProjectDirect(project, targetPaneId);
       return;
@@ -1062,7 +1065,9 @@ export function Sidebar({
         closeHistory();
       };
 
-      const decision = shouldIsolateNewSession(project, sessions);
+      const decision = projectWorktreeConfigEnabled
+        ? shouldIsolateNewSession(project, sessions)
+        : "none";
       if (decision === "none") {
         await splitDirect();
         return;
@@ -1088,6 +1093,7 @@ export function Sidebar({
       closeHistory,
       compactMode,
       createAndSplitWorktree,
+      projectWorktreeConfigEnabled,
       sessions,
       shouldIsolateNewSession,
       splitTerminal,

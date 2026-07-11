@@ -510,8 +510,23 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
 
   reorderItems: async (_parentId, orderedIds) => {
     if (orderedIds.length === 0) return;
-    const db = await getDb();
-    const groupIds = new Set(get().groups.map((g) => g.id));
+    const { groups, projects, worktrees, searchQuery, tree } = get();
+    const groupIds = new Set(groups.map((g) => g.id));
+    const orderById = new Map(orderedIds.map((id, index) => [id, index]));
+    const nextGroups = groups.map((group) => {
+      const sortOrder = orderById.get(group.id);
+      return sortOrder === undefined ? group : { ...group, sort_order: sortOrder };
+    });
+    const nextProjects = projects.map((project) => {
+      const sortOrder = orderById.get(project.id);
+      return sortOrder === undefined ? project : { ...project, sort_order: sortOrder };
+    });
+
+    set({
+      groups: nextGroups,
+      projects: nextProjects,
+      tree: buildTree(nextGroups, nextProjects, searchQuery, worktrees),
+    });
 
     const groupUpdates: Array<[string, number]> = [];
     const projectUpdates: Array<[string, number]> = [];
@@ -524,15 +539,20 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
       }
     }
 
-    // 合并成单条 CASE WHEN UPDATE：从 N 次 execute（N 次 fsync）变成 1 次。
-    await batchUpdateSortOrder(db, "groups", groupUpdates);
-    await batchUpdateSortOrder(db, "projects", projectUpdates);
-    await get().fetchAll();
+    try {
+      const db = await getDb();
+      // 合并成单条 CASE WHEN UPDATE：从 N 次 execute（N 次 fsync）变成 1 次。
+      await batchUpdateSortOrder(db, "groups", groupUpdates);
+      await batchUpdateSortOrder(db, "projects", projectUpdates);
+      await get().fetchAll();
+    } catch (err) {
+      set({ groups, projects, tree });
+      throw err;
+    }
   },
 
   moveProjectToGroup: async (projectId, targetGroupId) => {
-    const db = await getDb();
-    const { projects } = get();
+    const { groups, projects, worktrees, searchQuery, tree } = get();
     const project = projects.find((p) => p.id === projectId);
     if (!project) return;
     if (project.group_id === targetGroupId) return;
@@ -541,18 +561,33 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
     const maxOrder = siblings.reduce((m, p) => Math.max(m, p.sort_order ?? 0), -1);
     const nextOrder = maxOrder + 1;
     const ts = Date.now().toString();
-
-    await db.execute(
-      "UPDATE projects SET group_id = $1, sort_order = $2, updated_at = $3 WHERE id = $4",
-      [targetGroupId, nextOrder, ts, projectId]
+    const nextProjects = projects.map((item) =>
+      item.id === projectId
+        ? { ...item, group_id: targetGroupId, sort_order: nextOrder, updated_at: ts }
+        : item
     );
-    await get().fetchAll();
+
+    set({
+      projects: nextProjects,
+      tree: buildTree(groups, nextProjects, searchQuery, worktrees),
+    });
+
+    try {
+      const db = await getDb();
+      await db.execute(
+        "UPDATE projects SET group_id = $1, sort_order = $2, updated_at = $3 WHERE id = $4",
+        [targetGroupId, nextOrder, ts, projectId]
+      );
+      await get().fetchAll();
+    } catch (err) {
+      set({ projects, tree });
+      throw err;
+    }
   },
 
   moveGroupToParent: async (groupId, targetParentId) => {
     if (groupId === targetParentId) return;
-    const db = await getDb();
-    const { groups } = get();
+    const { groups, projects, worktrees, searchQuery, tree } = get();
     const group = groups.find((g) => g.id === groupId);
     if (!group) return;
     if (group.parent_id === targetParentId) return;
@@ -580,11 +615,27 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
     const siblings = groups.filter((g) => g.parent_id === targetParentId && g.id !== groupId);
     const maxOrder = siblings.reduce((m, g) => Math.max(m, g.sort_order ?? 0), -1);
     const nextOrder = maxOrder + 1;
-
-    await db.execute(
-      "UPDATE groups SET parent_id = $1, sort_order = $2 WHERE id = $3",
-      [targetParentId, nextOrder, groupId]
+    const nextGroups = groups.map((item) =>
+      item.id === groupId
+        ? { ...item, parent_id: targetParentId, sort_order: nextOrder }
+        : item
     );
-    await get().fetchAll();
+
+    set({
+      groups: nextGroups,
+      tree: buildTree(nextGroups, projects, searchQuery, worktrees),
+    });
+
+    try {
+      const db = await getDb();
+      await db.execute(
+        "UPDATE groups SET parent_id = $1, sort_order = $2 WHERE id = $3",
+        [targetParentId, nextOrder, groupId]
+      );
+      await get().fetchAll();
+    } catch (err) {
+      set({ groups, tree });
+      throw err;
+    }
   },
 }));

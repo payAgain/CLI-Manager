@@ -29,13 +29,14 @@ import { SessionTranscriptContent } from "./SessionTranscriptContent";
 import { MetaEditor } from "./MetaEditor";
 import { formatTime, makeSessionLabel } from "./historyViewUtils";
 import { SessionTimelineView } from "./SessionTimelineView";
+import { SessionCanvasView } from "./SessionCanvasView";
 import { SessionContextView } from "./SessionContextView";
 import { SessionFileChangesView } from "./SessionFileChangesView";
 import { SessionToolDiagnosticsView } from "./SessionToolDiagnosticsView";
 import { SessionSubtaskTreeView } from "./SessionSubtaskTreeView";
 import type { SessionProcessModel } from "./sessionEvents";
 
-export type HistoryDetailView = "transcript" | "timeline" | "context" | "changes" | "tools" | "subtasks";
+export type HistoryDetailView = "transcript" | "timeline" | "canvas" | "context" | "changes" | "tools" | "subtasks";
 
 interface SessionDetailPaneProps {
   activeView: HistorySessionView | null;
@@ -90,6 +91,7 @@ interface SessionDetailPaneProps {
 const DETAIL_VIEWS: Array<{ id: HistoryDetailView; labelKey: TranslationKey }> = [
   { id: "transcript", labelKey: "history.detail.view.transcript" },
   { id: "timeline", labelKey: "history.detail.view.timeline" },
+  { id: "canvas", labelKey: "history.detail.view.canvas" },
   { id: "context", labelKey: "history.detail.view.context" },
   { id: "changes", labelKey: "history.detail.view.changes" },
   { id: "tools", labelKey: "history.detail.view.tools" },
@@ -991,6 +993,15 @@ export function SessionDetailPane({
 
         {!loadingSessionDetail && detailView === "timeline" && (
           <SessionTimelineView model={processModel} onJumpToMessage={onJumpToMessage} />
+        )}
+
+        {!loadingSessionDetail && detailView === "canvas" && (
+          <SessionCanvasView
+            session={activeSession}
+            model={processModel}
+            onJumpToMessage={onJumpToMessage}
+            onOpenDiff={onOpenDiff}
+          />
         )}
 
         {!loadingSessionDetail && detailView === "context" && <SessionContextView session={activeSession} />}

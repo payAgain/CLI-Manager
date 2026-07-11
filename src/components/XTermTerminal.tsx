@@ -83,6 +83,7 @@ const TUI_BORDER_CHAR_PATTERN = /^[│┃║▏▎▍▌▋▊▉█┆┊╎╏
 const TUI_BORDER_PREFIX_PATTERN = /^[\s│┃║▏▎▍▌▋▊▉█┆┊╎╏]+/u;
 import { toast } from "sonner";
 import { logError, logInfo } from "../lib/logger";
+import { registerTerminalSnapshotSource, markTerminalSnapshotDirty } from "../lib/sessionSnapshotPersistence";
 
 // Shell integration OSC 序列在原始 PTY 流上解析（而非 xterm parser hook）：
 // 后台 Tab 的输出会进入 inactive ring buffer 且可能被截断丢弃，状态事件必须
@@ -106,6 +107,7 @@ const SLASH_COMMAND_MENU_LINE_PATTERN = /^\/[a-z0-9][a-z0-9:_-]*(?:\s|$)/i;
 const AI_TUI_VIEWPORT_PATTERN = /(?:openai\s+codex|claude\s+code|yolo\s+mode|mcp\s+(?:client|startup)|\/model\s+to\s+change)/i;
 const CODEX_COMMAND_PATTERN = /(?:^|\s)codex(?:\.(?:cmd|exe|ps1))?(?:\s|$)/i;
 const CLAUDE_COMMAND_PATTERN = /(?:^|\s)claude(?:\.(?:cmd|exe|ps1))?(?:\s|$)/i;
+const AI_TUI_FILE_PASTE_SHORTCUT_DATA = "\x1bv";
 const CODEX_IME_DEBUG_WINDOW_MS = 250;
 const CODEX_IME_DUPLICATE_WINDOW_MS = 120;
 const IME_PROCESS_KEY_CODE = 229;
@@ -337,6 +339,22 @@ const copyTextToClipboard = async (text: string) => {
 };
 
 const readClipboardText = async () => navigator.clipboard.readText();
+
+const terminalEventToCombo = (e: KeyboardEvent): string => {
+  const parts: string[] = [];
+  if (e.ctrlKey) parts.push("Ctrl");
+  if (e.shiftKey) parts.push("Shift");
+  if (e.altKey) parts.push("Alt");
+  if (e.metaKey) parts.push("Meta");
+
+  if (["Control", "Shift", "Alt", "Meta"].includes(e.key)) return "";
+  parts.push(e.key.length === 1 ? e.key.toUpperCase() : e.key);
+  return parts.join("+");
+};
+
+const terminalShortcutMatches = (e: KeyboardEvent, shortcut: string) => (
+  shortcut.trim() !== "" && terminalEventToCombo(e) === shortcut
+);
 
 const trimTerminalPasteBoundaryLineBreaks = (text: string) => (
   text.replace(/^(?:\r\n?|\n)+|(?:\r\n?|\n)+$/gu, "")
@@ -1614,6 +1632,8 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
     terminal.unicode.activeVersion = "11";
     terminal.loadAddon(webLinksAddon);
     terminal.open(containerRef.current);
+    // 注册定时节流落盘的快照来源：让崩溃/强杀也能恢复到最近一次落盘的画面。
+    const unregisterSnapshotSource = registerTerminalSnapshotSource(sessionId, () => serializeAddon.serialize());
     const searchResultDisposable = searchAddon.onDidChangeResults((event) => {
       setSearchResult({ resultIndex: event.resultIndex, resultCount: event.resultCount });
     });
@@ -1804,6 +1824,8 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
       if (terminal.hasSelection()) {
         void copySelection();
         terminal.clearSelection();
+        keyboardInputSelection = null;
+        selectedInputSnapshot = null;
         terminal.focus();
         setMenuState(null);
         return;
@@ -1881,6 +1903,7 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
         ? repeatControlSequence("\x1b[C", delta)
         : repeatControlSequence("\x1b[D", -delta);
       inputCursorIndexRef.current = targetCursorIndex;
+      keyboardInputSelection = null;
       selectedInputSnapshot = null;
       clearSuggestionGhost();
       cancelAiSuggestionRefresh();
@@ -1891,16 +1914,39 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
     contextMenuTarget.addEventListener("click", moveInputCursorToClick);
 
     let selectedInputSnapshot: string | null = null;
+    let keyboardInputSelection: {
+      anchorIndex: number;
+      focusIndex: number;
+      inputStartCellIndex: number;
+    } | null = null;
 
-    const rewriteCurrentInput = (nextInput: string, stage: string) => {
+    const clearKeyboardInputSelectionOnMouseDown = (e: MouseEvent) => {
+      if (e.button !== 0) return;
+      keyboardInputSelection = null;
+      selectedInputSnapshot = null;
+    };
+    contextMenuTarget.addEventListener("mousedown", clearKeyboardInputSelectionOnMouseDown);
+
+    const rewriteCurrentInput = (
+      nextInput: string,
+      stage: string,
+      cursorIndex: number = getTextCursorLength(nextInput)
+    ) => {
+      const nextCursorIndex = clampTextCursorIndex(nextInput, cursorIndex);
+      const cursorRestore = repeatControlSequence(
+        "\x1b[D",
+        getTextCursorLength(nextInput) - nextCursorIndex
+      );
       inputBuffer.current = nextInput;
-      inputCursorIndexRef.current = getTextCursorLength(nextInput);
+      inputCursorIndexRef.current = nextCursorIndex;
       terminal.clearSelection();
+      keyboardInputSelection = null;
       selectedInputSnapshot = null;
       markAttentionInputHandled();
       clearSuggestionGhost();
       cancelAiSuggestionRefresh();
-      invoke("pty_write", { sessionId, data: `\x15${nextInput}` }).catch((err) => reportPtyWriteError(stage, err));
+      invoke("pty_write", { sessionId, data: `\x15${nextInput}${cursorRestore}` })
+        .catch((err) => reportPtyWriteError(stage, err));
     };
 
     const isReplaceableInputData = (data: string) => {
@@ -1996,6 +2042,7 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
 
     const selectCurrentInputText = () => {
       const currentInput = inputBuffer.current;
+      keyboardInputSelection = null;
       selectedInputSnapshot = currentInput || null;
       terminal.clearSelection();
       if (!currentInput) {
@@ -2027,9 +2074,110 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
       return true;
     };
 
+    const renderKeyboardInputSelection = (
+      currentInput: string,
+      selection: NonNullable<typeof keyboardInputSelection>
+    ) => {
+      const startIndex = Math.min(selection.anchorIndex, selection.focusIndex);
+      const endIndex = Math.max(selection.anchorIndex, selection.focusIndex);
+      if (startIndex === endIndex) {
+        terminal.clearSelection();
+        return;
+      }
+
+      const startCellIndex = selection.inputStartCellIndex
+        + getTerminalCellWidth(sliceTextByCursor(currentInput, 0, startIndex));
+      const selectionCellWidth = getTerminalCellWidth(sliceTextByCursor(currentInput, startIndex, endIndex));
+      terminal.select(startCellIndex % terminal.cols, Math.floor(startCellIndex / terminal.cols), selectionCellWidth);
+    };
+
+    const extendKeyboardInputSelection = (direction: -1 | 1) => {
+      const currentInput = inputBuffer.current;
+      const currentCursorIndex = clampTextCursorIndex(currentInput, inputCursorIndexRef.current);
+      const targetCursorIndex = clampTextCursorIndex(currentInput, currentCursorIndex + direction);
+      if (!currentInput || targetCursorIndex === currentCursorIndex) {
+        terminal.focus();
+        return;
+      }
+
+      const selection = keyboardInputSelection ?? (() => {
+        const buffer = terminal.buffer.active;
+        const cursorCellIndex = ((buffer.baseY + buffer.cursorY) * terminal.cols) + buffer.cursorX;
+        const cursorPrefixWidth = getTerminalCellWidth(sliceTextByCursor(currentInput, 0, currentCursorIndex));
+        return {
+          anchorIndex: currentCursorIndex,
+          focusIndex: currentCursorIndex,
+          inputStartCellIndex: Math.max(0, cursorCellIndex - cursorPrefixWidth),
+        };
+      })();
+
+      const nextSelection = { ...selection, focusIndex: targetCursorIndex };
+      keyboardInputSelection = nextSelection;
+      selectedInputSnapshot = null;
+      inputCursorIndexRef.current = targetCursorIndex;
+      renderKeyboardInputSelection(currentInput, nextSelection);
+      clearSuggestionGhost();
+      cancelAiSuggestionRefresh();
+      markAttentionInputHandled();
+      invoke("pty_write", { sessionId, data: direction < 0 ? "\x1b[D" : "\x1b[C" })
+        .catch((err) => reportPtyWriteError("keyboard_selection", err));
+      terminal.focus();
+    };
+
+    const collapseKeyboardInputSelection = (direction: -1 | 1) => {
+      if (!keyboardInputSelection) return false;
+      const startIndex = Math.min(keyboardInputSelection.anchorIndex, keyboardInputSelection.focusIndex);
+      const endIndex = Math.max(keyboardInputSelection.anchorIndex, keyboardInputSelection.focusIndex);
+      if (startIndex === endIndex) {
+        keyboardInputSelection = null;
+        return false;
+      }
+
+      const currentCursorIndex = clampTextCursorIndex(inputBuffer.current, inputCursorIndexRef.current);
+      const targetCursorIndex = direction < 0 ? startIndex : endIndex;
+      const delta = targetCursorIndex - currentCursorIndex;
+      const data = delta > 0
+        ? repeatControlSequence("\x1b[C", delta)
+        : repeatControlSequence("\x1b[D", -delta);
+      keyboardInputSelection = null;
+      selectedInputSnapshot = null;
+      inputCursorIndexRef.current = targetCursorIndex;
+      terminal.clearSelection();
+      clearSuggestionGhost();
+      cancelAiSuggestionRefresh();
+      markAttentionInputHandled();
+      if (data) {
+        invoke("pty_write", { sessionId, data }).catch((err) => reportPtyWriteError("keyboard_selection_collapse", err));
+      }
+      terminal.focus();
+      return true;
+    };
+
     const removeSelectedInputText = () => {
       const selectedText = terminal.getSelection();
       const currentInput = inputBuffer.current;
+      if (keyboardInputSelection && terminal.hasSelection()) {
+        const startIndex = Math.min(keyboardInputSelection.anchorIndex, keyboardInputSelection.focusIndex);
+        const endIndex = Math.max(keyboardInputSelection.anchorIndex, keyboardInputSelection.focusIndex);
+        if (startIndex < endIndex) {
+          const focusIndex = keyboardInputSelection.focusIndex;
+          const nextInput = `${sliceTextByCursor(currentInput, 0, startIndex)}${sliceTextByCursor(currentInput, endIndex)}`;
+          const moveToSelectionEnd = repeatControlSequence("\x1b[C", endIndex - focusIndex);
+          const deleteSelection = repeatControlSequence("\x7f", endIndex - startIndex);
+          inputBuffer.current = nextInput;
+          inputCursorIndexRef.current = startIndex;
+          terminal.clearSelection();
+          keyboardInputSelection = null;
+          selectedInputSnapshot = null;
+          markAttentionInputHandled();
+          clearSuggestionGhost();
+          cancelAiSuggestionRefresh();
+          invoke("pty_write", { sessionId, data: `${moveToSelectionEnd}${deleteSelection}` })
+            .catch((err) => reportPtyWriteError("keyboard_selection_delete", err));
+          return true;
+        }
+      }
+      keyboardInputSelection = null;
       if (!selectedText && selectedInputSnapshot === currentInput && currentInput) {
         rewriteCurrentInput("", "selection_delete_all");
         return true;
@@ -2057,7 +2205,7 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
 
       const index = currentInput.indexOf(matchedText);
       const nextInput = `${currentInput.slice(0, index)}${currentInput.slice(index + matchedText.length)}`;
-      rewriteCurrentInput(nextInput, "selection_delete");
+      rewriteCurrentInput(nextInput, "selection_delete", getTextCursorLength(currentInput.slice(0, index)));
       return true;
     };
 
@@ -2075,6 +2223,32 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
       ) {
         e.preventDefault();
         selectCurrentInputText();
+        return false;
+      }
+
+      if (
+        e.type === "keydown" &&
+        e.shiftKey &&
+        !e.ctrlKey &&
+        !e.altKey &&
+        !e.metaKey &&
+        (e.key === "ArrowLeft" || e.key === "ArrowRight")
+      ) {
+        e.preventDefault();
+        extendKeyboardInputSelection(e.key === "ArrowLeft" ? -1 : 1);
+        return false;
+      }
+
+      if (
+        e.type === "keydown" &&
+        !e.shiftKey &&
+        !e.ctrlKey &&
+        !e.altKey &&
+        !e.metaKey &&
+        (e.key === "ArrowLeft" || e.key === "ArrowRight") &&
+        collapseKeyboardInputSelection(e.key === "ArrowLeft" ? -1 : 1)
+      ) {
+        e.preventDefault();
         return false;
       }
 
@@ -2151,6 +2325,16 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
           return false;
         }
       }
+      if (e.type === "keydown" && isClaudeOrCodexSession()) {
+        const shortcut = useSettingsStore.getState().keyboardShortcuts.pasteFileToAiTui;
+        if (terminalShortcutMatches(e, shortcut)) {
+          e.preventDefault();
+          markAttentionInputHandled();
+          invoke("pty_write", { sessionId, data: AI_TUI_FILE_PASTE_SHORTCUT_DATA })
+            .catch((err) => reportPtyWriteError("ai_file_paste_shortcut", err));
+          return false;
+        }
+      }
       if (e.type === "keydown" && e.ctrlKey && e.shiftKey && !e.altKey && !e.metaKey && e.key.toLowerCase() === "v") {
         e.preventDefault();
         readClipboardText().then((text) => {
@@ -2171,6 +2355,8 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
         e.preventDefault();
         void copySelection();
         terminal.clearSelection();
+        keyboardInputSelection = null;
+        selectedInputSnapshot = null;
         return false;
       }
       if (e.type !== "keydown" || !e.ctrlKey || e.shiftKey || e.altKey || e.metaKey) return true;
@@ -2188,6 +2374,8 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
         e.preventDefault();
         void copySelection();
         terminal.clearSelection();
+        keyboardInputSelection = null;
+        selectedInputSnapshot = null;
         return false;
       }
       if (key === "v") {
@@ -2602,6 +2790,7 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
       if (!replacingSelectedInput) {
         selectedInputSnapshot = null;
       }
+      keyboardInputSelection = null;
       const inputBufferBefore = inputBuffer.current;
       const manualDirectCodexOverride = resolveManualDirectCodexEnterData({
         data,
@@ -2685,6 +2874,8 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
       }
       const text = processShellIntegrationOsc(processSpecialOscQueries(textDecoder.decode(bytes, { stream: true })));
       if (!text) return;
+      // 标记脏，供定时节流落盘判断是否需要重新序列化该终端。
+      markTerminalSnapshotDirty(sessionId);
       if (isVisibleRef.current) {
         pendingChunks.push(text);
         if (writeRafId === null) {
@@ -3162,6 +3353,7 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
       unlistenFileDrop?.();
       contextMenuTarget.removeEventListener("contextmenu", onContextMenu);
       contextMenuTarget.removeEventListener("click", moveInputCursorToClick);
+      contextMenuTarget.removeEventListener("mousedown", clearKeyboardInputSelectionOnMouseDown);
       terminalContainer.removeEventListener("keydown", onImeProcessKeyDown, nativeTextInputListenerOptions);
       terminalContainer.removeEventListener("beforeinput", onNativeTextBeforeInput, nativeTextInputListenerOptions);
       terminalContainer.removeEventListener("input", onNativeTextInput, nativeTextInputListenerOptions);
@@ -3230,6 +3422,7 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
       inactiveBufferRef.current = [];
       inactiveBufferSizeRef.current = 0;
       needsViewportRefreshRef.current = false;
+      unregisterSnapshotSource();
       unlisten?.();
       searchResultDisposable.dispose();
       cursorStyleDisposable.dispose();

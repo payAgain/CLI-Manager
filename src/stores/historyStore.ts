@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { getDb } from "../lib/db";
 import { createPerfMarker, logInfo, logWarn } from "../lib/logger";
 import { useSettingsStore } from "./settingsStore";
@@ -8,6 +9,7 @@ import type {
   HistoryEditAuditEntry,
   HistoryFileChangeOperation,
   HistoryFileChangeSummary,
+  HistoryIndexStatus,
   HistoryMessage,
   HistoryPromptItem,
   HistorySearchHit,
@@ -65,6 +67,7 @@ interface HistoryStore {
   sessions: HistorySessionView[];
   hasMoreSessions: boolean;
   sessionListOffset: number;
+  sessionsIndexGeneration: number;
   activeSessionKey: string | null;
   activeSession: HistorySessionDetail | null;
   globalQuery: string;
@@ -78,6 +81,7 @@ interface HistoryStore {
   metaMap: SessionMetaMap;
   focusGlobalSearchSeq: number;
   focusSessionSearchSeq: number;
+  indexStatus: HistoryIndexStatus;
   ensureMetaTable: () => Promise<void>;
   openHistory: (options?: OpenHistoryOptions) => Promise<void>;
   closeHistory: () => void;
@@ -86,6 +90,8 @@ interface HistoryStore {
   setProjectPathFilter: (projectPath: string | null) => Promise<void>;
   loadSessions: () => Promise<void>;
   loadMoreSessions: () => Promise<void>;
+  loadIndexStatus: () => Promise<void>;
+  refreshIndex: () => Promise<void>;
   addConvertedSession: (summary: unknown) => string;
   openSession: (sessionKey: string) => Promise<void>;
   openSearchHit: (hit: HistorySearchHit) => Promise<void>;
@@ -133,6 +139,17 @@ interface HistoryStore {
 const SESSION_PAGE_SIZE = 20;
 const SESSION_PAGE_FETCH_LIMIT = SESSION_PAGE_SIZE + 1;
 const DEFAULT_SEARCH_LIMIT = 120;
+const MIN_GLOBAL_SEARCH_CHARS = 3;
+const DEFAULT_HISTORY_INDEX_STATUS: HistoryIndexStatus = {
+  rootsKey: "",
+  phase: "idle",
+  indexedFiles: 0,
+  totalFiles: 0,
+  generation: 0,
+  partial: true,
+  lastCompletedAt: null,
+  error: null,
+};
 const STATS_CACHE_TTL_MS = 5 * 60 * 1000;
 const STATS_CACHE_MAX = 16;
 const STATS_PROJECT_OPTIONS_CACHE_MAX = 8;
@@ -411,6 +428,28 @@ function normalizeHit(raw: unknown): HistorySearchHit {
     role: asString(rec.role),
     snippet: asString(rec.snippet),
     timestamp: asString(rec.timestamp ?? "") || null,
+  };
+}
+
+function normalizeIndexStatus(raw: unknown): HistoryIndexStatus {
+  const rec = (raw ?? {}) as Record<string, unknown>;
+  const phase = asString(rec.phase);
+  return {
+    rootsKey: asString(rec.rootsKey ?? rec.roots_key),
+    phase: (["idle", "seeding", "scanning", "indexing", "ready", "error"] as const).includes(
+      phase as HistoryIndexStatus["phase"]
+    )
+      ? (phase as HistoryIndexStatus["phase"])
+      : "idle",
+    indexedFiles: Math.max(0, asNumber(rec.indexedFiles ?? rec.indexed_files)),
+    totalFiles: Math.max(0, asNumber(rec.totalFiles ?? rec.total_files)),
+    generation: Math.max(0, asNumber(rec.generation)),
+    partial: Boolean(rec.partial),
+    lastCompletedAt:
+      rec.lastCompletedAt == null && rec.last_completed_at == null
+        ? null
+        : asNumber(rec.lastCompletedAt ?? rec.last_completed_at),
+    error: asString(rec.error ?? "") || null,
   };
 }
 
@@ -1287,6 +1326,45 @@ async function applyFavoriteSnapshots(
   );
 }
 
+let globalSearchRequestSeq = 0;
+let historyIndexListenerPromise: Promise<void> | null = null;
+let historyIndexReadyRefreshTimer: number | null = null;
+
+function ensureHistoryIndexListener(): Promise<void> {
+  if (historyIndexListenerPromise) return historyIndexListenerPromise;
+  historyIndexListenerPromise = listen<unknown>("history-index-status", (event) => {
+    const next = normalizeIndexStatus(event.payload);
+    const previous = useHistoryStore.getState().indexStatus;
+    useHistoryStore.setState({ indexStatus: next });
+    if (
+      next.phase !== "ready" ||
+      next.generation === previous.generation ||
+      !useHistoryStore.getState().isOpen
+    ) {
+      return;
+    }
+    if (historyIndexReadyRefreshTimer !== null) window.clearTimeout(historyIndexReadyRefreshTimer);
+    historyIndexReadyRefreshTimer = window.setTimeout(() => {
+      historyIndexReadyRefreshTimer = null;
+      const state = useHistoryStore.getState();
+      void state.loadSessions().then(() => {
+        const query = useHistoryStore.getState().globalQuery;
+        if ([...query.trim()].length >= MIN_GLOBAL_SEARCH_CHARS) {
+          return useHistoryStore.getState().runGlobalSearch(query);
+        }
+      }).catch((error) => {
+        logWarn("history.index.readyRefreshFailed", { error: String(error) });
+      });
+    }, 150);
+  })
+    .then(() => undefined)
+    .catch((error) => {
+      historyIndexListenerPromise = null;
+      logWarn("history.index.listenerFailed", { error: String(error) });
+    });
+  return historyIndexListenerPromise;
+}
+
 export const useHistoryStore = create<HistoryStore>((set, get) => ({
   isOpen: false,
   loadingSessions: false,
@@ -1306,6 +1384,7 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
   sessions: [],
   hasMoreSessions: false,
   sessionListOffset: 0,
+  sessionsIndexGeneration: -1,
   activeSessionKey: null,
   activeSession: null,
   globalQuery: "",
@@ -1319,6 +1398,7 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
   metaMap: {},
   focusGlobalSearchSeq: 0,
   focusSessionSearchSeq: 0,
+  indexStatus: { ...DEFAULT_HISTORY_INDEX_STATUS },
 
   ensureMetaTable: async () => {
     const db = await getDb();
@@ -1407,7 +1487,9 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
       scopedProjectPathFilter: nextScopedProjectPathFilter,
     });
     try {
-      if (!hasSessions || filterChanged) {
+      await ensureHistoryIndexListener();
+      await get().loadIndexStatus();
+      if (!hasSessions || filterChanged || get().sessionsIndexGeneration !== get().indexStatus.generation) {
         await get().loadSessions();
       }
     } finally {
@@ -1477,6 +1559,7 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
         metaMap,
         hasMoreSessions: allSummaries.length > SESSION_PAGE_SIZE,
         sessionListOffset: summaries.length,
+        sessionsIndexGeneration: get().indexStatus.generation,
         activeSessionKey: nextActiveKey,
         activeSession: activeExists ? get().activeSession : null,
         focusedMessageIndex: null,
@@ -1543,6 +1626,41 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
         sessionCount: get().sessions.length,
         hasMoreSessions: get().hasMoreSessions,
       });
+    }
+  },
+
+  loadIndexStatus: async () => {
+    try {
+      const raw = await invoke<unknown>("history_get_index_status", getHistoryPathArgs());
+      set({ indexStatus: normalizeIndexStatus(raw) });
+    } catch (error) {
+      logWarn("history.index.statusFailed", { error: String(error) });
+      set((state) => ({
+        indexStatus: {
+          ...state.indexStatus,
+          phase: "error",
+          partial: true,
+          error: String(error),
+        },
+      }));
+    }
+  },
+
+  refreshIndex: async () => {
+    await ensureHistoryIndexListener();
+    const raw = await invoke<unknown>("history_refresh_index", {
+      ...getHistoryPathArgs(),
+      wait: true,
+    });
+    if (historyIndexReadyRefreshTimer !== null) {
+      window.clearTimeout(historyIndexReadyRefreshTimer);
+      historyIndexReadyRefreshTimer = null;
+    }
+    set({ indexStatus: normalizeIndexStatus(raw) });
+    await get().loadSessions();
+    const query = get().globalQuery;
+    if ([...query.trim()].length >= MIN_GLOBAL_SEARCH_CHARS) {
+      await get().runGlobalSearch(query);
     }
   },
 
@@ -1685,12 +1803,18 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
 
   runGlobalSearch: async (query) => {
     const normalized = query.trim();
+    const requestSeq = ++globalSearchRequestSeq;
     set({ globalQuery: query });
-    if (!normalized) {
-      set({ searchHits: [] });
+    if ([...normalized].length < MIN_GLOBAL_SEARCH_CHARS) {
+      set({ searchHits: [], searching: false });
       return;
     }
 
+    const stopPerf = createPerfMarker("history.search", {
+      queryLength: [...normalized].length,
+      sourceFilter: get().sourceFilter,
+      projectPathFilter: effectiveProjectPathFilter(get()) ?? "__all__",
+    });
     set({ searching: true });
     try {
       const source = normalizeSourceFilter(get().sourceFilter);
@@ -1702,9 +1826,27 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
         limit: DEFAULT_SEARCH_LIMIT,
       });
       const hits = (hitsRaw ?? []).map((item) => normalizeHit(item));
-      set({ searchHits: hits });
+      if (requestSeq === globalSearchRequestSeq) {
+        set({ searchHits: hits });
+      }
+    } catch (error) {
+      if (requestSeq === globalSearchRequestSeq) {
+        set((state) => ({
+          searchHits: [],
+          indexStatus: {
+            ...state.indexStatus,
+            phase: "error",
+            partial: true,
+            error: String(error),
+          },
+        }));
+      }
+      logWarn("history.search.failed", { error: String(error) });
     } finally {
-      set({ searching: false });
+      if (requestSeq === globalSearchRequestSeq) {
+        set({ searching: false });
+      }
+      stopPerf({ hitCount: get().searchHits.length, stale: requestSeq !== globalSearchRequestSeq });
     }
   },
 

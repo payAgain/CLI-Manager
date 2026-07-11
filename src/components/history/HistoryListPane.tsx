@@ -1,7 +1,7 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { ArrowRightLeft, Bot, Check, ChevronDown, ChevronRight, Clock3, Folder, MessageSquare, RefreshCw, Search, Star, Terminal, Trash2, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode, type RefObject } from "react";
-import type { Group, HistorySearchHit, HistorySessionView, HistorySourceFilter, Project } from "../../lib/types";
+import type { Group, HistoryIndexStatus, HistorySearchHit, HistorySessionView, HistorySourceFilter, Project } from "../../lib/types";
 import { useI18n, type TranslationKey } from "../../lib/i18n";
 import { findWorktreeByPath } from "../../lib/terminalProject";
 import { useWorktreeStore } from "../../stores/worktreeStore";
@@ -63,6 +63,7 @@ interface HistoryListPaneProps {
   loadMoreSessionMode: "local" | "backend";
   visibleSessionCount: number;
   searchHits: HistorySearchHit[];
+  indexStatus: HistoryIndexStatus;
   globalSearchRef: RefObject<HTMLInputElement | null>;
   selectionMode: boolean;
   selectedCount: number;
@@ -314,6 +315,7 @@ export function HistoryListPane({
   loadMoreSessionMode,
   visibleSessionCount,
   searchHits,
+  indexStatus,
   globalSearchRef,
   selectionMode,
   selectedCount,
@@ -349,6 +351,9 @@ export function HistoryListPane({
   const projectDropdownRef = useRef<HTMLDivElement | null>(null);
   const projectMenuWasOpenRef = useRef(false);
   const worktrees = useWorktreeStore((state) => state.worktrees);
+  const globalQueryLength = [...globalQuery.trim()].length;
+  const globalQueryTooShort = globalQueryLength > 0 && globalQueryLength < 3;
+  const indexBusy = ["seeding", "scanning", "indexing"].includes(indexStatus.phase);
 
   const projectTree = useMemo(() => buildHistoryProjectTree(groups, projects), [groups, projects]);
   const selectedProject = useMemo(
@@ -632,7 +637,7 @@ export function HistoryListPane({
             className="ui-flat-action ui-toolbar-button-compact ui-history-list-action h-8 w-8 shrink-0 px-0"
             title={t("history.refreshList")}
           >
-            <RefreshCw size={12} />
+            <RefreshCw size={12} className={indexBusy ? "animate-spin" : undefined} />
           </button>
           <button
             type="button"
@@ -656,6 +661,20 @@ export function HistoryListPane({
             className="flex-1 bg-transparent text-[12px] outline-none"
           />
         </div>
+        {globalQueryTooShort && (
+          <div className="px-3 pt-1 text-[10px] text-text-muted">{t("history.search.minimumChars")}</div>
+        )}
+        {indexBusy && (
+          <div className="px-3 pt-1 text-[10px] text-text-muted">
+            {t("history.index.progress", {
+              indexed: indexStatus.indexedFiles,
+              total: indexStatus.totalFiles,
+            })}
+          </div>
+        )}
+        {indexStatus.phase === "error" && (
+          <div className="px-3 pt-1 text-[10px] text-danger">{t("history.index.error")}</div>
+        )}
 
         <div ref={projectDropdownRef} className="relative mt-2">
           <button
@@ -818,7 +837,9 @@ export function HistoryListPane({
 
                 {row.type === "searchHeader" && (
                   <div className="px-3 py-2 text-[11px] font-semibold text-text-muted">
-                    {t("history.searchHits", { count: row.count })}
+                    {indexStatus.partial
+                      ? t("history.searchHitsPartial", { count: row.count })
+                      : t("history.searchHits", { count: row.count })}
                   </div>
                 )}
 

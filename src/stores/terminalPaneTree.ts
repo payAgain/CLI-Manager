@@ -1,6 +1,13 @@
 export type TerminalPaneSplitDirection = "horizontal" | "vertical";
 export type TerminalPaneDropEdge = "left" | "right" | "top" | "bottom";
 
+export interface TerminalPaneDropRect {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+}
+
 export interface TerminalPaneLeaf {
   type: "leaf";
   id: string;
@@ -27,6 +34,19 @@ const MAX_SPLIT_RATIO = 0.8;
 
 export function clampSplitRatio(ratio: number): number {
   return Math.max(MIN_SPLIT_RATIO, Math.min(MAX_SPLIT_RATIO, ratio));
+}
+
+export function resolvePaneDropEdgeFromPoint(
+  x: number,
+  y: number,
+  rect: TerminalPaneDropRect,
+  activationRatio = 0
+): TerminalPaneDropEdge | null {
+  const horizontal = (x - (rect.left + rect.width / 2)) / Math.max(rect.width, 1);
+  const vertical = (y - (rect.top + rect.height / 2)) / Math.max(rect.height, 1);
+  if (Math.max(Math.abs(horizontal), Math.abs(vertical)) < activationRatio) return null;
+  if (Math.abs(horizontal) >= Math.abs(vertical)) return horizontal < 0 ? "left" : "right";
+  return vertical < 0 ? "top" : "bottom";
 }
 
 export function createPaneLeaf(id: string, sessionIds: string[] = [], activeSessionId: string | null = null): TerminalPaneLeaf {

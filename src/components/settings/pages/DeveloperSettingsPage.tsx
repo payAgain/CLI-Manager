@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import { Box, Card, Group, Stack, Switch, Text } from "@mantine/core";
 import { relaunch } from "@tauri-apps/plugin-process";
-import { Bug, Cpu, HardDrive, Link2, MonitorCog } from "lucide-react";
+import { Bug, Cpu, GitBranch, HardDrive, History, Link2, MonitorCog } from "lucide-react";
 import { toast } from "sonner";
 import { useSettingsStore } from "../../../stores/settingsStore";
 import { getOsPlatform, type OsPlatform } from "../../../lib/shell";
@@ -54,6 +54,8 @@ function SettingSwitchCard({
 export function DeveloperSettingsPage() {
   const { t } = useI18n();
   const windowsConptyCompatibilityFixEnabled = useSettingsStore((s) => s.windowsConptyCompatibilityFixEnabled);
+  const terminalSessionRestoreEnabled = useSettingsStore((s) => s.terminalSessionRestoreEnabled);
+  const projectWorktreeConfigEnabled = useSettingsStore((s) => s.projectWorktreeConfigEnabled);
   const symlinkCompatibilityEnabled = useSettingsStore((s) => s.symlinkCompatibilityEnabled);
   const lowMemoryMode = useSettingsStore((s) => s.lowMemoryMode);
   const disableHardwareAcceleration = useSettingsStore((s) => s.disableHardwareAcceleration);
@@ -75,6 +77,8 @@ export function DeveloperSettingsPage() {
   const updateBooleanSetting = (
     key:
       | "symlinkCompatibilityEnabled"
+      | "terminalSessionRestoreEnabled"
+      | "projectWorktreeConfigEnabled"
       | "lowMemoryMode"
       | "disableHardwareAcceleration"
       | "debugMode",
@@ -107,6 +111,26 @@ export function DeveloperSettingsPage() {
     enabledLabelKey: TranslationKey;
     disabledLabelKey: TranslationKey;
   }[] = [
+    {
+      key: "terminalSessionRestoreEnabled",
+      icon: <History size={16} />,
+      titleKey: "settings.developer.terminalSessionRestore",
+      descriptionKey: "settings.developer.terminalSessionRestoreDescription",
+      checked: terminalSessionRestoreEnabled,
+      onChange: (checked) => updateBooleanSetting("terminalSessionRestoreEnabled", checked),
+      enabledLabelKey: "settings.developer.disableTerminalSessionRestore",
+      disabledLabelKey: "settings.developer.enableTerminalSessionRestore",
+    },
+    {
+      key: "projectWorktreeConfigEnabled",
+      icon: <GitBranch size={16} />,
+      titleKey: "settings.developer.projectWorktreeConfig",
+      descriptionKey: "settings.developer.projectWorktreeConfigDescription",
+      checked: projectWorktreeConfigEnabled,
+      onChange: (checked) => updateBooleanSetting("projectWorktreeConfigEnabled", checked),
+      enabledLabelKey: "settings.developer.disableProjectWorktreeConfig",
+      disabledLabelKey: "settings.developer.enableProjectWorktreeConfig",
+    },
     {
       key: "symlinkCompatibilityEnabled",
       icon: <Link2 size={16} />,

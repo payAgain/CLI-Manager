@@ -300,6 +300,37 @@ splitSessionToPaneEdge(sessionId: string, targetPaneId: string, edge: TerminalPa
 - Assert same-pane single-tab edge split returns `changed: false`.
 - Assert `activePaneId` and `activeSessionId` point to the moved tab when a split succeeds.
 
+### Pattern: Workspans own pane trees; terminalStore exposes the active layout mirror
+
+**Problem**: Multiple top-level terminal workspaces need independent pane layouts, but existing UI and actions read `terminalStore.paneTree`, `activePaneId`, and `activeSessionId` directly. Replacing those fields outright would create broad churn and make background events mutate the wrong workspace.
+
+**Solution**: Persist a `TerminalWorkspan[]` collection where each item owns its pane tree and active state. Keep the three existing terminalStore fields as a compatibility mirror of the active Workspan. Every pane mutation must update the active Workspan and the mirror in the same Zustand `set()` call.
+
+**Contracts**:
+
+- Every live session belongs to exactly one Workspan; merging Workspans moves existing session IDs and never calls `pty_create`.
+- Switching Workspans replaces the active mirror without unmounting or closing sessions in inactive Workspans.
+- Background events such as subagent transcript creation locate the parent session's Workspan and mutate that Workspan even when it is inactive; they must not steal focus.
+- Closing the last session removes its Workspan and selects an adjacent Workspan. Closing a session in an inactive Workspan must keep the current Workspan active.
+- Persist only Workspans containing persistable sessions. Filter transient file editor, synced history, and subagent transcript sessions before writing.
+- PTY restoration creates new session IDs. Restore Workspan trees through the old-to-new session ID map before selecting the active Workspan.
+- Workspan edge-drop inserts the complete source pane tree beside the hovered target pane; it must preserve the full session ID set without duplicates.
+- Inactive Workspans stay mounted but hidden so xterm scrollback and live output survive switching.
+- A pane with one visible session hides its local tab bar; panes with multiple stacked transient views keep a compact switcher.
+- Async PTY creation must re-resolve the source session's current Workspan and pane after every await. If the source session was closed, unsubscribe the new listener, close the abandoned PTY, and do not add an unowned session.
+- Project/group/worktree scoped views may show a filtered Workspan layout, but bulk close actions must use only session IDs from that filtered tree; hidden sessions remain untouched.
+- Multi-session close operations must be serialized so older persistence writes cannot overwrite the final Workspan/session snapshot.
+
+**Tests Required**:
+
+- Run `npx tsc --noEmit`.
+- Assert Workspan merge preserves the complete session ID set with no duplicates.
+- Assert sanitization keeps a session ID in only one pane even when persisted layout data contains duplicates.
+- Manual desktop verification: switch Workspans, change split ratios, restart, and verify each layout restores with the correct active session.
+- Manual desktop verification: close focused and inactive sessions, and verify Workspan selection remains correct.
+- Manual desktop verification: start a split, then move/close its source Workspan before PTY creation completes; no orphan tab or stale layout may appear.
+- Manual desktop verification: in a scoped view, closing a Workspan tab closes only visible sessions and preserves hidden project sessions.
+
 ### Pattern: Worktree records are project state; worktree sessions are terminal metadata
 
 **Problem**: A Git worktree is a persistent checkout on disk, but an open terminal tab inside it is transient. If worktree identity lives only on `TerminalSession`, app restart loses the project-tree child item; if it lives only in the database, tab badges and finish-task menus cannot tell which checkout a running tab belongs to.

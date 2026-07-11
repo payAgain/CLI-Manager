@@ -557,6 +557,8 @@ pub fn run() {
             commands::history_edit::history_restore_session_backup,
             commands::history_edit::history_get_backup_status,
             commands::history::history_search,
+            commands::history::history_get_index_status,
+            commands::history::history_refresh_index,
             commands::history::history_list_prompts,
             commands::history::history_list_stats_projects,
             commands::history::history_get_stats,

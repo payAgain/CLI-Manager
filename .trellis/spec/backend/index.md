@@ -13,6 +13,7 @@
 | [Tauri Updater Contracts](./tauri-updater-contracts.md) | Signed updater config, capabilities, release artifacts, and install/relaunch UX contracts | Active |
 | [cc-switch Integration Contracts](./ccswitch-integration-contracts.md) | External SQLite read-only access (sqlx, no rusqlite), secret masking, and per-project settings.json env replacement | Active |
 | [History Stats Contracts](./history-stats-contracts.md) | History usage stats payloads, token/cost fields, cache behavior, and frontend normalization | Active |
+| [History Index Contracts](./history-index-contracts.md) | Cached history list, FTS5 search, incremental refresh, and failure fallback | Active |
 | [Model Pricing Contracts](./model-pricing-contracts.md) | User-configurable model prices, remote sync, backend cache bridge, and cost calculation authority | Active |
 | [CLI Hook Contracts](./cli-hook-contracts.md) | Claude/Codex hook install events, bridge payload fields, and sub-agent transcript routing | Active |
 | [WSL Path Contracts](./wsl-path-contracts.md) | WSL UNC 路径的 Plan 9 限制、wsl.exe 规避方案、路径转换工具签名和安全性 | Active |

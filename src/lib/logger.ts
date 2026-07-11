@@ -7,6 +7,7 @@ export type PerfMetric =
   | "history.open"
   | "history.index.warmup"
   | "history.sessions.load"
+  | "history.search"
   | "history.session.detail"
   | "stats.open"
   | "stats.load";
@@ -35,9 +36,14 @@ export const PERF_BUDGETS: Record<PerfMetric, PerfBudget> = {
     desc: "后台同步 Claude/Codex 历史索引",
   },
   "history.sessions.load": {
-    targetMs: 650,
-    warnMs: 1300,
+    targetMs: 200,
+    warnMs: 500,
     desc: "历史会话列表加载",
+  },
+  "history.search": {
+    targetMs: 200,
+    warnMs: 500,
+    desc: "历史会话全文搜索",
   },
   "history.session.detail": {
     targetMs: 260,

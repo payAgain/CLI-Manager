@@ -26,7 +26,13 @@ import { isProjectFileDirty, useFileExplorerStore } from "../stores/fileExplorer
 import { useI18n, type TranslationKey } from "../lib/i18n";
 import { logError } from "../lib/logger";
 import type { TerminalPaneDropEdge, TerminalPaneLeaf, TerminalPaneSplitDirection } from "../stores/terminalPaneTree";
-import { collectPaneLeaves, filterPaneTreeBySessionIds, findFirstSessionId } from "../stores/terminalPaneTree";
+import {
+  collectPaneLeaves,
+  filterPaneTreeBySessionIds,
+  findFirstSessionId,
+  resolvePaneDropEdgeFromPoint,
+} from "../stores/terminalPaneTree";
+import { collectWorkspanSessionIds, type TerminalWorkspan } from "../stores/terminalWorkspan";
 import { SplitTerminalView } from "./SplitTerminalView";
 import { XTermTerminal } from "./XTermTerminal";
 import { CommandTemplatePanel } from "./CommandTemplatePanel";
@@ -148,7 +154,16 @@ const PULSING_TAB_STATES = new Set<TabNotificationState>(["running", "attention"
 const PANE_DROP_PREFIX = "pane-drop:";
 const PANE_CENTER_DROP_PREFIX = "pane-center:";
 const PANE_EDGE_DROP_PREFIX = "pane-edge:";
+const WORKSPAN_DRAG_PREFIX = "workspan:";
+const WORKSPAN_SPLIT_ACTIVATION_RATIO = 0.18;
 const PANE_DROP_EDGES: TerminalPaneDropEdge[] = ["left", "right", "top", "bottom"];
+const WORKSPAN_NOTIFICATION_PRIORITY: Record<TabNotificationState, number> = {
+  none: 0,
+  done: 1,
+  running: 2,
+  failed: 3,
+  attention: 4,
+};
 const SPLIT_PICKER_OUTSIDE_GUARD_MS = 250;
 type SplitPickerAnchor = DOMRect | { x: number; y: number };
 type SplitPickerAlign = "start" | "end";
@@ -190,6 +205,22 @@ interface TerminalTabHoverInfo {
 
 function isTerminalPaneDropEdge(value: string): value is TerminalPaneDropEdge {
   return PANE_DROP_EDGES.includes(value as TerminalPaneDropEdge);
+}
+
+function parseWorkspanDragId(value: string): string | null {
+  return value.startsWith(WORKSPAN_DRAG_PREFIX) ? value.slice(WORKSPAN_DRAG_PREFIX.length) || null : null;
+}
+
+function getWorkspanNotification(
+  sessionIds: string[],
+  notifications: Record<string, TabNotificationState>
+): TabNotificationState {
+  let resolved: TabNotificationState = "none";
+  for (const sessionId of sessionIds) {
+    const next = notifications[sessionId] ?? "none";
+    if (WORKSPAN_NOTIFICATION_PRIORITY[next] > WORKSPAN_NOTIFICATION_PRIORITY[resolved]) resolved = next;
+  }
+  return resolved;
 }
 
 function parsePaneDropTarget(id: string): PaneDropTarget | null {
@@ -283,6 +314,11 @@ const terminalTabCollisionDetection: CollisionDetection = (args) => {
   const centerCollision = pointerCollisions.find((collision) => String(collision.id).startsWith(PANE_CENTER_DROP_PREFIX));
   if (centerCollision) return [centerCollision];
 
+  if (String(args.active.id).startsWith(WORKSPAN_DRAG_PREFIX)) {
+    const workspanTabCollision = pointerCollisions.find((collision) => String(collision.id).startsWith(WORKSPAN_DRAG_PREFIX));
+    return workspanTabCollision ? [workspanTabCollision] : [];
+  }
+
   const closestCollisions = closestCenter(args);
   const tabCollision = closestCollisions.find((collision) => !isPaneDropCollisionId(String(collision.id)));
   if (tabCollision) return [tabCollision];
@@ -290,6 +326,31 @@ const terminalTabCollisionDetection: CollisionDetection = (args) => {
   const paneBarCollision = pointerCollisions.find((collision) => String(collision.id).startsWith(PANE_DROP_PREFIX));
   return paneBarCollision ? [paneBarCollision] : closestCollisions;
 };
+
+function resolveWorkspanDropEdge(
+  event: DragOverEvent | DragEndEvent,
+  dropTarget: PaneDropTarget
+): TerminalPaneDropEdge | null {
+  if (dropTarget.type === "edge") return dropTarget.edge;
+  if (!event.over) return null;
+
+  const activatorEvent = event.activatorEvent;
+  if (
+    !("clientX" in activatorEvent)
+    || !("clientY" in activatorEvent)
+    || typeof activatorEvent.clientX !== "number"
+    || typeof activatorEvent.clientY !== "number"
+  ) {
+    return null;
+  }
+
+  return resolvePaneDropEdgeFromPoint(
+    activatorEvent.clientX + event.delta.x,
+    activatorEvent.clientY + event.delta.y,
+    event.over.rect,
+    WORKSPAN_SPLIT_ACTIVATION_RATIO
+  );
+}
 
 function resolveHistorySourceFilter(cliTool: string | null | undefined): HistorySourceFilter {
   const normalized = cliTool?.trim().toLowerCase();
@@ -669,6 +730,128 @@ function TerminalTabHoverCard({
     </div>
   );
 }
+function SortableWorkspanTab({
+  workspan,
+  title,
+  notification,
+  vendor,
+  isActive,
+  dragDisabled,
+  renameDisabled,
+  onActivate,
+  onClose,
+  onRename,
+}: {
+  workspan: TerminalWorkspan;
+  title: string;
+  notification: TabNotificationState;
+  vendor?: VendorKey | null;
+  isActive: boolean;
+  dragDisabled: boolean;
+  renameDisabled: boolean;
+  onActivate: () => void;
+  onClose: (anchor: DOMRect) => void;
+  onRename: (title: string) => void;
+}) {
+  const { t } = useI18n();
+  const sortableId = `${WORKSPAN_DRAG_PREFIX}${workspan.id}`;
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id: sortableId,
+    disabled: dragDisabled,
+    data: { type: "workspan", workspanId: workspan.id },
+  });
+  const [editing, setEditing] = useState(false);
+  const [editValue, setEditValue] = useState(title);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const horizontalTransform = transform ? { ...transform, y: 0 } : transform;
+  const style: CSSProperties = {
+    transform: isDragging ? undefined : CSS.Transform.toString(horizontalTransform),
+    transition: isDragging ? undefined : transition,
+    opacity: isDragging ? 0.45 : 1,
+    zIndex: isDragging ? 10 : undefined,
+  };
+  const sortableAttributes = { ...attributes, role: "tab" as const, "aria-selected": isActive };
+
+  useEffect(() => {
+    if (!editing) return;
+    setEditValue(title);
+    window.requestAnimationFrame(() => {
+      inputRef.current?.focus();
+      inputRef.current?.select();
+    });
+  }, [editing, title]);
+
+  const submitRename = useCallback(() => {
+    const trimmed = editValue.trim();
+    if (trimmed && trimmed !== title) onRename(trimmed);
+    setEditing(false);
+  }, [editValue, onRename, title]);
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      className="ui-interactive ui-tab-trigger ui-terminal-tab-item ui-workspan-tab mx-1 flex h-7 min-w-[104px] max-w-[200px] shrink-0 cursor-pointer items-center gap-2 rounded-lg px-3 text-[12px] font-medium"
+      data-workspan-id={workspan.id}
+      data-selected={isActive ? "true" : "false"}
+      onClick={onActivate}
+      onDoubleClick={(event) => {
+        event.stopPropagation();
+        if (!renameDisabled) setEditing(true);
+      }}
+      {...sortableAttributes}
+      {...listeners}
+    >
+      <span
+        className="ui-tab-runtime-dot h-2 w-2 shrink-0 rounded-full"
+        data-pulsing={PULSING_TAB_STATES.has(notification) ? "true" : "false"}
+        style={{ backgroundColor: TAB_NOTIFICATION_COLORS[notification], color: TAB_NOTIFICATION_COLORS[notification] }}
+        aria-label={t(TAB_NOTIFICATION_LABELS[notification])}
+        role="status"
+      />
+      {vendor ? (
+        <span className="ui-terminal-tab-vendor inline-flex shrink-0 items-center" aria-hidden="true">
+          <VendorIcon vendor={vendor} size={14} />
+        </span>
+      ) : (
+        <Terminal size={14} strokeWidth={1.8} aria-hidden="true" />
+      )}
+      {editing ? (
+        <input
+          ref={inputRef}
+          value={editValue}
+          onChange={(event) => setEditValue(event.target.value)}
+          onClick={(event) => event.stopPropagation()}
+          onPointerDown={(event) => event.stopPropagation()}
+          onKeyDown={(event) => {
+            event.stopPropagation();
+            if (event.key === "Enter") submitRename();
+            if (event.key === "Escape") setEditing(false);
+          }}
+          onBlur={submitRename}
+          className="ui-input h-5 min-w-0 flex-1 rounded-md px-1.5 py-0 text-[12px] text-on-surface outline-none"
+          aria-label={t("terminal.tab.rename")}
+        />
+      ) : (
+        <span className="ui-terminal-tab-title min-w-0 flex-1 truncate tracking-[0.01em]">{title}</span>
+      )}
+      <button
+        type="button"
+        className="ui-terminal-tab-close ml-1 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-on-surface-variant transition-[background-color,color,opacity,box-shadow] hover:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--interactive-focus-ring)]"
+        onPointerDown={(event) => event.stopPropagation()}
+        onClick={(event) => {
+          event.stopPropagation();
+          onClose(event.currentTarget.getBoundingClientRect());
+        }}
+        aria-label={t("terminal.workspan.close", { title })}
+        title={t("terminal.workspan.close", { title })}
+      >
+        <X size={13} strokeWidth={2.2} aria-hidden="true" />
+      </button>
+    </div>
+  );
+}
+
 function DragOverlayTab({
   title,
   notification,
@@ -1837,15 +2020,19 @@ export function TerminalTabs({
   terminalScope = ALL_TERMINALS_SCOPE,
 }: TerminalTabsProps = {}) {
   const { t } = useI18n();
-  const { sessions, activeSessionId, paneTree, tabNotifications } = useTerminalStore(
+  const { sessions, activeSessionId, workspans, activeWorkspanId, tabNotifications } = useTerminalStore(
     useShallow((s) => ({
       sessions: s.sessions,
       activeSessionId: s.activeSessionId,
-      paneTree: s.paneTree,
+      workspans: s.workspans,
+      activeWorkspanId: s.activeWorkspanId,
       tabNotifications: s.tabNotifications,
     }))
   );
   const setActive = useTerminalStore((s) => s.setActive);
+  const setActiveWorkspan = useTerminalStore((s) => s.setActiveWorkspan);
+  const reorderWorkspans = useTerminalStore((s) => s.reorderWorkspans);
+  const mergeWorkspanAtPaneEdge = useTerminalStore((s) => s.mergeWorkspanAtPaneEdge);
   const closeSession = useTerminalStore((s) => s.closeSession);
   const createSession = useTerminalStore((s) => s.createSession);
   const reorderSessions = useTerminalStore((s) => s.reorderSessions);
@@ -1899,6 +2086,7 @@ export function TerminalTabs({
   const [splitPicker, setSplitPicker] = useState<SplitPickerState>(null);
   const [closeConfirm, setCloseConfirm] = useState<TerminalCloseConfirmState>(null);
   const [activeDragSessionId, setActiveDragSessionId] = useState<string | null>(null);
+  const [activeDragWorkspanId, setActiveDragWorkspanId] = useState<string | null>(null);
   const [activeDropPreview, setActiveDropPreview] = useState<PaneDropPreview>(null);
   const [fullscreenPaneId, setFullscreenPaneId] = useState<string | null>(null);
   const [sidePanelOpen, setSidePanelOpen] = useState(false);
@@ -1954,11 +2142,25 @@ export function TerminalTabs({
     }
     return next;
   }, [projectById, projectScopedTerminalViewEnabled, projects, scopedGroupProjectIds, sessions, terminalScopeValue, worktrees]);
-  const visiblePaneTree = useMemo(
-    () => (scopedSessionIds ? filterPaneTreeBySessionIds(paneTree, scopedSessionIds) : paneTree),
-    [paneTree, scopedSessionIds]
-  );
-  const renderPaneTree = visiblePaneTree;
+  const visibleWorkspanLayouts = useMemo(() => workspans.flatMap((workspan) => {
+    const paneTree = scopedSessionIds
+      ? filterPaneTreeBySessionIds(workspan.paneTree, scopedSessionIds)
+      : workspan.paneTree;
+    if (!paneTree) return [];
+    const visibleSessionIds = collectPaneLeaves(paneTree).flatMap((pane) => pane.sessionIds);
+    return [{
+      workspan,
+      paneTree,
+      panes: collectPaneLeaves(paneTree),
+      sessionIds: collectWorkspanSessionIds(workspan),
+      closeSessionIds: visibleSessionIds,
+    }];
+  }), [scopedSessionIds, workspans]);
+  const effectiveActiveWorkspanId = visibleWorkspanLayouts.some(({ workspan }) => workspan.id === activeWorkspanId)
+    ? activeWorkspanId
+    : visibleWorkspanLayouts[0]?.workspan.id ?? null;
+  const activeWorkspanLayout = visibleWorkspanLayouts.find(({ workspan }) => workspan.id === effectiveActiveWorkspanId) ?? null;
+  const renderPaneTree = activeWorkspanLayout?.paneTree ?? null;
   const visibleSessions = useMemo(
     () => (scopedSessionIds ? sessions.filter((session) => scopedSessionIds.has(session.id)) : sessions),
     [scopedSessionIds, sessions]
@@ -1969,7 +2171,7 @@ export function TerminalTabs({
       : [],
     [scopedSessionIds, sessions]
   );
-  const allPanes = useMemo(() => collectPaneLeaves(renderPaneTree), [renderPaneTree]);
+  const allPanes = activeWorkspanLayout?.panes ?? [];
   const activeFullscreenPaneId = useMemo(() => {
     if (!fullscreenPaneId) return null;
     const pane = allPanes.find((item) => item.id === fullscreenPaneId);
@@ -2023,6 +2225,28 @@ export function TerminalTabs({
     () => activeDragSessionId ? sessions.find((session) => session.id === activeDragSessionId) ?? null : null,
     [activeDragSessionId, sessions]
   );
+  const activeDragWorkspan = useMemo(
+    () => activeDragWorkspanId ? workspans.find((workspan) => workspan.id === activeDragWorkspanId) ?? null : null,
+    [activeDragWorkspanId, workspans]
+  );
+  const workspanTabModels = useMemo(() => visibleWorkspanLayouts.map(({ workspan, sessionIds, closeSessionIds }) => {
+    const memberSessions = sessionIds
+      .map((sessionId) => sessions.find((session) => session.id === sessionId))
+      .filter((session): session is TerminalSession => Boolean(session));
+    const singleSession = memberSessions.length === 1 ? memberSessions[0] : null;
+    return {
+      workspan,
+      sessionIds,
+      closeSessionIds,
+      singleSession,
+      title: singleSession?.title ?? t("terminal.workspan.title", { count: memberSessions.length }),
+      notification: getWorkspanNotification(sessionIds, tabNotifications),
+      vendor: singleSession ? inferSessionVendor(singleSession) : null,
+    };
+  }), [sessions, t, tabNotifications, visibleWorkspanLayouts]);
+  const activeDragWorkspanModel = activeDragWorkspan
+    ? workspanTabModels.find(({ workspan }) => workspan.id === activeDragWorkspan.id) ?? null
+    : null;
   const terminalTheme = useMemo(
     () => getTerminalTheme(terminalThemeName, resolvedTheme, lightThemePalette, darkThemePalette),
     [darkThemePalette, lightThemePalette, resolvedTheme, terminalThemeName]
@@ -2310,7 +2534,15 @@ export function TerminalTabs({
   }, []);
 
   const closeSessionIds = useCallback((sessionIds: string[]) => {
-    sessionIds.forEach((sessionId) => void closeSession(sessionId));
+    void (async () => {
+      for (const sessionId of sessionIds) {
+        try {
+          await closeSession(sessionId);
+        } catch (err) {
+          logError("Failed to close terminal session", { sessionId, err });
+        }
+      }
+    })();
   }, [closeSession]);
 
   const handleCloseSessions = useCallback((sessionIds: string[], anchor?: SplitPickerAnchor) => {
@@ -2675,38 +2907,91 @@ export function TerminalTabs({
 
   const clearDragState = useCallback(() => {
     setActiveDragSessionId(null);
+    setActiveDragWorkspanId(null);
     setActiveDropPreview(null);
   }, []);
 
   const handleDragStart = useCallback((event: DragStartEvent) => {
-    const sessionId = String(event.active.id);
+    const dragId = String(event.active.id);
+    const workspanId = parseWorkspanDragId(dragId);
+    if (workspanId) {
+      if (scopedSessionIds || !workspans.some((workspan) => workspan.id === workspanId)) return;
+      setActiveDragWorkspanId(workspanId);
+      setActiveWorkspaceTab("terminal");
+      return;
+    }
+    const sessionId = dragId;
     if (!sessions.some((session) => session.id === sessionId)) return;
     setActiveDragSessionId(sessionId);
     setActiveWorkspaceTab("terminal");
-  }, [sessions]);
+  }, [scopedSessionIds, sessions, workspans]);
 
   const handleDragOver = useCallback((event: DragOverEvent) => {
-    if (!activeDragSessionId || !event.over) {
+    if (!event.over) {
       setActiveDropPreview(null);
       return;
     }
 
     const dropTarget = parsePaneDropTarget(String(event.over.id));
+    if (activeDragWorkspanId) {
+      const targetWorkspanId = activeWorkspanLayout?.workspan.id ?? null;
+      const targetPaneExists = dropTarget
+        && activeWorkspanLayout?.panes.some((pane) => pane.id === dropTarget.paneId);
+      const edge = dropTarget ? resolveWorkspanDropEdge(event, dropTarget) : null;
+      if (targetPaneExists && edge && targetWorkspanId && targetWorkspanId !== activeDragWorkspanId) {
+        setActiveDropPreview({ paneId: dropTarget.paneId, edge });
+        return;
+      }
+      setActiveDropPreview(null);
+      return;
+    }
+
+    if (!activeDragSessionId) {
+      setActiveDropPreview(null);
+      return;
+    }
     if (dropTarget?.type === "edge" && canSplitSessionToPaneEdge(activeDragSessionId, dropTarget.paneId)) {
       setActiveDropPreview({ paneId: dropTarget.paneId, edge: dropTarget.edge });
       return;
     }
 
     setActiveDropPreview(null);
-  }, [activeDragSessionId, canSplitSessionToPaneEdge]);
+  }, [activeDragSessionId, activeDragWorkspanId, activeWorkspanLayout, canSplitSessionToPaneEdge]);
 
   const handleDragEnd = useCallback((event: DragEndEvent) => {
     const { active, over } = event;
     clearDragState();
-    if (!over || active.id === over.id) return;
+    if (!over) return;
 
     const activeId = String(active.id);
     const overId = String(over.id);
+    const sourceWorkspanId = parseWorkspanDragId(activeId);
+    if (sourceWorkspanId) {
+      const targetWorkspanId = parseWorkspanDragId(overId);
+      if (targetWorkspanId) {
+        if (sourceWorkspanId !== targetWorkspanId) reorderWorkspans(sourceWorkspanId, targetWorkspanId);
+        return;
+      }
+      const dropTarget = parsePaneDropTarget(overId);
+      const activeTargetWorkspanId = activeWorkspanLayout?.workspan.id ?? null;
+      const edge = dropTarget ? resolveWorkspanDropEdge(event, dropTarget) : null;
+      if (
+        dropTarget
+        && edge
+        && activeTargetWorkspanId
+        && activeTargetWorkspanId !== sourceWorkspanId
+      ) {
+        mergeWorkspanAtPaneEdge(
+          sourceWorkspanId,
+          activeTargetWorkspanId,
+          dropTarget.paneId,
+          edge
+        );
+        setActiveWorkspaceTab("terminal");
+      }
+      return;
+    }
+    if (active.id === over.id) return;
     const sourcePane = findPaneForSession(activeId);
     if (!sourcePane) return;
 
@@ -2735,7 +3020,7 @@ export function TerminalTabs({
     }
     moveSessionToPane(activeId, targetPane.id, overId);
     setActiveWorkspaceTab("terminal");
-  }, [canSplitSessionToPaneEdge, clearDragState, findPaneForSession, moveSessionToPane, reorderSessions, splitSessionToPaneEdge]);
+  }, [activeWorkspanLayout, canSplitSessionToPaneEdge, clearDragState, findPaneForSession, mergeWorkspanAtPaneEdge, moveSessionToPane, reorderSessions, reorderWorkspans, splitSessionToPaneEdge]);
 
   const handleToolbarDragStart = useCallback((event: DragStartEvent) => {
     setActiveToolbarDragId(String(event.active.id));
@@ -3016,7 +3301,12 @@ export function TerminalTabs({
     [renameOpenProjectTabs, renameSession, sessions, t, updateProject]
   );
 
-  const renderLeaf = useCallback((pane: TerminalPaneLeaf) => (
+  const renderWorkspanLeaf = useCallback((
+    pane: TerminalPaneLeaf,
+    layoutPanes: TerminalPaneLeaf[],
+    layoutActiveSessionId: string | null,
+    layoutVisible: boolean
+  ) => (
     <MemoPaneLeafView
       key={pane.id}
       pane={pane}
@@ -3024,8 +3314,8 @@ export function TerminalTabs({
       visibleSessionIds={scopedSessionIds}
       projects={projects}
       worktrees={worktrees}
-      allPanes={allPanes}
-      activeSessionId={effectiveActiveSessionId}
+      allPanes={layoutPanes}
+      activeSessionId={layoutActiveSessionId}
       historyActive={historyActive}
       editingSessionId={editingSessionId}
       tabNotifications={tabNotifications}
@@ -3039,9 +3329,9 @@ export function TerminalTabs({
       terminalBackgroundEnabled={terminalBackgroundEnabled}
       terminalBackgroundImagePath={terminalBackgroundImagePath}
       hiddenBackgroundSessionIds={hiddenBackgroundSessionIds}
-      isPaneFullscreen={activeFullscreenPaneId === pane.id}
-      isLayoutVisible={!activeFullscreenPaneId || activeFullscreenPaneId === pane.id}
-      activeDropPreview={activeDropPreview}
+      isPaneFullscreen={layoutVisible && activeFullscreenPaneId === pane.id}
+      isLayoutVisible={layoutVisible && (!activeFullscreenPaneId || activeFullscreenPaneId === pane.id)}
+      activeDropPreview={layoutVisible ? activeDropPreview : null}
       onActivateSession={handleActivateSession}
       onCloseSessions={handleCloseSessions}
       onStartEdit={setEditingSessionId}
@@ -3063,12 +3353,11 @@ export function TerminalTabs({
       onInstallWorktreeDeps={handleInstallWorktreeDeps}
       onDiscardWorktree={(project, worktree) => setDiscardTarget({ project, worktree })}
       onOpenWorktreeDirectory={handleOpenWorktreeDirectory}
-      hideTabBar={false}
+      hideTabBar={pane.sessionIds.length <= 1}
     />
   ), [
     activeFullscreenPaneId,
     activeDropPreview,
-    allPanes,
     darkThemePalette,
     editingSessionId,
     fontFamily,
@@ -3091,7 +3380,6 @@ export function TerminalTabs({
     projects,
     handleSubmitTabEdit,
     resolvedTheme,
-    effectiveActiveSessionId,
     scopedSessionIds,
     sessions,
     worktrees,
@@ -3209,8 +3497,8 @@ export function TerminalTabs({
           data-terminal-theme-tone={terminalThemeTone}
           style={{ display: historyActive ? "none" : "flex" }}
         >
-          <div className="flex-1 min-h-0 min-w-0">
-            {renderPaneTree && visibleSessions.length > 0 ? (
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+            {visibleWorkspanLayouts.length > 0 ? (
               <DndContext
                 sensors={sensors}
                 collisionDetection={terminalTabCollisionDetection}
@@ -3219,9 +3507,94 @@ export function TerminalTabs({
                 onDragCancel={clearDragState}
                 onDragEnd={handleDragEnd}
               >
-                <SplitTerminalView node={renderPaneTree} renderLeaf={renderLeaf} fullscreenLeafId={activeFullscreenPaneId} />
+                <div
+                  className="ui-terminal-pane-chrome ui-workspan-tabbar flex h-9 shrink-0 items-center overflow-x-auto px-1"
+                  role="tablist"
+                  aria-label={t("terminal.workspan.tabList")}
+                >
+                  <SortableContext
+                    items={workspanTabModels.map(({ workspan }) => `${WORKSPAN_DRAG_PREFIX}${workspan.id}`)}
+                    strategy={horizontalListSortingStrategy}
+                  >
+                    {workspanTabModels.map((model) => (
+                      <SortableWorkspanTab
+                        key={model.workspan.id}
+                        workspan={model.workspan}
+                        title={model.title}
+                        notification={model.notification}
+                        vendor={model.vendor}
+                        isActive={model.workspan.id === effectiveActiveWorkspanId}
+                        dragDisabled={hasScopedTerminalFilter}
+                        renameDisabled={!model.singleSession}
+                        onActivate={() => {
+                          setActiveWorkspaceTab("terminal");
+                          setActiveWorkspan(model.workspan.id);
+                        }}
+                        onClose={(anchor) => handleCloseSessions(model.closeSessionIds, anchor)}
+                        onRename={(title) => {
+                          if (model.singleSession) void handleSubmitTabEdit(model.singleSession.id, title);
+                        }}
+                      />
+                    ))}
+                  </SortableContext>
+                </div>
+                <div className="relative min-h-0 flex-1 overflow-hidden">
+                  {visibleWorkspanLayouts.map((layout) => {
+                    const layoutVisible = layout.workspan.id === effectiveActiveWorkspanId;
+                    const layoutActiveSessionId = layoutVisible
+                      ? effectiveActiveSessionId
+                      : layout.workspan.activeSessionId;
+                    return (
+                      <div
+                        key={layout.workspan.id}
+                        className="absolute inset-0 min-h-0 min-w-0 overflow-hidden"
+                        style={{ display: layoutVisible ? "block" : "none" }}
+                        aria-hidden={layoutVisible ? undefined : "true"}
+                      >
+                        <SplitTerminalView
+                          node={layout.paneTree}
+                          renderLeaf={(pane) => renderWorkspanLeaf(
+                            pane,
+                            layout.panes,
+                            layoutActiveSessionId,
+                            layoutVisible
+                          )}
+                          fullscreenLeafId={layoutVisible ? activeFullscreenPaneId : null}
+                        />
+                      </div>
+                    );
+                  })}
+                  {preservedHiddenPtySessions.length > 0 && (
+                    <div
+                      aria-hidden="true"
+                      className="pointer-events-none fixed left-0 top-0 h-px w-px overflow-hidden opacity-0"
+                      tabIndex={-1}
+                    >
+                      {preservedHiddenPtySessions.map((session) => (
+                        <XTermTerminal
+                          key={`preserve:${session.id}`}
+                          sessionId={session.id}
+                          isActive={false}
+                          isVisible={false}
+                          fontSize={fontSize}
+                          fontFamily={fontFamily}
+                          resolvedTheme={resolvedTheme}
+                          terminalThemeName={terminalThemeName}
+                          lightThemePalette={lightThemePalette}
+                          darkThemePalette={darkThemePalette}
+                        />
+                      ))}
+                    </div>
+                  )}
+                </div>
                 <DragOverlay dropAnimation={null}>
-                  {activeDragSession ? (
+                  {activeDragWorkspanModel ? (
+                    <DragOverlayTab
+                      title={activeDragWorkspanModel.title}
+                      notification={activeDragWorkspanModel.notification}
+                      vendor={activeDragWorkspanModel.vendor}
+                    />
+                  ) : activeDragSession ? (
                     <DragOverlayTab
                       title={activeDragSession.title}
                       notification={tabNotifications[activeDragSession.id] ?? "none"}
@@ -3231,28 +3604,6 @@ export function TerminalTabs({
                 </DragOverlay>
               </DndContext>
             ) : null}
-            {preservedHiddenPtySessions.length > 0 && (
-              <div
-                aria-hidden="true"
-                className="pointer-events-none fixed left-0 top-0 h-px w-px overflow-hidden opacity-0"
-                tabIndex={-1}
-              >
-                {preservedHiddenPtySessions.map((session) => (
-                  <XTermTerminal
-                    key={`preserve:${session.id}`}
-                    sessionId={session.id}
-                    isActive={false}
-                    isVisible={false}
-                    fontSize={fontSize}
-                    fontFamily={fontFamily}
-                    resolvedTheme={resolvedTheme}
-                    terminalThemeName={terminalThemeName}
-                    lightThemePalette={lightThemePalette}
-                    darkThemePalette={darkThemePalette}
-                  />
-                ))}
-              </div>
-            )}
             {hasScopedTerminalFilter && visibleSessions.length === 0 && !useExternalTerminal && scopedEmptyState && (
               <div className="flex h-full items-center justify-center">
                 <EmptyState

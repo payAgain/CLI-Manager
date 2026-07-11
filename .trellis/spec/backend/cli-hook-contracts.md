@@ -37,7 +37,9 @@ Concrete contracts for Claude/Codex hook integration.
   - Claude may emit `ToolStart` / `ToolStop` payloads carrying `agentId` instead of normalized `AgentToolStart` / `AgentToolStop` in some WSL hook paths. Treat `source=claude` plus `ToolStart|ToolStop` plus non-empty `agentId` as a sub-agent transcript lifecycle hint, but do not treat ordinary tool events without `agentId` as sub-agents.
   - Explicit native POSIX transcript paths such as `/Users/...` or `/home/...` must be tailed as native paths when `wslDistroName` is missing. Do not infer a default WSL distro for explicit `/...` paths.
   - `AgentToolStart` should create/update a `pending` pane only; it must not subscribe to the parent transcript.
+  - When a Claude start/update event already has `cwd`, `sessionId`, and `agentId`, the frontend may subscribe to the derived child JSONL immediately. The backend tail waits for the child file to appear, so streaming must not wait for the stop event.
   - `AgentToolStop` and Claude `ToolStop` with `agentId` may upgrade the matching pending pane to `child-jsonl` when they have an independent `agentTranscriptPath` or enough `cwd/sessionId/agentId` data to derive `subagents/agent-<agentId>.jsonl`.
+- Codex `SubagentStart` rollout discovery is eventually consistent: when the first discovery returns no path, the frontend performs a bounded per-child retry and subscribes as soon as the matching rollout appears. Retries stop after subscription, timeout, finish, pane close, or unsplit.
 - `SubagentStop` may also carry the first independent child transcript path. When a matching pane already exists, the frontend must call `openSubagentTranscript(payload)` and await subscription/initial backfill before `finishSubagentTranscript(payload)`, regardless of CLI source.
 - Subscribe response fields:
   - `path`: resolved child JSONL path actually tailed by the backend.
@@ -69,6 +71,8 @@ Concrete contracts for Claude/Codex hook integration.
 - Good: Codex `SubagentStart` only has the parent `transcriptPath`, then `SubagentStop` includes `agentTranscriptPath`; frontend upgrades the existing pane, appends subscribe `initialContent`, then marks it ended.
 - Good: Claude `SubagentStart` misses an independent child path, then `SubagentStop` provides `agentTranscriptPath`; frontend upgrades the existing pane before finish instead of ending in degraded state.
 - Good: Claude in WSL emits `ToolStop` with `agentId`, parent `transcriptPath`, UNC `cwd`, and no `wslDistroName`; frontend opens/updates a degraded child pane, derives the distro from `cwd`, and backend subscribes to the derived child path without rendering the parent transcript as child output.
+- Good: Claude emits `SubagentStart` before `agent-<agentId>.jsonl` exists; frontend subscribes to the derived child path immediately and the backend begins emitting complete lines as soon as the file is created.
+- Good: Codex emits `SubagentStart` before the matching rollout exists; bounded discovery retries find it during execution and start streaming before `SubagentStop`.
 - Base: Claude `SubagentStart` includes `agent_transcript_path`; frontend uses it unchanged.
 - Good: `SubagentStop` includes `agent_id`; frontend marks the pane ended and closes it after the grace delay.
 - Good: a hidden child transcript pane receives 1MB of JSONL append traffic; the store retains content, but the hidden view does not re-parse or re-render until it becomes visible.
