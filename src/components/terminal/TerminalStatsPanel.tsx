@@ -146,16 +146,19 @@ function buildFallbackFileChanges(session: HistorySessionDetail | null): History
 }
 
 function selectLatestFileChanges(fileChanges: HistoryFileChangeSummary[]): HistoryFileChangeSummary[] {
-  if (fileChanges.length === 0) return [];
-  const latestGroupIndex = Math.max(...fileChanges.map((item) => item.latest_operation_group_index ?? -1));
-  const latestMessageIndex = Math.max(...fileChanges.map((item) => item.latest_message_index ?? -1));
-
   return fileChanges.flatMap((item) => {
+    if (item.file_path.trim().toLowerCase() === "unknown-file") return [];
+
+    const latestGroupIndex = item.latest_operation_group_index ?? -1;
+    const latestMessageIndex = item.latest_message_index ?? -1;
     const operations = item.operations.filter((operation) => {
       if (latestGroupIndex >= 0) {
         return (operation.operation_group_index ?? -1) === latestGroupIndex;
       }
-      return (operation.message_index ?? -1) === latestMessageIndex;
+      if (latestMessageIndex >= 0) {
+        return (operation.message_index ?? -1) === latestMessageIndex;
+      }
+      return true;
     });
     if (operations.length === 0) return [];
 
@@ -169,7 +172,13 @@ function selectLatestFileChanges(fileChanges: HistoryFileChangeSummary[]): Histo
       latest_timestamp: latestOperation.timestamp ?? item.latest_timestamp ?? null,
       operations,
     }];
-  });
+  }).sort((left, right) => {
+    const groupDiff = (right.latest_operation_group_index ?? -1) - (left.latest_operation_group_index ?? -1);
+    if (groupDiff !== 0) return groupDiff;
+    const messageDiff = (right.latest_message_index ?? -1) - (left.latest_message_index ?? -1);
+    if (messageDiff !== 0) return messageDiff;
+    return (right.latest_timestamp ?? "").localeCompare(left.latest_timestamp ?? "");
+  }).slice(0, 3);
 }
 
 function buildLatestChangesSummary(session: HistorySessionDetail | null): LatestChangesCardData | null {
