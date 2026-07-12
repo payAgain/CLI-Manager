@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 6
-- **Last Active**: 2026-07-10
+- **Total Sessions**: 7
+- **Last Active**: 2026-07-12
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~233 | Active |
+| `journal-1.md` | ~266 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 7 | 2026-07-12 | 终端文件路径快捷打开 | `180bd87` | `master` |
 | 6 | 2026-07-10 | 优化项目列表拖拽排序即时反馈 | `e3bbee6` | `master` |
 | 5 | 2026-07-10 | 优化子任务分屏流式输出 | `04f63bd` | `master` |
 | 4 | 2026-06-22 | 终端选区右键直接复制 | `a5d339d` | `master` |
