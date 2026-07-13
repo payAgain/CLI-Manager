@@ -114,7 +114,8 @@ pub struct SystemResourceSnapshot {
 #[serde(rename_all = "camelCase")]
 pub struct CpuSnapshot {
     usage_percent: f32,
-    core_count: usize,
+    physical_core_count: usize,
+    logical_processor_count: usize,
 }
 
 #[derive(Serialize, Clone)]
@@ -299,6 +300,11 @@ impl ResourceCollector {
             Vec::new()
         };
 
+        let logical_processor_count = self.system.cpus().len();
+        let physical_core_count = System::physical_core_count()
+            .filter(|count| *count > 0)
+            .unwrap_or(logical_processor_count);
+
         SystemResourceSnapshot {
             ip_address: if options.system {
                 self.cached_ip_address.clone()
@@ -317,7 +323,8 @@ impl ResourceCollector {
                 } else {
                     0.0
                 },
-                core_count: self.system.cpus().len(),
+                physical_core_count,
+                logical_processor_count,
             },
             cpu_cores,
             gpu: if options.gpu {

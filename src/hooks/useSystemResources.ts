@@ -9,7 +9,8 @@ export interface SystemResourceSnapshot {
   sampledAt: number;
   cpu: {
     usagePercent: number;
-    coreCount: number;
+    physicalCoreCount: number;
+    logicalProcessorCount: number;
   };
   cpuCores: Array<{
     index: number;

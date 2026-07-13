@@ -391,7 +391,10 @@ function SystemCard({ snapshot }: { snapshot: SystemResourceSnapshot }) {
     >
       <div className="grid grid-cols-2 gap-2">
         <StatusPill>{snapshot.osName || "-"}</StatusPill>
-        <StatusPill>{t("systemResources.coreUnit", { count: snapshot.cpu.coreCount })}</StatusPill>
+        <StatusPill>{t("systemResources.cpuTopology", {
+          cores: snapshot.cpu.physicalCoreCount,
+          threads: snapshot.cpu.logicalProcessorCount,
+        })}</StatusPill>
       </div>
       <div className="mt-3 grid grid-cols-2 gap-x-3 gap-y-1">
         <MetricLine label={t("systemResources.host")} value={snapshot.hostName ?? "-"} />
@@ -431,9 +434,9 @@ function CpuCard({ snapshot, history }: { snapshot: SystemResourceSnapshot; hist
         style={{ borderColor: TERM_PANEL.border, backgroundColor: TERM_PANEL.cardInner, color: PANEL_SOFT_FG }}
         aria-expanded={coresExpanded}
         aria-controls={corePanelId}
-        aria-label={coresExpanded ? t("systemResources.hideCores") : t("systemResources.showCores")}
+        aria-label={coresExpanded ? t("systemResources.hideThreads") : t("systemResources.showThreads")}
       >
-        <span>{t("systemResources.coreUnit", { count: snapshot.cpu.coreCount })}</span>
+        <span>{t("systemResources.threadUnit", { count: snapshot.cpu.logicalProcessorCount })}</span>
         <ChevronDown
           size={13}
           className={`transition-transform ${coresExpanded ? "rotate-180" : ""}`}
