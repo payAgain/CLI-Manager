@@ -43,6 +43,7 @@ import { SystemResourcesPanel } from "./terminal/SystemResourcesPanel";
 import {
   ResizableTerminalPanelFrame,
   TerminalSidePanel,
+  TERMINAL_SIDE_PANEL_TAB_ORDER,
   type TerminalSidePanelTab,
 } from "./terminal/TerminalSidePanel";
 import { SubagentTranscriptView } from "./terminal/SubagentTranscriptView";
@@ -2471,6 +2472,13 @@ export function TerminalTabs({
     () => getTerminalSidePanelSkinStyle(terminalSidePanelSkin),
     [terminalSidePanelSkin]
   );
+  const visibleSidePanelTabs = useMemo(
+    () => TERMINAL_SIDE_PANEL_TAB_ORDER.filter((tab) => {
+      if (tab === "git") return terminalToolbarVisibility.gitChanges;
+      return terminalToolbarVisibility[tab];
+    }),
+    [terminalToolbarVisibility]
+  );
   const historyActive = historyOpen && activeWorkspaceTab === "history";
   const statsPanelActive = sidePanelMerged ? sidePanelOpen && sidePanelTab === "stats" : statsOpen;
   const replayPanelActive = sidePanelMerged ? sidePanelOpen && sidePanelTab === "replay" : replayOpen;
@@ -2479,6 +2487,13 @@ export function TerminalTabs({
   const systemResourcesPanelActive = sidePanelMerged
     ? sidePanelOpen && sidePanelTab === "systemResources"
     : systemResourcesOpen;
+
+  useEffect(() => {
+    if (!sidePanelMerged || !sidePanelOpen || visibleSidePanelTabs.includes(sidePanelTab)) return;
+    const nextTab = visibleSidePanelTabs[0];
+    if (nextTab) setSidePanelTab(nextTab);
+    else setSidePanelOpen(false);
+  }, [sidePanelMerged, sidePanelOpen, sidePanelTab, visibleSidePanelTabs]);
 
   useEffect(() => {
     if (!historyOpen && activeWorkspaceTab === "history") setActiveWorkspaceTab("terminal");
@@ -3938,6 +3953,7 @@ export function TerminalTabs({
             <TerminalSidePanel
               open={sidePanelOpen}
               activeTab={sidePanelTab}
+              visibleTabs={visibleSidePanelTabs}
               activeSessionId={panelSessionId}
               projectPath={sidePanelProjectPath}
               filesTabDisabled={!filePanelProject}

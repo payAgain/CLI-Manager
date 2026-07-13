@@ -18,9 +18,18 @@ const GitChangesPanel = lazy(() =>
 
 export type TerminalSidePanelTab = "stats" | "replay" | "git" | "files" | "systemResources";
 
+export const TERMINAL_SIDE_PANEL_TAB_ORDER: readonly TerminalSidePanelTab[] = [
+  "stats",
+  "systemResources",
+  "replay",
+  "git",
+  "files",
+];
+
 interface TerminalSidePanelProps {
   open: boolean;
   activeTab: TerminalSidePanelTab;
+  visibleTabs: readonly TerminalSidePanelTab[];
   activeSessionId: string | null;
   projectPath: string | null;
   filesTabDisabled?: boolean;
@@ -208,6 +217,7 @@ export function ResizableTerminalPanelFrame({
 export function TerminalSidePanel({
   open,
   activeTab,
+  visibleTabs,
   activeSessionId,
   projectPath,
   filesTabDisabled = false,
@@ -216,10 +226,10 @@ export function TerminalSidePanel({
   onTabChange,
 }: TerminalSidePanelProps) {
   const { t } = useI18n();
-
-  if (!open) return null;
-
-  const tabs = [
+  const tabListRef = useRef<HTMLDivElement | null>(null);
+  const expandedTabsWidthRef = useRef<number | null>(null);
+  const [compactTabs, setCompactTabs] = useState(false);
+  const allTabs = [
     { key: "stats" as const, label: t("terminal.panel.sideStats"), color: TERM_PANEL.cyan, icon: <BarChart3 size={12} strokeWidth={1.8} /> },
     ...(systemResourcesEnabled
       ? [{ key: "systemResources" as const, label: t("terminal.panel.systemResources"), color: TERM_PANEL.green, icon: <Cpu size={12} strokeWidth={1.8} /> }]
@@ -228,6 +238,61 @@ export function TerminalSidePanel({
     { key: "git" as const, label: t("terminal.panel.gitChanges"), color: TERM_PANEL.yellow, icon: <GitBranch size={12} strokeWidth={1.8} /> },
     { key: "files" as const, label: t("terminal.panel.files"), color: TERM_PANEL.blue, icon: <Folder size={12} strokeWidth={1.8} />, disabled: filesTabDisabled },
   ];
+  const tabs = allTabs.filter((tab) => visibleTabs.includes(tab.key));
+  const tabLayoutKey = tabs.map((tab) => `${tab.key}:${tab.label}`).join("|");
+
+  useEffect(() => {
+    expandedTabsWidthRef.current = null;
+    setCompactTabs(false);
+  }, [tabLayoutKey]);
+
+  useEffect(() => {
+    if (!open) return;
+    const tabList = tabListRef.current;
+    if (!tabList || tabs.length === 0) return;
+
+    const updateTabLayout = () => {
+      if (compactTabs) {
+        const expandedWidth = expandedTabsWidthRef.current;
+        if (expandedWidth !== null && tabList.clientWidth >= expandedWidth) {
+          setCompactTabs(false);
+        }
+        return;
+      }
+
+      const buttons = Array.from(tabList.querySelectorAll<HTMLElement>("[data-terminal-side-panel-tab]"));
+      if (buttons.length === 0) return;
+
+      const style = window.getComputedStyle(tabList);
+      const gap = Number.parseFloat(style.columnGap) || 0;
+      const padding = (Number.parseFloat(style.paddingLeft) || 0) + (Number.parseFloat(style.paddingRight) || 0);
+      const requiredButtonWidth = Math.max(...buttons.map((button) => {
+        const buttonStyle = window.getComputedStyle(button);
+        const icon = button.querySelector<HTMLElement>("[data-terminal-side-panel-tab-icon]");
+        const label = button.querySelector<HTMLElement>("[data-terminal-side-panel-tab-label]");
+        const horizontalInsets =
+          (Number.parseFloat(buttonStyle.paddingLeft) || 0)
+          + (Number.parseFloat(buttonStyle.paddingRight) || 0)
+          + (Number.parseFloat(buttonStyle.borderLeftWidth) || 0)
+          + (Number.parseFloat(buttonStyle.borderRightWidth) || 0);
+        const contentGap = Number.parseFloat(buttonStyle.columnGap) || 0;
+        return horizontalInsets + (icon?.scrollWidth ?? 0) + contentGap + (label?.scrollWidth ?? 0);
+      }));
+      const requiredWidth = padding + requiredButtonWidth * buttons.length + gap * Math.max(0, buttons.length - 1);
+      expandedTabsWidthRef.current = requiredWidth;
+
+      if (tabList.clientWidth + 1 < requiredWidth) {
+        setCompactTabs(true);
+      }
+    };
+
+    updateTabLayout();
+    const observer = new ResizeObserver(updateTabLayout);
+    observer.observe(tabList);
+    return () => observer.disconnect();
+  }, [compactTabs, open, tabLayoutKey, tabs.length]);
+
+  if (!open) return null;
 
   return (
     <ResizableTerminalPanelFrame
@@ -237,6 +302,7 @@ export function TerminalSidePanel({
       resizeTitle={t("terminal.panel.resizeSideTitle")}
     >
       <div
+        ref={tabListRef}
         className="flex shrink-0 gap-1 border-b px-2 py-1.5"
         style={{ borderColor: TERM_PANEL.border }}
       >
@@ -245,6 +311,7 @@ export function TerminalSidePanel({
           return (
             <button
               key={tab.key}
+              data-terminal-side-panel-tab
               type="button"
               onClick={() => onTabChange(tab.key)}
               disabled={tab.disabled}
@@ -256,9 +323,10 @@ export function TerminalSidePanel({
                 opacity: tab.disabled ? 0.45 : 1,
               }}
               aria-pressed={selected}
+              title={compactTabs ? tab.label : undefined}
             >
-              <span className="shrink-0" style={{ color: tab.color }}>{tab.icon}</span>
-              <span className="min-w-0 truncate">{tab.label}</span>
+              <span data-terminal-side-panel-tab-icon className="shrink-0" style={{ color: tab.color }}>{tab.icon}</span>
+              {!compactTabs && <span data-terminal-side-panel-tab-label className="min-w-0 truncate">{tab.label}</span>}
             </button>
           );
         })}
