@@ -2,7 +2,22 @@
 
 ## [TEMP] - 2026-07-12
 
+### 设置
+- **内置 Claude 状态栏配置器**：设置页新增“状态栏”，内置 ccstatusline-zh v2.2.23 配置格式与组件目录，支持三行布局、组件搜索/增删/拖拽、颜色与自定义组件属性、Powerline、实时预览、旧配置一次性导入，以及安装/卸载 Claude `statusLine`。状态栏由 CLI-Manager 自身 `__statusline` 子命令运行，不再要求单独安装 Node、Bun 或 ccstatusline-zh。
+- **Codex 原生状态栏可视化配置**：同一设置页可读取和编辑 Codex `config.toml` 的 `[tui].status_line`，覆盖模型、上下文、额度、Git、Token、权限、会话和任务进度等原生项目，支持可视化启用、排序、预览和保存，并保留配置文件中的其他表与字段。
+- **状态栏设计器 V2**：Claude Code 与 Codex 改为独立工具工作区，分别保留草稿和编辑状态；页面升级为组件库、布局画布、属性面板三栏结构，Codex 原生项目支持拖拽排序。底部实时终端预览可调整宽度并切换任一内置终端主题，编辑器本身跟随应用浅色、深色及主题配色。
+- **Codex 预览还原度修正**：Codex 实时预览按原生 footer 的语义分组使用终端主题色渲染项目，分隔符使用弱化色，并将内容区收敛为单行底栏高度；示例模型、会话 ID、路径、运行状态和 Fast 状态同步贴近实际 Codex TUI。
+- **Claude Code 组件库补全展示**：组件库按核心、Git、Jujutsu、Token/缓存、上下文、会话/额度、环境/Worktree、自定义和布局分类展示 ccstatusline-zh v2.2.23 的全部 85 个组件，补充组件 ID、分类数量、总数和搜索空状态，避免长扁平列表造成组件缺失的错觉。
+- **Claude 状态栏布局交互优化**：Claude 与 Codex 状态栏排序改用项目现有的 `@dnd-kit` Pointer Events 方案，绕过 Tauri Windows 文件拖放对 HTML5 `draggable` 的接管；Claude 组件支持同行排序、跨行移动和空行落点，不再出现禁止拖放图标。
+- **Claude 状态栏预览与组件库修正**：抽取供应商与状态栏共用的 `SettingsListItem`，组件库使用与 cc-switch 供应商列表一致的边框、悬浮和信息层级，并按分类折叠展示（仅核心默认展开，搜索时自动展开命中分类）；布局选中行改为加深边框而非深色填充。实时预览移动到内置状态栏运行时下方，使用完整横向空间并为 Powerline 私有字形提供安全三角符号回退，避免字体缺少 `/` 时乱码或长状态栏显示不完整。
+- **状态栏多配置与整库迁移**：Claude Code 与 Codex 分别支持保存多份命名状态栏配置、保存即应用、复制、重命名、切换和非当前配置删除；首次启用会读取用户现有配置，外部修改可另存为新配置。支持将两端配置库整体导出为版本化 JSON，并在导入时逐项处理同名冲突，配置内容不包含供应商密钥或其他 CLI 设置。
+- **状态栏预览与 Powerline 完整配置**：Codex 实时预览移动到“Codex 原生状态栏”标题下方；Claude/Codex 预览增加本地化状态名称。颜色属性升级为颜色块与中英双语名称；Claude 补齐 Powerline 字体检测/确认安装、组件对齐、跨行主题延续、分隔符、起止端帽，以及 Nord、Nord Aurora、Monokai、Solarized、Minimal、Dracula、Catppuccin、Gruvbox、One Dark、Tokyo Night 和 Custom 主题。
+
+### 终端
+- **文件路径快捷打开**：终端输出中的 Windows、UNC/WSL UNC 及可转换的 Linux 绝对文件路径支持点击；项目或 Worktree 内文件使用内置编辑器打开，其他文件回退到系统默认应用。
+
 ### 修复
+- **实时统计最新变更文件识别修复**：最新变更卡片不再让无法识别路径的 `unknown-file` 覆盖有效记录，改为按操作时间展示最近三个真实变更文件及对应增删统计。
 - **macOS 旧系统设置页「界面渲染失败」修复**：remark-gfm 依赖的自动链接正则使用了 lookbehind 语法，构建产物在不支持该语法的旧 WebKit（macOS Safari 16.4 之前的 WKWebView）上首次渲染 GFM Markdown（如设置 -> 更新的版本说明）即抛 `RegExp` SyntaxError，且重开设置必现。现运行时检测 lookbehind 支持，不支持时退回基础 Markdown 渲染（表格/自动链接降级、正文照常）；并为所有 Markdown 渲染增加局部错误边界，渲染异常只降级该块为纯文本，不再炸掉整个设置页。
 
 ## [V1.2.7] - 2026-07-11

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
-import { Terminal, type IBufferCell, type IBufferLine, type ITheme } from "@xterm/xterm";
+import { Terminal, type IBufferCell, type IBufferLine, type ILink, type ITheme } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { ImageAddon } from "@xterm/addon-image";
 import { SearchAddon, type ISearchOptions } from "@xterm/addon-search";
@@ -11,7 +11,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { openUrl } from "@tauri-apps/plugin-opener";
+import { openPath, openUrl } from "@tauri-apps/plugin-opener";
 import { useShallow } from "zustand/shallow";
 import {
   applyTransparency,
@@ -25,8 +25,14 @@ import { backgroundAssetUrl } from "../lib/assetUrl";
 import { TERMINAL_FILE_PATH_MIME } from "../lib/aiPathFormatter";
 import { resolveManualDirectCodexEnterData } from "../lib/codexManualInput";
 import { debugConsoleWarn } from "../lib/debugConsole";
-import { useI18n } from "../lib/i18n";
+import { translateCurrent, useI18n } from "../lib/i18n";
 import { normalizeTerminalFontFamily } from "../lib/terminalFontFamily";
+import {
+  absolutePathToProjectRelative,
+  findTerminalFileLinks,
+  resolveTerminalFileSystemPath,
+} from "../lib/terminalFileLinks";
+import { findProjectByPath, findWorktreeByPath, projectWithWorktreePath } from "../lib/terminalProject";
 import {
   TERMINAL_INPUT_SUGGESTION_BUILTIN_PROMPT,
   TERMINAL_INPUT_SUGGESTION_AI_MODEL,
@@ -62,6 +68,7 @@ import {
 } from "../lib/shell";
 import { Portal } from "./ui/Portal";
 import { useCommandHistoryStore } from "../stores/commandHistoryStore";
+import { useFileExplorerStore } from "../stores/fileExplorerStore";
 import { useProjectStore } from "../stores/projectStore";
 import { useTemplateStore } from "../stores/templateStore";
 import { formatStartupInputForPty, useTerminalStore, type ShellRuntimeEventName } from "../stores/terminalStore";
@@ -570,6 +577,53 @@ const hasDataTransferType = (dataTransfer: DataTransfer | null, type: string): b
 const openHttpUrl = (sessionId: string, uri: string) => {
   if (!/^https?:\/\//i.test(uri)) return;
   void openUrl(uri).catch((err) => logError("Failed to open terminal link", { sessionId, uri, err }));
+};
+
+const openTerminalFilePath = async (sessionId: string, rawPath: string) => {
+  const terminalState = useTerminalStore.getState();
+  const session = terminalState.sessions.find((item) => item.id === sessionId) ?? null;
+  const projectState = useProjectStore.getState();
+  const currentProject = session?.projectId
+    ? projectState.projects.find((item) => item.id === session.projectId) ?? null
+    : findProjectByPath(projectState.projects, session?.cwd);
+  const currentWorktree = session?.worktreeId
+    ? projectState.worktrees.find((item) => item.id === session.worktreeId) ?? null
+    : findWorktreeByPath(projectState.worktrees, session?.cwd);
+  const currentRootPath = currentWorktree?.path ?? currentProject?.path ?? session?.cwd ?? null;
+  const systemPath = resolveTerminalFileSystemPath(rawPath, currentRootPath);
+  if (!systemPath) return;
+
+  const targetWorktree = findWorktreeByPath(projectState.worktrees, systemPath);
+  const targetProject = targetWorktree
+    ? projectState.projects.find((item) => item.id === targetWorktree.project_id) ?? null
+    : findProjectByPath(projectState.projects, systemPath);
+  const fileProject = targetProject && targetWorktree
+    ? projectWithWorktreePath(targetProject, targetWorktree)
+    : targetProject;
+  const relativePath = fileProject ? absolutePathToProjectRelative(fileProject.path, systemPath) : null;
+
+  if (fileProject && relativePath) {
+    const fileName = relativePath.split("/").pop() || relativePath;
+    try {
+      const fileStore = useFileExplorerStore.getState();
+      await fileStore.openProject(fileProject);
+      await useFileExplorerStore.getState().openFile({
+        name: fileName,
+        path: relativePath,
+        kind: "file",
+        sizeBytes: 0,
+      });
+      terminalState.openFileEditorPane(fileProject);
+      return;
+    } catch (err) {
+      logError("Failed to open terminal file in editor", { sessionId, path: systemPath, err });
+    }
+  }
+
+  void openPath(systemPath).catch((err) => {
+    logError("Failed to open terminal file", { sessionId, path: systemPath, err });
+    toast.error(translateCurrent("files.toast.openFileFailed"), { description: String(err) });
+  });
 };
 
 const serializeBufferPlainText = (terminal: Terminal) => {
@@ -1693,6 +1747,21 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
     const serializeAddon = new SerializeAddon();
     const unicode11Addon = new Unicode11Addon();
     const webLinksAddon = new WebLinksAddon((_event, uri) => openHttpUrl(sessionId, uri));
+    const fileLinkDisposable = terminal.registerLinkProvider({
+      provideLinks: (bufferLineNumber, callback) => {
+        const line = terminal.buffer.active.getLine(bufferLineNumber - 1)?.translateToString(true) ?? "";
+        const links: ILink[] = findTerminalFileLinks(line).map((match) => ({
+          range: {
+            start: { x: match.startIndex + 1, y: bufferLineNumber },
+            end: { x: match.endIndex, y: bufferLineNumber },
+          },
+          text: match.text,
+          activate: () => void openTerminalFilePath(sessionId, match.text),
+          decorations: { pointerCursor: true, underline: true },
+        }));
+        callback(links.length > 0 ? links : undefined);
+      },
+    });
     terminal.loadAddon(fitAddon);
     terminal.loadAddon(imageAddon);
     terminal.loadAddon(searchAddon);
@@ -3512,6 +3581,7 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
       unregisterSnapshotSource();
       unlisten?.();
       searchResultDisposable.dispose();
+      fileLinkDisposable.dispose();
       cursorStyleDisposable.dispose();
       webglAddonRef.current?.dispose();
       webglAddonRef.current = null;

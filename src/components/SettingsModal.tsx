@@ -12,6 +12,7 @@ import {
   Sparkles,
   Terminal,
   Webhook,
+  PanelsTopLeft,
   type LucideIcon,
 } from "lucide-react";
 import "@mantine/core/styles.css";
@@ -26,6 +27,7 @@ import { ShortcutSettingsPage } from "./settings/pages/ShortcutSettingsPage";
 import { TemplateSettingsPage } from "./settings/pages/TemplateSettingsPage";
 import { SyncSettingsPage } from "./settings/pages/SyncSettingsPage";
 import { HookSettingsPage } from "./settings/pages/HookSettingsPage";
+import { StatuslineSettingsPage } from "./settings/pages/StatuslineSettingsPage";
 import { CommandSuggestionSettingsPage } from "./settings/pages/CommandSuggestionSettingsPage";
 import { ProviderSettingsPage } from "./settings/pages/ProviderSettingsPage";
 import { ModelPricingSettingsPage } from "./settings/pages/ModelPricingSettingsPage";
@@ -45,6 +47,7 @@ export type SettingsTab =
   | "model-pricing"
   | "sync"
   | "hooks"
+  | "statusline"
   | "command-suggestions"
   | "about";
 
@@ -65,6 +68,7 @@ const SETTINGS_TAB_ORDER: SettingsTab[] = [
   "model-pricing",
   "sync",
   "hooks",
+  "statusline",
   "command-suggestions",
   "sidebar",
   "developer",
@@ -135,6 +139,13 @@ const SETTINGS_TAB_CONFIG: Record<SettingsTab, SettingsTabConfig> = {
     title: "settings.tabs.hooks.title",
     description: "settings.tabs.hooks.description",
     icon: Webhook,
+  },
+  statusline: {
+    label: "settings.tabs.statusline.label",
+    title: "settings.tabs.statusline.title",
+    description: "settings.tabs.statusline.description",
+    icon: PanelsTopLeft,
+    searchPlaceholder: "settings.tabs.statusline.search",
   },
   "command-suggestions": {
     label: "settings.tabs.commandSuggestions.label",
@@ -235,6 +246,7 @@ export function SettingsModal({ open, onClose, onAfterClose, initialTab, onActiv
     if (activeTab === "model-pricing") return <ModelPricingSettingsPage searchValue={searchValue} />;
     if (activeTab === "sync") return <SyncSettingsPage />;
     if (activeTab === "hooks") return <HookSettingsPage />;
+    if (activeTab === "statusline") return <StatuslineSettingsPage searchValue={searchValue} />;
     if (activeTab === "command-suggestions") return <CommandSuggestionSettingsPage />;
     if (activeTab === "about") return <AboutSettingsPage />;
     return null;

@@ -13,7 +13,6 @@ import {
   SimpleGrid,
   Stack,
   Text,
-  UnstyledButton,
 } from "@mantine/core";
 import type { LucideIcon } from "lucide-react";
 import {
@@ -40,6 +39,7 @@ import {
   Undo2,
 } from "@/components/icons";
 import { ProviderBadge } from "@/components/provider/ProviderRow";
+import { SettingsListItem } from "@/components/settings/SettingsListItem";
 import { VendorIcon, inferVendor, type VendorKey } from "@/components/VendorIcon";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { useI18n, type AppLanguage } from "@/lib/i18n";
@@ -345,51 +345,27 @@ function ProviderListItem({
   const subtitle = provider.category ?? provider.model ?? undefined;
 
   return (
-    <UnstyledButton
-      type="button"
+    <SettingsListItem
+      title={provider.name}
+      subtitle={subtitle}
+      selected={isSelected}
+      ariaPressed={isSelected}
       onClick={onClick}
-      data-selected={isSelected ? "true" : "false"}
-      aria-pressed={isSelected}
-      className="ui-focus-ring flex w-full items-center gap-3 text-left transition-all"
-      style={{
-        padding: "9px 10px",
-        borderRadius: 12,
-        backgroundColor: isSelected
-          ? "color-mix(in srgb, var(--primary) 10%, var(--surface-container-lowest))"
-          : "var(--surface-container-lowest)",
-        border: isSelected
-          ? "1px solid color-mix(in srgb, var(--primary) 42%, transparent)"
-          : "1px solid color-mix(in srgb, var(--border) 22%, transparent)",
-        boxShadow: "none",
-      }}
-      onMouseEnter={(e) => {
-        if (!isSelected) e.currentTarget.style.backgroundColor = "var(--surface-container-low)";
-      }}
-      onMouseLeave={(e) => {
-        if (!isSelected) e.currentTarget.style.backgroundColor = "var(--surface-container-lowest)";
-      }}
-    >
-      <span
-        className="inline-flex shrink-0 items-center justify-center"
-        style={{ width: 34, height: 34, borderRadius: 10, backgroundColor: "var(--surface-container-high)", color: "var(--on-surface)" }}
-      >
-        <VendorIcon vendor={vendor} size={20} fallback={Boxes} />
-      </span>
-      <Box className="min-w-0 flex-1">
-        <Text className="truncate" fz={13} fw={500} c={isSelected ? "var(--primary)" : "var(--on-surface)"}>
-          {provider.name}
-        </Text>
-        {subtitle && (
-          <Text className="truncate" fz={11} c="var(--text-muted)" mt={1}>
-            {subtitle}
-          </Text>
-        )}
-      </Box>
-      {badge && (
-        <ProviderBadge tone={badge.tone}>{badge.label}</ProviderBadge>
+      leading={(
+        <span
+          className="inline-flex shrink-0 items-center justify-center"
+          style={{ width: 34, height: 34, borderRadius: 10, backgroundColor: "var(--surface-container-high)", color: "var(--on-surface)" }}
+        >
+          <VendorIcon vendor={vendor} size={20} fallback={Boxes} />
+        </span>
       )}
-      <ChevronRight size={16} style={{ color: "var(--text-muted)" }} className="shrink-0" />
-    </UnstyledButton>
+      rightSection={(
+        <Group gap="xs" wrap="nowrap">
+          {badge && <ProviderBadge tone={badge.tone}>{badge.label}</ProviderBadge>}
+          <ChevronRight size={16} style={{ color: "var(--text-muted)" }} className="shrink-0" />
+        </Group>
+      )}
+    />
   );
 }
 

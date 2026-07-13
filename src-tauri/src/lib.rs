@@ -2,6 +2,7 @@
 
 mod app_paths;
 mod claude_hook;
+pub mod codex_statusline;
 mod commands;
 mod conpty_sideload;
 mod file_watcher;
@@ -11,6 +12,8 @@ mod linux_graphics;
 mod log_rotation;
 mod pty;
 mod shell_resolver;
+pub mod statusline;
+pub mod statusline_profiles;
 mod sync;
 mod webdav;
 mod wsl;
@@ -658,6 +661,29 @@ pub fn run() {
             commands::system_notification::is_wsl,
             commands::system_notification::send_notification_via_windows,
             commands::system_notification::send_interactive_system_notification,
+            statusline::statusline_get_status,
+            statusline::statusline_load_settings,
+            statusline::statusline_save_settings,
+            statusline::statusline_import_legacy,
+            statusline::statusline_render_preview,
+            statusline::statusline_install,
+            statusline::statusline_uninstall,
+            statusline::statusline_get_catalog,
+            statusline::statusline_powerline_font_status,
+            statusline::statusline_powerline_install_fonts,
+            codex_statusline::codex_statusline_load,
+            codex_statusline::codex_statusline_save,
+            statusline_profiles::statusline_profiles_load,
+            statusline_profiles::statusline_profiles_create,
+            statusline_profiles::statusline_profiles_save,
+            statusline_profiles::statusline_profiles_switch,
+            statusline_profiles::statusline_profiles_rename,
+            statusline_profiles::statusline_profiles_duplicate,
+            statusline_profiles::statusline_profiles_delete,
+            statusline_profiles::statusline_profiles_capture_external,
+            statusline_profiles::statusline_profiles_export,
+            statusline_profiles::statusline_profiles_analyze_import,
+            statusline_profiles::statusline_profiles_commit_import,
             app_show_main_window,
         ])
         .build(context)

@@ -25,6 +25,7 @@
 | [Git Status Contracts](./git-status-contracts.md) | Git 状态收集三条链路（面板/Replay/WSL）的过滤合约与嵌套子仓库处理 | Active |
 | [Command Suggestion Contracts](./command-suggestion-contracts.md) | LLM 命令提示 Tauri command、OpenAI 兼容请求、快速检测、超时与安全回退合约 | Active |
 | [App Data Persistence Contracts](./app-data-persistence-contracts.md) | Stable `.cli-manager` data paths, non-destructive legacy store migration, and safe legacy DB recovery | Active |
+| [Statusline Contracts](./statusline-contracts.md) | 内置 Claude 状态栏子命令、配置存储、预览、旧配置导入与安装边界 | Active |
 
 ---
 

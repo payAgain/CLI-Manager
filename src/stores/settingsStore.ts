@@ -57,8 +57,10 @@ type LastSettingsTab =
   | "model-pricing"
   | "sync"
   | "hooks"
+  | "statusline"
   | "command-suggestions"
   | "about";
+export type StatuslineEditorSource = "claude" | "codex";
 export type TerminalSidePanelSkin = "terminal" | "classic-terminal" | "warm-paper" | "sunrise" | "linen" | "latte";
 export type TerminalStatsCardKey =
   | "session"
@@ -257,6 +259,7 @@ interface Settings {
   uiFontSize: number;
   uiTextColor: string;
   lastSettingsTab: LastSettingsTab;
+  statuslineEditorSource: StatuslineEditorSource;
   defaultShell: string;
   sidebarWidth: number;
   historySidebarWidth: number;
@@ -361,6 +364,7 @@ const DEFAULTS: Settings = {
   uiFontSize: UI_FONT_SIZE_DEFAULT,
   uiTextColor: "",
   lastSettingsTab: "general",
+  statuslineEditorSource: "claude",
   defaultShell: "powershell.exe",
   sidebarWidth: 248,
   historySidebarWidth: 276,
@@ -502,6 +506,7 @@ const LAST_SETTINGS_TABS: readonly LastSettingsTab[] = [
   "model-pricing",
   "sync",
   "hooks",
+  "statusline",
   "command-suggestions",
   "about",
 ];
