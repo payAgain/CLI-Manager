@@ -31,5 +31,9 @@ package() {
 
   install -d "${pkgdir}/usr/lib/CLI-Manager"
   mv "${pkgdir}/usr/bin/cli-manager" "${pkgdir}/usr/lib/CLI-Manager/cli-manager"
+  # PTY 守护进程必须与主程序同目录（主程序按 current_exe 同目录查找）
+  if [ -f "${pkgdir}/usr/bin/cli-manager-daemon" ]; then
+    mv "${pkgdir}/usr/bin/cli-manager-daemon" "${pkgdir}/usr/lib/CLI-Manager/cli-manager-daemon"
+  fi
   install -Dm0755 "${srcdir}/cli-manager-wrapper" "${pkgdir}/usr/bin/cli-manager"
 }

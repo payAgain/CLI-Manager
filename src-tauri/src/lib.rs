@@ -1,15 +1,18 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-mod app_paths;
+pub mod app_paths;
 mod claude_hook;
 mod commands;
 mod conpty_sideload;
+// daemon 二进制（src/bin/cli-manager-daemon.rs）经 lib 复用以下模块，
+// 因此 app_paths 与 daemon 需 pub。
+pub mod daemon;
 mod file_watcher;
 mod git_watcher;
 pub mod hook_client;
 mod linux_graphics;
 mod log_rotation;
-mod pty;
+pub mod pty;
 mod shell_resolver;
 mod sync;
 mod webdav;
@@ -17,6 +20,7 @@ mod wsl;
 
 use log::LevelFilter;
 use serde_json::Value;
+use std::sync::Mutex;
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
@@ -36,6 +40,30 @@ fn show_main_window<R: Runtime>(app: &AppHandle<R>) {
         let _ = window.unminimize();
         let _ = window.set_focus();
     }
+}
+
+#[derive(Default)]
+struct PendingBackgroundSession(Mutex<Option<String>>);
+
+fn background_session_arg(args: &[String]) -> Option<String> {
+    args.windows(2).find_map(|pair| {
+        (pair[0] == "--restore-background-session" && !pair[1].trim().is_empty())
+            .then(|| pair[1].clone())
+    })
+}
+
+fn set_pending_background_session<R: Runtime>(app: &AppHandle<R>, session_id: String) {
+    if let Ok(mut pending) = app.state::<PendingBackgroundSession>().0.lock() {
+        *pending = Some(session_id.clone());
+    }
+    let _ = app.emit("background-task-activate-requested", session_id);
+}
+
+#[tauri::command]
+fn take_pending_background_session(
+    pending: tauri::State<'_, PendingBackgroundSession>,
+) -> Option<String> {
+    pending.0.lock().ok().and_then(|mut value| value.take())
 }
 
 #[tauri::command]
@@ -423,7 +451,10 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_clipboard_manager::init())
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            if let Some(session_id) = background_session_arg(&args) {
+                set_pending_background_session(app, session_id);
+            }
             show_main_window(app);
         }))
         .plugin({
@@ -444,6 +475,12 @@ pub fn run() {
                 .build()
         })
         .setup(move |app| {
+            let startup_args: Vec<String> = std::env::args().collect();
+            if let Some(session_id) = background_session_arg(&startup_args) {
+                if let Ok(mut pending) = app.state::<PendingBackgroundSession>().0.lock() {
+                    *pending = Some(session_id);
+                }
+            }
             if let Err(err) = app_paths::migrate_legacy_app_files(app.handle()) {
                 log::warn!("CLI-Manager data migration skipped: {err}");
             }
@@ -451,6 +488,43 @@ pub fn run() {
             // 保留应用自身调试日志，但压掉 sqlx 的逐条 SQL 输出。
             log::set_max_level(log_level);
             app.manage(claude_hook::ClaudeHookBridge::start(app.handle().clone()));
+            // Issue #123 Phase 2：后台线程发现/拉起 PTY daemon，成功后写入 bridge；
+            // 失败只记日志，命令层自动降级进程内 PTY，不阻塞启动。
+            // 逃生舱：CLI_MANAGER_DISABLE_DAEMON=1 强制进程内 PTY（排障用）。
+            {
+                let daemon_disabled = std::env::var("CLI_MANAGER_DISABLE_DAEMON")
+                    .map(|value| {
+                        let value = value.trim();
+                        value == "1" || value.eq_ignore_ascii_case("true")
+                    })
+                    .unwrap_or(false);
+                if daemon_disabled {
+                    log::info!("pty daemon disabled via CLI_MANAGER_DISABLE_DAEMON");
+                } else {
+                    let handle = app.handle().clone();
+                    std::thread::spawn(move || match app_paths::cli_manager_data_dir() {
+                    Ok(data_dir) => {
+                        match daemon::client::connect_or_spawn(
+                            handle.clone(),
+                            &data_dir,
+                            cfg!(debug_assertions),
+                        ) {
+                            Ok(client) => {
+                                log::info!(
+                                    "pty daemon connected: 127.0.0.1:{}",
+                                    client.info().port
+                                );
+                                handle.state::<daemon::client::DaemonBridge>().set(client);
+                            }
+                            Err(err) => {
+                                log::warn!("pty daemon unavailable, falling back in-process: {err}")
+                            }
+                        }
+                    }
+                    Err(err) => log::warn!("pty daemon skipped (no data dir): {err}"),
+                });
+                }
+            }
             // 注入 appLocalData 目录用于历史索引磁盘缓存（加速冷启动加载）。
             if let Ok(dir) = app_paths::history_cache_dir() {
                 commands::history::set_history_index_cache_dir(dir);
@@ -513,6 +587,8 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_notification::init())
         .manage(pty::manager::PtyManager::new())
+        .manage(PendingBackgroundSession::default())
+        .manage(daemon::client::DaemonBridge::new())
         .manage(file_watcher::FileWatcherBridge::new())
         .manage(git_watcher::GitWatcherBridge::new())
         .manage(commands::subagent_transcript::SubagentTranscriptBridge::new())
@@ -531,6 +607,10 @@ pub fn run() {
             commands::terminal::pty_close_all,
             commands::terminal::pty_reconcile_active_sessions,
             commands::terminal::pty_status,
+            commands::terminal::pty_daemon_active,
+            commands::terminal::pty_daemon_sessions,
+            commands::terminal::pty_attach,
+            take_pending_background_session,
             commands::terminal_shell::terminal_shell_scan,
             commands::logging::set_debug_logging,
             commands::fs::check_paths_exist,

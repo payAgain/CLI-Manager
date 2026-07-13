@@ -381,7 +381,7 @@ export function ThemeSettingsPage() {
   const exitWithRunningTasksOptions: { value: ExitWithRunningTasksBehavior; label: string }[] = [
     { value: "ask", label: t("settings.options.exitTasks.ask") },
     { value: "background", label: t("settings.options.exitTasks.background") },
-    { value: "exit", label: t("settings.options.exitTasks.exit") },
+    { value: "discard", label: t("settings.options.exitTasks.discard") },
   ];
   const normalizedDefaultShell = normalizeShellKey(defaultShell);
   const shellSelectValue = normalizedDefaultShell ?? defaultShell;

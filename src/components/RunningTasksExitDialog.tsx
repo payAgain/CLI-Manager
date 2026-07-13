@@ -9,18 +9,19 @@ import {
 import { Button } from "./ui/button";
 import { useI18n } from "../lib/i18n";
 
-type RunningTasksExitAction = "background" | "exit";
+type RunningTasksExitAction = "background" | "minimize" | "discard";
 
 interface Props {
   open: boolean;
   runningCount: number;
   onBackground: (remember: boolean) => void;
-  onExit: (remember: boolean) => void;
+  onMinimize: (remember: boolean) => void;
+  onDiscard: (remember: boolean) => void;
   onClose: () => void;
 }
 
 /** 退出时存在运行中任务的询问弹窗（Issue #123 Phase 1）。 */
-export function RunningTasksExitDialog({ open, runningCount, onBackground, onExit, onClose }: Props) {
+export function RunningTasksExitDialog({ open, runningCount, onBackground, onMinimize, onDiscard, onClose }: Props) {
   const { t } = useI18n();
   const [action, setAction] = useState<RunningTasksExitAction>("background");
   const [remember, setRemember] = useState(false);
@@ -35,9 +36,13 @@ export function RunningTasksExitDialog({ open, runningCount, onBackground, onExi
   const handleConfirm = () => {
     if (action === "background") {
       onBackground(remember);
-    } else {
-      onExit(remember);
+      return;
     }
+    if (action === "minimize") {
+      onMinimize(remember);
+      return;
+    }
+    onDiscard(remember);
   };
 
   return (
@@ -79,12 +84,23 @@ export function RunningTasksExitDialog({ open, runningCount, onBackground, onExi
             <input
               type="radio"
               name="running-tasks-exit-action"
-              value="exit"
-              checked={action === "exit"}
-              onChange={() => setAction("exit")}
+              value="discard"
+              checked={action === "discard"}
+              onChange={() => setAction("discard")}
               className="h-3.5 w-3.5 accent-accent"
             />
-            {t("dialogs.runningTasksExit.exit")}
+            {t("dialogs.runningTasksExit.discard")}
+          </label>
+          <label className="flex cursor-pointer items-center gap-2 text-[13px] text-text-primary">
+            <input
+              type="radio"
+              name="running-tasks-exit-action"
+              value="minimize"
+              checked={action === "minimize"}
+              onChange={() => setAction("minimize")}
+              className="h-3.5 w-3.5 accent-accent"
+            />
+            {t("dialogs.runningTasksExit.minimize")}
           </label>
         </div>
 

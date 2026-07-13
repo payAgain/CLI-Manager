@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 use tauri::{AppHandle, Emitter};
@@ -12,6 +13,10 @@ const EVENT_NAME: &str = "claude-hook-notification";
 const REQUEST_PATH: &str = "/api/claude-hook";
 const MAX_BODY_BYTES: usize = 64 * 1024;
 const MAX_HEADER_BYTES: usize = 16 * 1024;
+
+/// hook 上报的消费出口：主进程实现为 Tauri 事件，daemon 实现为帧广播 + 缓存
+/// （Issue #123 Phase 2 复用点：HTTP 解析/校验逻辑两侧共享，只有出口不同）。
+pub type HookPayloadSink = Arc<dyn Fn(ClaudeHookPayload) + Send + Sync + 'static>;
 
 pub struct ClaudeHookBridge {
     port: u16,
@@ -65,14 +70,28 @@ pub struct ClaudeHookPayload {
     wsl_distro_name: Option<String>,
 }
 
+impl ClaudeHookPayload {
+    pub fn tab_id(&self) -> &str {
+        &self.tab_id
+    }
+
+    pub fn event(&self) -> &str {
+        &self.event
+    }
+}
+
 impl ClaudeHookBridge {
     pub fn start(app_handle: AppHandle) -> Self {
         match TcpListener::bind(("127.0.0.1", 0)) {
             Ok(listener) => {
                 let port = listener.local_addr().map(|addr| addr.port()).unwrap_or(0);
                 let token = Uuid::new_v4().to_string();
-                let thread_token = token.clone();
-                thread::spawn(move || run_listener(listener, app_handle, thread_token));
+                let sink: HookPayloadSink = Arc::new(move |payload| {
+                    if let Err(err) = app_handle.emit(EVENT_NAME, payload) {
+                        warn!("cli hook bridge emit failed: {}", err);
+                    }
+                });
+                spawn_hook_listener(listener, token.clone(), sink);
                 info!("cli hook bridge listening: 127.0.0.1:{}", port);
                 Self { port, token }
             }
@@ -100,20 +119,24 @@ impl ClaudeHookBridge {
     }
 }
 
-fn run_listener(listener: TcpListener, app_handle: AppHandle, token: String) {
-    for stream in listener.incoming() {
-        match stream {
-            Ok(stream) => {
-                let app_handle = app_handle.clone();
-                let token = token.clone();
-                thread::spawn(move || handle_stream(stream, app_handle, &token));
+/// 在给定 listener 上跑 hook HTTP 服务：解析/鉴权/校验后把 payload 交给 sink。
+/// daemon 与主进程共用（Issue #123 Phase 2）。
+pub fn spawn_hook_listener(listener: TcpListener, token: String, sink: HookPayloadSink) {
+    thread::spawn(move || {
+        for stream in listener.incoming() {
+            match stream {
+                Ok(stream) => {
+                    let token = token.clone();
+                    let sink = Arc::clone(&sink);
+                    thread::spawn(move || handle_stream(stream, sink, &token));
+                }
+                Err(err) => warn!("cli hook bridge accept failed: {}", err),
             }
-            Err(err) => warn!("cli hook bridge accept failed: {}", err),
         }
-    }
+    });
 }
 
-fn handle_stream(mut stream: TcpStream, app_handle: AppHandle, token: &str) {
+fn handle_stream(mut stream: TcpStream, sink: HookPayloadSink, token: &str) {
     let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
     let request = match read_request(&mut stream) {
         Ok(request) => request,
@@ -176,11 +199,7 @@ fn handle_stream(mut stream: TcpStream, app_handle: AppHandle, token: &str) {
         wsl_distro_name: payload.wsl_distro_name,
     };
 
-    if let Err(err) = app_handle.emit(EVENT_NAME, payload) {
-        warn!("cli hook bridge emit failed: {}", err);
-        write_response(&mut stream, "500 Internal Server Error", "emit failed");
-        return;
-    }
+    sink(payload);
 
     write_response(&mut stream, "204 No Content", "");
 }

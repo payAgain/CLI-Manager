@@ -59,11 +59,17 @@ const appStartAt =
 let firstScreenPerfReported = false;
 let firstScreenShown = false;
 let startupBaseReady = false;
+// React StrictMode/初始化重入下，每个应用进程最多展示一次恢复提示。
 let deferredStartupTasksStarted = false;
 let startupUpdateChecked = false;
 let settingsModalPreloadStarted = false;
 const COMPACT_WINDOW_WIDTH = 350;
 const WINDOW_MIN_HEIGHT = 600;
+interface DaemonSessionMeta {
+  sessionId: string;
+  alive: boolean;
+}
+
 const TERMINAL_PANEL_SEMANTIC_COLORS = {
   dark: {
     fg: "#ECECEC",
@@ -470,8 +476,8 @@ function App() {
   const [isMacOs, setIsMacOs] = useState(isLikelyMacOs);
   const [initError, setInitError] = useState<string | null>(null);
   const [startupStage, setStartupStage] = useState<StartupStage>("settings");
-  // 启动时若检测到上次遗留的可恢复工作区标签，弹窗询问是否恢复（Issue #123）。
   const [restorePromptOpen, setRestorePromptOpen] = useState(false);
+  // 启动时若检测到上次遗留的可恢复工作区标签，弹窗询问是否恢复（Issue #123）。
   const terminalFullscreenMaximizedRef = useRef(false);
   const restoreWindowWidthRef = useRef<number | null>(null);
   const closeBehaviorRef = useRef(closeBehavior);
@@ -722,6 +728,39 @@ function App() {
 
   useEffect(() => {
     if (!IN_TAURI) return;
+    let cancelled = false;
+    const activate = async (sessionId: string) => {
+      if (!sessionId || cancelled) return;
+      try {
+        const restored = await useTerminalStore.getState().attachDaemonSession(sessionId);
+        if (!restored) {
+          toast.warning(t("terminal.backgroundTasks.restoreFailed"));
+          return;
+        }
+        await focusMainWindow();
+      } catch (err) {
+        logWarn("Failed to activate background session from hook", { sessionId, err });
+      }
+    };
+    const unlisten = listen<string>("background-task-activate-requested", (event) => {
+      void activate(event.payload);
+    });
+    const timer = window.setInterval(() => {
+      if (!startupBaseReady) return;
+      window.clearInterval(timer);
+      void invoke<string | null>("take_pending_background_session").then((sessionId) => {
+        if (sessionId) void activate(sessionId);
+      });
+    }, 100);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+      void unlisten.then((fn) => fn());
+    };
+  }, [t]);
+
+  useEffect(() => {
+    if (!IN_TAURI) return;
     const fallbackTimer = setTimeout(() => {
       if (!firstScreenShown) {
         firstScreenShown = true;
@@ -793,9 +832,7 @@ function App() {
         await useSessionStore.getState().clear().catch((err) => {
           logWarn("Failed to clear disabled terminal session restore snapshot", err);
         });
-      } else if (hasRestorable) {
-        if (!cancelled) setRestorePromptOpen(true);
-      } else {
+      } else if (!hasRestorable) {
         await useSessionStore.getState().clear().catch((err) => {
           logWarn("Failed to clear restored sessions during startup", err);
         });
@@ -821,22 +858,21 @@ function App() {
     };
   }, [handleOpenSettings, loadSettings, t]);
 
-  // 用户确认恢复上次会话：重建全部标签 + attach 新 PTY，按会话类型分流（CLI 会话走原生 resume，普通 shell 贴回历史画面）。
   const handleConfirmRestoreSessions = useCallback(() => {
     setRestorePromptOpen(false);
-    const { projects, projectHealth } = useProjectStore.getState();
-    const projectMap = new Map(projects.map((project) => [project.id, project]));
-    void useTerminalStore.getState().restoreSessions(projectMap, projectHealth).catch((err) => {
-      logWarn("Failed to restore terminal sessions", err);
-      toast.error(t("notifications.app.initFailed"), { description: String(err) });
-    });
-  }, [t]);
+  }, []);
 
+  // 用户确认恢复上次会话：重建全部标签 + attach 新 PTY，按会话类型分流（CLI 会话走原生 resume，普通 shell 贴回历史画面）。
   // 用户拒绝恢复：清除本次工作区恢复快照（不动 session_meta / 历史记录），避免下次继续询问同一批旧标签。
   const handleRejectRestoreSessions = useCallback(() => {
     setRestorePromptOpen(false);
     void useSessionStore.getState().clear().catch((err) => {
       logWarn("Failed to clear restored sessions after user rejected restore", err);
+    });
+    // Phase 2：拒绝恢复 = 不要这批旧标签。daemon 中对应会话若还在跑，
+    // 必须一并关闭，否则成为无人认领的后台任务且阻止 daemon 空闲自灭。
+    void invoke("pty_close_all").catch((err) => {
+      logWarn("Failed to close daemon sessions after user rejected restore", err);
     });
   }, []);
 
@@ -1004,11 +1040,14 @@ function App() {
   }, []);
 
   const exitApp = useCallback(async (source: string) => {
+    logInfo("exit: destroying app window", { source });
     try {
       await getCurrentWindow().destroy();
+      logInfo("exit: window destroyed", { source });
     } catch (err) {
       logWarn(`Failed to destroy window from ${source}`, err);
       try {
+        logInfo("exit: falling back to process exit", { source });
         await exit(0);
       } catch (exitErr) {
         logWarn(`Failed to exit process from ${source}`, exitErr);
@@ -1016,7 +1055,46 @@ function App() {
     }
   }, []);
 
-  const runExitCleanup = useCallback(async (source: string) => {
+  const getExitRunningTaskIds = useCallback(async (source: string) => {
+    const terminalState = useTerminalStore.getState();
+    const foregroundRunningIds = terminalState.getRunningTaskSessionIds();
+    const foregroundSessionIds = new Set(terminalState.sessions.map((session) => session.id));
+    let daemonAliveIds: string[] = [];
+    try {
+      const daemonSessions = await invoke<DaemonSessionMeta[]>("pty_daemon_sessions");
+      daemonAliveIds = daemonSessions
+        .filter((session) => session.alive && !foregroundSessionIds.has(session.sessionId))
+        .map((session) => session.sessionId);
+      logInfo("exit: daemon sessions checked", {
+        source,
+        foregroundRunningCount: foregroundRunningIds.length,
+        backgroundDaemonAliveCount: daemonAliveIds.length,
+        daemonSessionCount: daemonSessions.length,
+      });
+    } catch (err) {
+      logWarn("exit: failed to query daemon sessions", { source, err });
+    }
+    return Array.from(new Set([...foregroundRunningIds, ...daemonAliveIds]));
+  }, []);
+
+  const runExitCleanup = useCallback(async (
+    source: string,
+    options?: { closePty?: boolean; discardSessions?: boolean }
+  ) => {
+    const closePty = options?.closePty ?? true;
+    const discardSessions = options?.discardSessions ?? false;
+    const ptySessionIds = useTerminalStore
+      .getState()
+      .sessions
+      .filter((session) => (session.kind ?? "pty") === "pty")
+      .map((session) => session.id);
+    logInfo("exit: cleanup started", {
+      source,
+      closePty,
+      discardSessions,
+      ptySessionCount: ptySessionIds.length,
+      ptySessionIds,
+    });
     try {
       // 全程保持窗口可见并显示进度遮罩；destroy 前不复位 exitPhase。
       flushSync(() => {
@@ -1028,33 +1106,93 @@ function App() {
       // Issue #123：正常退出前把各终端最终画面强制落盘，供下次启动问询式恢复。
       // 必须在 pty_close_all 之前，避免关闭 PTY 触发的重绘/清屏影响 serialize 结果；
       // 此处不再 clear() 工作区快照——那会让"关闭后恢复"永远拿不到数据。
-      await flushTerminalSnapshotsNow();
-      try {
-        await invoke("pty_close_all");
-      } catch (err) {
-        logWarn("Failed to close PTY sessions before exit", err);
+      if (!discardSessions) {
+        await flushTerminalSnapshotsNow();
+      }
+      // Phase 2：daemon 模式"转入后台"时 closePty=false——PTY 留在守护进程里继续跑，
+      // 快照仍落盘作为 daemon 也挂掉时的最终兜底。
+      if (closePty) {
+        if (discardSessions) {
+          logInfo("exit: closing all PTY sessions", { source });
+          try {
+            await invoke("pty_close_all");
+            logInfo("exit: close_all completed", { source });
+          } catch (err) {
+            logWarn("Failed to close all PTY sessions before exit", { source, err });
+          }
+        } else {
+          let closedCount = 0;
+          for (const sessionId of ptySessionIds) {
+            try {
+              await invoke("pty_close", { sessionId });
+              closedCount += 1;
+            } catch (err) {
+              logWarn("Failed to close foreground PTY session before exit", { source, sessionId, err });
+            }
+          }
+          logInfo("exit: foreground PTY close completed", {
+            source,
+            requestedCount: ptySessionIds.length,
+            closedCount,
+          });
+        }
+      }
+      if (discardSessions) {
+        await useSessionStore.getState().clear().catch((err) => {
+          logWarn("Failed to clear discarded terminal sessions", err);
+        });
+        logInfo("exit: persisted sessions discarded", { source });
       }
     } finally {
+      logInfo("exit: cleanup finished", { source, closePty, discardSessions });
       await exitApp(source);
     }
   }, [exitApp, runCloseAutoSync]);
 
-  // Issue #123 Phase 1：转入后台 = 仅隐藏窗口，严禁触碰退出链路
-  // （runExitCleanup / pty_close_all / flush）——PTY、hook server、快照节流全部存活。
-  const enterBackgroundTaskMode = useCallback(async () => {
+  // Issue #123 Phase 1/2：转入后台。
+  // daemon 可用 → 真退出应用，任务由守护进程续跑（下次启动 attach 回放）；
+  // daemon 不可用 → 托盘常驻降级：仅隐藏窗口，严禁触碰退出链路
+  // （runExitCleanup / pty_close_all）——PTY、hook server、快照节流全部存活。
+  const minimizeToTray = useCallback(async () => {
     try {
       await getCurrentWindow().hide();
       backgroundTaskModeActive = true;
     } catch (err) {
+      logWarn("Failed to hide window for tray mode", err);
+    }
+  }, []);
+
+  const enterBackgroundTaskMode = useCallback(async () => {
+    let daemonActive = false;
+    try {
+      daemonActive = await invoke<boolean>("pty_daemon_active");
+    } catch (err) {
+      logWarn("Failed to query pty daemon state", err);
+    }
+    logInfo("exit: background task mode requested", { daemonActive });
+    if (daemonActive) {
+      await runExitCleanup("background daemon", { closePty: false });
+      return;
+    }
+    try {
+      await minimizeToTray();
+      return;
+    } catch (err) {
       // hide 失败时保持窗口可见即可，绝不能误走退出链路杀任务。
       logWarn("Failed to hide window for background task mode", err);
     }
-  }, []);
+  }, [minimizeToTray, runExitCleanup]);
 
   // 所有"退出应用"入口（closeBehavior=exit、关闭弹窗选退出、托盘退出）必须经此守卫：
   // 无运行中任务 → 行为与旧版完全一致；有 → 按 exitWithRunningTasksBehavior 分流。
   const requestExitGuardedByRunningTasks = useCallback(async (source: string) => {
-    const runningIds = useTerminalStore.getState().getRunningTaskSessionIds();
+    const runningIds = await getExitRunningTaskIds(source);
+    logInfo("exit: guarded request evaluated", {
+      source,
+      runningCount: runningIds.length,
+      runningIds,
+      behavior: exitTasksBehaviorRef.current,
+    });
     if (runningIds.length === 0) {
       await runExitCleanup(source);
       return;
@@ -1064,8 +1202,12 @@ function App() {
       await enterBackgroundTaskMode();
       return;
     }
-    if (behavior === "exit") {
-      await runExitCleanup(source);
+    if (behavior === "minimize") {
+      await minimizeToTray();
+      return;
+    }
+    if (behavior === "discard") {
+      await runExitCleanup(source, { discardSessions: true });
       return;
     }
     pendingExitSourceRef.current = source;
@@ -1073,23 +1215,46 @@ function App() {
     // 托盘退出时窗口可能处于隐藏态，弹窗前必须先恢复窗口。
     await focusMainWindow();
     setRunningTasksDialogOpen(true);
-  }, [enterBackgroundTaskMode, runExitCleanup]);
+  }, [enterBackgroundTaskMode, getExitRunningTaskIds, minimizeToTray, runExitCleanup]);
 
   const handleRunningTasksDialogBackground = useCallback((remember: boolean) => {
     setRunningTasksDialogOpen(false);
+    logInfo("exit: running task dialog selected background", {
+      source: pendingExitSourceRef.current,
+      remember,
+      runningCount: runningTasksCount,
+    });
     if (remember) {
       void updateSetting("exitWithRunningTasksBehavior", "background");
     }
     void enterBackgroundTaskMode();
-  }, [enterBackgroundTaskMode, updateSetting]);
+  }, [enterBackgroundTaskMode, runningTasksCount, updateSetting]);
 
-  const handleRunningTasksDialogExit = useCallback((remember: boolean) => {
+  const handleRunningTasksDialogMinimize = useCallback((remember: boolean) => {
     setRunningTasksDialogOpen(false);
+    logInfo("exit: running task dialog selected minimize", {
+      source: pendingExitSourceRef.current,
+      remember,
+      runningCount: runningTasksCount,
+    });
     if (remember) {
-      void updateSetting("exitWithRunningTasksBehavior", "exit");
+      void updateSetting("exitWithRunningTasksBehavior", "minimize");
     }
-    void runExitCleanup(pendingExitSourceRef.current);
-  }, [runExitCleanup, updateSetting]);
+    void minimizeToTray();
+  }, [minimizeToTray, runningTasksCount, updateSetting]);
+
+  const handleRunningTasksDialogDiscard = useCallback((remember: boolean) => {
+    setRunningTasksDialogOpen(false);
+    logInfo("exit: running task dialog selected discard", {
+      source: pendingExitSourceRef.current,
+      remember,
+      runningCount: runningTasksCount,
+    });
+    if (remember) {
+      void updateSetting("exitWithRunningTasksBehavior", "discard");
+    }
+    void runExitCleanup(pendingExitSourceRef.current, { discardSessions: true });
+  }, [runExitCleanup, runningTasksCount, updateSetting]);
 
   // 窗口重新获得焦点（托盘左键 / 通知点击唤回）即退出后台任务模式。
   useEffect(() => {
@@ -1121,6 +1286,7 @@ function App() {
 
     unlistenPromise = appWindow.onCloseRequested(async (event) => {
       const behavior = closeBehaviorRef.current;
+      logInfo("exit: window close requested", { behavior });
       if (behavior === "minimize") {
         event.preventDefault();
         try {
@@ -1136,13 +1302,24 @@ function App() {
         return;
       }
       event.preventDefault();
-      setCloseDialogOpen(true);
+      const runningIds = await getExitRunningTaskIds("window close");
+      logInfo("exit: close ask evaluated", {
+        runningCount: runningIds.length,
+        runningIds,
+      });
+      if (runningIds.length > 0) {
+        pendingExitSourceRef.current = "window close";
+        setRunningTasksCount(runningIds.length);
+        setRunningTasksDialogOpen(true);
+      } else {
+        setCloseDialogOpen(true);
+      }
     });
 
     return () => {
       unlistenPromise?.then((fn) => fn()).catch(() => {});
     };
-  }, [requestExitGuardedByRunningTasks]);
+  }, [getExitRunningTaskIds, requestExitGuardedByRunningTasks]);
 
   const handleCloseDialogMinimize = useCallback(
     (remember: boolean) => {
@@ -1150,15 +1327,9 @@ function App() {
       if (remember) {
         void updateSetting("closeBehavior", "minimize");
       }
-      void (async () => {
-        try {
-          await getCurrentWindow().hide();
-        } catch (err) {
-          logWarn("Failed to hide window from dialog", err);
-        }
-      })();
+      void minimizeToTray();
     },
-    [updateSetting]
+    [minimizeToTray, updateSetting]
   );
 
   const handleCloseDialogExit = useCallback(
@@ -1350,7 +1521,8 @@ function App() {
         open={runningTasksDialogOpen}
         runningCount={runningTasksCount}
         onBackground={handleRunningTasksDialogBackground}
-        onExit={handleRunningTasksDialogExit}
+        onMinimize={handleRunningTasksDialogMinimize}
+        onDiscard={handleRunningTasksDialogDiscard}
         onClose={() => setRunningTasksDialogOpen(false)}
       />
       <ConfirmDialog

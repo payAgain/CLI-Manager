@@ -1,5 +1,3 @@
-use base64::engine::general_purpose::STANDARD;
-use base64::Engine;
 use log::{debug, error, info, warn};
 use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
 use serde::Serialize;
@@ -9,10 +7,20 @@ use std::path::Path;
 use std::sync::{Arc, Mutex, RwLock};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
-use tauri::{AppHandle, Emitter};
 
 use crate::pty::boundary::safe_emit_boundary;
 use crate::shell_resolver::{resolve_git_bash_exe, GIT_BASH_NOT_FOUND_MESSAGE};
+
+/// PTY 输出/状态事件出口（Issue #123 Phase 2 解耦点）：
+/// 主进程实现为 Tauri 事件转发（`pty-output-{id}`/`pty-status-{id}`），
+/// daemon 实现为 ring buffer + TCP 推送。
+///
+/// 契约：`data` 已经过 `safe_emit_boundary` 切帧（UTF-8 + ANSI 序列安全边界），
+/// 实现方只允许整帧透传/存储，禁止再分片。
+pub trait PtyEventSink: Send + Sync + 'static {
+    fn on_output(&self, session_id: &str, data: &[u8]);
+    fn on_status(&self, session_id: &str, status: PtyProcessStatus);
+}
 
 /// Reader 累积阈值：达到该阈值或下游显式没有更多数据时才 emit，避免高吞吐时
 /// 每次 read 都触发一次 IPC + Base64 编码。
@@ -117,7 +125,7 @@ pub struct PtyProcessStatus {
     pub exit_code: Option<i32>,
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, serde::Deserialize)]
 pub struct PtyOrphanCleanupSummary {
     pub active_count: usize,
     pub tracked_count: usize,
@@ -544,7 +552,7 @@ PS0='\e]133;C\a${PS0:0:$((__cli_manager_ran=1,0))}'
         cwd: Option<&str>,
         env_vars: Option<HashMap<String, String>>,
         shell: Option<&str>,
-        app_handle: AppHandle,
+        sink: Arc<dyn PtyEventSink>,
     ) -> Result<(), String> {
         let env_count = env_vars.as_ref().map(|vars| vars.len()).unwrap_or(0);
         info!(
@@ -666,8 +674,6 @@ PS0='\e]133;C\a${PS0:0:$((__cli_manager_ran=1,0))}'
             last_resize_cols: None,
             last_resize_rows: None,
         }));
-        let output_event = format!("pty-output-{session_id}");
-        let status_event = format!("pty-status-{session_id}");
         let status_map = self.statuses.clone();
         let child_for_thread = child.clone();
         let diagnostics_for_thread = diagnostics.clone();
@@ -714,8 +720,7 @@ PS0='\e]133;C\a${PS0:0:$((__cli_manager_ran=1,0))}'
                                         &session_id_owned,
                                     );
                                 }
-                                let encoded = STANDARD.encode(&pending[..safe]);
-                                let _ = app_handle.emit(&output_event, encoded);
+                                sink.on_output(&session_id_owned, &pending[..safe]);
                                 pending.drain(..safe);
                             } else if pending.len() > READER_FLUSH_THRESHOLD * 8 {
                                 // 极端兜底：未终结序列超 256KB（远大于任何正常 OSC/CSI），
@@ -731,8 +736,7 @@ PS0='\e]133;C\a${PS0:0:$((__cli_manager_ran=1,0))}'
                                         &session_id_owned,
                                     );
                                 }
-                                let encoded = STANDARD.encode(&pending);
-                                let _ = app_handle.emit(&output_event, encoded);
+                                sink.on_output(&session_id_owned, &pending);
                                 pending.clear();
                             }
                         }
@@ -748,8 +752,7 @@ PS0='\e]133;C\a${PS0:0:$((__cli_manager_ran=1,0))}'
                 if vt_diag_enabled {
                     scan_vt_scroll_sequences(&pending, &mut vt_diag, &session_id_owned);
                 }
-                let encoded = STANDARD.encode(&pending);
-                let _ = app_handle.emit(&output_event, encoded);
+                sink.on_output(&session_id_owned, &pending);
                 pending.clear();
             }
 
@@ -822,7 +825,7 @@ PS0='\e]133;C\a${PS0:0:$((__cli_manager_ran=1,0))}'
                 }
             }
 
-            let _ = app_handle.emit(&status_event, new_status);
+            sink.on_status(&session_id_owned, new_status);
         });
 
         let session = Arc::new(Mutex::new(PtySession {

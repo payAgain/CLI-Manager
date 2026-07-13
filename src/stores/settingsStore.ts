@@ -44,8 +44,8 @@ export type TerminalThemeMode = "system" | "independent";
 export type SidebarDensity = "compact" | "comfortable";
 export type ViewMode = "standard" | "compact";
 export type CloseBehavior = "ask" | "minimize" | "exit";
-/** 退出时存在运行中任务的处理方式：询问 / 转入后台（托盘常驻）/ 直接退出（Issue #123 Phase 1）。 */
-export type ExitWithRunningTasksBehavior = "ask" | "background" | "exit";
+/** 退出时存在运行中任务的处理方式：询问 / 后台继续 / 丢弃任务并退出。 */
+export type ExitWithRunningTasksBehavior = "ask" | "background" | "minimize" | "discard";
 export const LINUX_GRAPHICS_MODES = ["auto", "system", "disable-dmabuf", "disable-compositing"] as const;
 export type LinuxGraphicsMode = (typeof LINUX_GRAPHICS_MODES)[number];
 type LastSettingsTab =
@@ -160,6 +160,7 @@ export interface TerminalToolbarVisibilitySettings {
   stats: boolean;
   gitChanges: boolean;
   systemResources: boolean;
+  backgroundTasks: boolean;
   showText: boolean;
 }
 
@@ -381,21 +382,22 @@ const DEFAULTS: Settings = {
   unsplitBehavior: "merge",
   terminalToolbarVisibility: {
     templates: true,
-    commandHistory: true,
+    commandHistory: false,
     fullscreen: true,
     sessionHistory: true,
     replay: false,
     files: true,
     stats: true,
     gitChanges: true,
-    systemResources: true,
+    systemResources: false,
+    backgroundTasks: true,
     showText: false,
   },
   sidebarToolbarVisibility: {
     stats: true,
     gitChanges: true,
   },
-  terminalToolbarOrder: ["new", "templates", "commandHistory", "fullscreen", "sessionHistory", "replay", "files", "gitChanges", "stats", "systemResources"],
+  terminalToolbarOrder: ["new", "templates", "commandHistory", "fullscreen", "sessionHistory", "replay", "files", "gitChanges", "stats", "systemResources", "backgroundTasks"],
   terminalSidePanelMerged: true,
   terminalSidePanelSingleOpen: true,
   terminalSidePanelSkin: "terminal",
@@ -602,6 +604,7 @@ export function migrateTerminalToolbarVisibility(value: unknown): TerminalToolba
     stats: typeof raw.stats === "boolean" ? raw.stats : defaults.stats,
     gitChanges: typeof raw.gitChanges === "boolean" ? raw.gitChanges : defaults.gitChanges,
     systemResources: typeof raw.systemResources === "boolean" ? raw.systemResources : defaults.systemResources,
+    backgroundTasks: typeof raw.backgroundTasks === "boolean" ? raw.backgroundTasks : defaults.backgroundTasks,
     showText: typeof raw.showText === "boolean" ? raw.showText : defaults.showText,
   };
 }
@@ -1044,7 +1047,8 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
     entries.exitWithRunningTasksBehavior =
       entries.exitWithRunningTasksBehavior === "ask" ||
       entries.exitWithRunningTasksBehavior === "background" ||
-      entries.exitWithRunningTasksBehavior === "exit"
+      entries.exitWithRunningTasksBehavior === "minimize" ||
+      entries.exitWithRunningTasksBehavior === "discard"
         ? entries.exitWithRunningTasksBehavior
         : DEFAULTS.exitWithRunningTasksBehavior;
     entries.ccusageAnalyticsEnabled =

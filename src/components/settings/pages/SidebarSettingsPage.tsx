@@ -125,6 +125,7 @@ const TERMINAL_TOOLBAR_OPTIONS: { key: TerminalToolbarOptionKey; labelKey: Trans
   { key: "stats", labelKey: "settings.general.toolbar.stats" },
   { key: "gitChanges", labelKey: "settings.general.toolbar.gitChanges" },
   { key: "systemResources", labelKey: "settings.general.toolbar.systemResources" },
+  { key: "backgroundTasks", labelKey: "settings.general.toolbar.backgroundTasks" },
 ];
 
 type TerminalToolbarOptionKey = keyof TerminalToolbarVisibilitySettings;

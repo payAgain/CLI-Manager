@@ -38,6 +38,7 @@ import { SplitTerminalView } from "./SplitTerminalView";
 import { XTermTerminal } from "./XTermTerminal";
 import { CommandTemplatePanel } from "./CommandTemplatePanel";
 import { CommandHistoryPanel } from "./CommandHistoryPanel";
+import { BackgroundTasksPanel, type BackgroundTaskMeta } from "./BackgroundTasksPanel";
 import { TerminalStatsPanel } from "./terminal/TerminalStatsPanel";
 import { SystemResourcesPanel } from "./terminal/SystemResourcesPanel";
 import {
@@ -2106,6 +2107,7 @@ export function TerminalTabs({
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
   const [splitPicker, setSplitPicker] = useState<SplitPickerState>(null);
   const [closeConfirm, setCloseConfirm] = useState<TerminalCloseConfirmState>(null);
+  const [daemonTasks, setDaemonTasks] = useState<BackgroundTaskMeta[]>([]);
   const [activeDragSessionId, setActiveDragSessionId] = useState<string | null>(null);
   const [activeDragWorkspanId, setActiveDragWorkspanId] = useState<string | null>(null);
   const [activeDropPreview, setActiveDropPreview] = useState<PaneDropPreview>(null);
@@ -2287,7 +2289,7 @@ export function TerminalTabs({
     "--menu-border": tabMenuHexToRgba(splitPickerMenuForeground, 0.18, "rgba(255, 255, 255, 0.18)"),
     "--menu-hover": tabMenuHexToRgba(splitPickerMenuForeground, 0.12, "rgba(255, 255, 255, 0.12)"),
   } as CSSProperties;
-  const terminalWellStyle = {
+  const terminalWellStyle = useMemo(() => ({
     "--terminal-bridge-color": terminalThemeBackground,
     "--terminal-theme-background": terminalThemeBackground,
     "--terminal-theme-foreground": terminalThemeForeground,
@@ -2307,10 +2309,21 @@ export function TerminalTabs({
     "--term-panel-cyan": terminalPanelSemanticColors.cyan,
     "--term-panel-blue": terminalPanelSemanticColors.blue,
     "--term-panel-track": "color-mix(in srgb, var(--terminal-theme-background, #0c0e10) 94%, var(--term-panel-fg, #ececec) 6%)",
-  } as CSSProperties;
+  }) as CSSProperties, [
+    terminalPanelSemanticColors,
+    terminalThemeAccent,
+    terminalThemeBackground,
+    terminalThemeForeground,
+    terminalThemeMuted,
+    terminalThemeSelection,
+  ]);
   const terminalActionSidebarStyle = useMemo(
     () => getTerminalSidePanelSkinStyle(terminalSidePanelSkin),
     [terminalSidePanelSkin]
+  );
+  const terminalPopoverStyle = useMemo(
+    () => ({ ...terminalWellStyle, ...terminalActionSidebarStyle }),
+    [terminalActionSidebarStyle, terminalWellStyle]
   );
   const historyActive = historyOpen && activeWorkspaceTab === "history";
   const statsPanelActive = sidePanelMerged ? sidePanelOpen && sidePanelTab === "stats" : statsOpen;
@@ -3073,6 +3086,26 @@ export function TerminalTabs({
     setActiveToolbarDragId(null);
   }, []);
 
+  const refreshBackgroundTasks = useCallback(async () => {
+    try {
+      const tasks = await invoke<BackgroundTaskMeta[]>("pty_daemon_sessions");
+      setDaemonTasks(tasks);
+    } catch {
+      setDaemonTasks([]);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshBackgroundTasks();
+    const timer = window.setInterval(() => void refreshBackgroundTasks(), 3000);
+    return () => window.clearInterval(timer);
+  }, [refreshBackgroundTasks]);
+
+  const backgroundTasks = useMemo(() => {
+    const openIds = new Set(sessions.map((session) => session.id));
+    return daemonTasks.filter((task) => !openIds.has(task.sessionId));
+  }, [daemonTasks, sessions]);
+
   const handleToggleGlobalFullscreen = useCallback(() => {
     if (activeFullscreenPaneId) {
       setFullscreenPaneId(null);
@@ -3208,6 +3241,14 @@ export function TerminalTabs({
           <Cpu size={13} strokeWidth={1.8} />
         </button>
       ),
+      backgroundTasks: (
+        <BackgroundTasksPanel
+          tasks={backgroundTasks}
+          onRefresh={refreshBackgroundTasks}
+          showText={terminalToolbarVisibility.showText}
+          popoverStyle={terminalPopoverStyle}
+        />
+      ),
     };
 
     const visibleButtons = terminalToolbarOrder
@@ -3216,6 +3257,9 @@ export function TerminalTabs({
         if (key === "fullscreen" && !onToggleFullscreen) return false;
         if (key === "systemResources") {
           return terminalToolbarVisibility.systemResources === true;
+        }
+        if (key === "backgroundTasks") {
+          return terminalToolbarVisibility.backgroundTasks === true;
         }
         return terminalToolbarVisibility[key as keyof typeof terminalToolbarVisibility] === true;
       })
@@ -3262,6 +3306,7 @@ export function TerminalTabs({
     );
   }, [
     activeToolbarDragId,
+    backgroundTasks,
     cpuResourceCardVisible,
     fullscreen,
     filePanelProject,
@@ -3281,6 +3326,7 @@ export function TerminalTabs({
     historyOpen,
     onToggleFullscreen,
     replayPanelActive,
+    refreshBackgroundTasks,
     sessionHistoryShortcutHint,
     sidePanelMerged,
     statsPanelActive,
@@ -3290,6 +3336,7 @@ export function TerminalTabs({
     terminalToolbarOrder,
     terminalToolbarVisibility,
     terminalActionSidebarStyle,
+    terminalPopoverStyle,
     toolbarSensors,
   ]);
 

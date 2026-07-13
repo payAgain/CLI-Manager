@@ -15,6 +15,7 @@ import { getClaudeProviderOverride, getCodexProviderOverride, getProviderSwitchA
 import { useProjectStore } from "./projectStore";
 import { appendSyncedHistoryContextArg } from "../lib/syncedHistoryContext";
 import { translateCurrent } from "../lib/i18n";
+import { findProjectByPath, findWorktreeByPath } from "../lib/terminalProject";
 import {
   addSessionToPaneTree,
   findPaneLeaf,
@@ -64,6 +65,17 @@ export type CliHookEventName =
   | "ToolStop";
 export type TabNotificationState = "none" | "running" | "attention" | "done" | "failed";
 export type ShellRuntimeEventName = "command_started" | "command_finished" | "prompt_shown";
+
+interface PtyAttachResult {
+  attached: boolean;
+  alive: boolean;
+  replayBase64: string;
+  cwd?: string | null;
+  shell?: string | null;
+  createdAtMs?: number;
+  taskStatus?: TabNotificationState | null;
+  taskUpdatedAtMs?: number | null;
+}
 
 type TabStatusSourceName = "hook" | "shell";
 
@@ -213,6 +225,10 @@ interface TerminalStore {
   setSplitRatio: (splitId: string, ratio: number) => void;
   getNextSessionIdForShortcut: (delta: 1 | -1) => string | null;
   restoreSessions: (projectMap: Map<string, Project>, projectHealth: Record<string, boolean>) => Promise<void>;
+  /** 从 daemon 恢复单个后台任务并聚焦；执行中和已完成会话都可回放。 */
+  attachDaemonSession: (sessionId: string) => Promise<boolean>;
+  /** 终止并移除单个 daemon 后台任务及终端恢复数据。 */
+  discardDaemonSession: (sessionId: string) => Promise<void>;
   /** 合并态（hook+shell）为 running 的真实 PTY 会话 id，供退出拦截判定任务是否在跑（Issue #123 Phase 1）。 */
   getRunningTaskSessionIds: () => string[];
   hideBackgroundForSession: (sessionId: string) => void;
@@ -227,6 +243,77 @@ interface TerminalStore {
 
 // 防止 StrictMode 双重调用
 let restoreInProgress = false;
+
+/// daemon attach 回放（base64 → UTF-8 文本）：写入 xterm 的 initialTerminalOutput。
+function decodeBase64Utf8(base64: string): string | undefined {
+  if (!base64) return undefined;
+  try {
+    const binary = atob(base64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+    return new TextDecoder("utf-8").decode(bytes);
+  } catch {
+    return undefined;
+  }
+}
+
+function basenameFromPath(path: string | null | undefined): string | null {
+  const normalized = path?.trim().replace(/\\/g, "/").replace(/\/+$/g, "") ?? "";
+  if (!normalized) return null;
+  return normalized.split("/").filter(Boolean).pop() ?? normalized;
+}
+
+function isGenericDaemonSessionTitle(title: string | null | undefined): boolean {
+  const normalized = title?.trim().toLowerCase();
+  if (!normalized) return true;
+  return normalized === "terminal" ||
+    normalized === translateCurrent("terminal.backgroundTasks.untitled").toLowerCase() ||
+    normalized === "未命名后台任务" ||
+    normalized === "untitled background task";
+}
+
+function normalizeDaemonTaskStatus(status: string | null | undefined): TabNotificationState | null {
+  if (status === "running" || status === "attention" || status === "done" || status === "failed") return status;
+  return null;
+}
+
+function resolveDaemonAttachTaskStatus(attach: PtyAttachResult): TabNotificationState {
+  return normalizeDaemonTaskStatus(attach.taskStatus) ?? (attach.alive ? "running" : "done");
+}
+
+function resolveDaemonAttachUpdatedAt(attach: PtyAttachResult): string {
+  const updatedAtMs = attach.taskUpdatedAtMs;
+  if (typeof updatedAtMs === "number" && Number.isFinite(updatedAtMs) && updatedAtMs > 0) {
+    return new Date(updatedAtMs).toISOString();
+  }
+  return new Date().toISOString();
+}
+
+function resolveAttachedDaemonSession(
+  persisted: TerminalSession | undefined,
+  attach: PtyAttachResult
+): Pick<TerminalSession, "projectId" | "worktreeId" | "title" | "cwd" | "shell"> {
+  const projectState = useProjectStore.getState();
+  const cwd = persisted?.cwd ?? attach.cwd ?? undefined;
+  const worktree = persisted?.worktreeId
+    ? projectState.worktrees.find((item) => item.id === persisted.worktreeId) ?? null
+    : findWorktreeByPath(projectState.worktrees, cwd);
+  const project = persisted?.projectId
+    ? projectState.projects.find((item) => item.id === persisted.projectId) ?? null
+    : worktree
+      ? projectState.projects.find((item) => item.id === worktree.project_id) ?? null
+      : findProjectByPath(projectState.projects, cwd);
+  const fallbackTitle = worktree?.name || project?.name || basenameFromPath(cwd) || translateCurrent("terminal.backgroundTasks.untitled");
+  return {
+    projectId: persisted?.projectId ?? project?.id,
+    worktreeId: persisted?.worktreeId ?? worktree?.id,
+    title: isGenericDaemonSessionTitle(persisted?.title) ? fallbackTitle : persisted!.title,
+    cwd,
+    shell: persisted?.shell ?? attach.shell,
+  };
+}
 
 // setActive 防抖：高频切换标签时合并持久化写入
 let saveActiveIdTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1751,9 +1838,28 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     const restoredSessions: TerminalSession[] = [];
     const restoredStatuses: Record<string, SessionStatus> = {};
     const restoredListeners: Record<string, UnlistenFn> = {};
+    let restoredTabState: Pick<TerminalStore, "tabStatuses" | "tabNotifications" | "tabStatusDetails"> = {
+      tabStatuses: {},
+      tabNotifications: {},
+      tabStatusDetails: {},
+    };
     const skippedSessions: string[] = [];
 
     const newIdMap: Record<string, string> = {}; // oldId -> newId
+
+    // Phase 2（Issue #123）：daemon 仍存活的会话优先 attach 续用——真后台续跑归来，
+    // 不重建 PTY、不 resume。daemon 不可用/查询失败 → 空集合，全部走重建兜底。
+    let daemonAliveIds = new Set<string>();
+    try {
+      const daemonSessions = await invoke<Array<{ sessionId: string; alive: boolean }>>(
+        "pty_daemon_sessions"
+      );
+      daemonAliveIds = new Set(
+        daemonSessions.filter((s) => s.alive).map((s) => s.sessionId)
+      );
+    } catch (err) {
+      logInfo("pty daemon sessions unavailable, restoring via recreate", { err });
+    }
 
     const os = await getOsPlatform();
     for (let i = 0; i < persistedSessions.length; i++) {
@@ -1761,6 +1867,61 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
       if (isCliManagerSyncArtifactText(ps.title ?? "") || isCliManagerSyncArtifactText(ps.startupCmd ?? "")) {
         skippedSessions.push(ps.title ?? `会话 ${i + 1}`);
         continue;
+      }
+
+      // daemon attach 分支：会话进程还活着，画面回放 + 事件订阅即恢复完成。
+      if (daemonAliveIds.has(ps.id)) {
+        try {
+          const attach = await invoke<PtyAttachResult>(
+            "pty_attach",
+            { sessionId: ps.id }
+          );
+          if (attach.attached && attach.alive) {
+            const taskStatus = resolveDaemonAttachTaskStatus(attach);
+            const taskUpdatedAt = resolveDaemonAttachUpdatedAt(attach);
+            const attachedMeta = resolveAttachedDaemonSession(ps, attach);
+            const attachedSession: TerminalSession = {
+              id: ps.id,
+              projectId: attachedMeta.projectId,
+              worktreeId: attachedMeta.worktreeId,
+              title: attachedMeta.title,
+              cwd: attachedMeta.cwd,
+              shell: attachedMeta.shell,
+              envVars: ps.envVars,
+              // PTY 进程未断：不重跑 startupCmd、不 resume。
+              startupCmd: undefined,
+              cliSessionId: ps.cliSessionId,
+              initialTerminalOutput: decodeBase64Utf8(attach.replayBase64),
+              deferStartupUntilInitialOutput: false,
+            };
+            const unlisten = await listen<PtyStatusPayload>(`pty-status-${ps.id}`, (event) => {
+              const status = event.payload.status as SessionStatus;
+              logTerminalExitStatus(attachedSession, event.payload);
+              useTerminalStore.setState((state) => {
+                const sessionStatuses = { ...state.sessionStatuses, [ps.id]: status };
+                if (status === "running") return { sessionStatuses };
+                return {
+                  sessionStatuses,
+                  ...buildTabStatusUpdate(
+                    state,
+                    ps.id,
+                    "hook",
+                    status === "error" ? "failed" : "done",
+                    new Date().toISOString()
+                  ),
+                };
+              });
+            });
+            newIdMap[ps.id] = ps.id;
+            restoredSessions.push(attachedSession);
+            restoredStatuses[ps.id] = "running";
+            restoredListeners[ps.id] = unlisten;
+            restoredTabState = buildTabStatusUpdate(restoredTabState, ps.id, "hook", taskStatus, taskUpdatedAt);
+            continue;
+          }
+        } catch (err) {
+          logError("daemon attach failed, falling back to recreate", { sessionId: ps.id, err });
+        }
       }
 
       // 检查项目是否存在
@@ -1904,13 +2065,14 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
         : workspans[workspans.length - 1]?.id ?? null;
     const mirror = buildWorkspanMirror(workspans, activeWorkspanId);
 
-    set({
-      sessions: restoredSessions,
-      ...mirror,
-      sessionStatuses: restoredStatuses,
-      statusListeners: restoredListeners,
-      splits: {},
-    });
+	    set({
+	      sessions: restoredSessions,
+	      ...mirror,
+	      sessionStatuses: restoredStatuses,
+	      statusListeners: restoredListeners,
+	      ...restoredTabState,
+	      splits: {},
+	    });
 
     // 更新 sessionStore 的持久化数据（使用新 ID）
     const updatedPersistedSessions = restoredSessions.map((s) => ({
@@ -1934,6 +2096,103 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     } finally {
       restoreInProgress = false;
     }
+  },
+
+  attachDaemonSession: async (sessionId) => {
+    const current = get();
+    if (current.sessions.some((session) => session.id === sessionId)) {
+      current.setActive(sessionId);
+      return true;
+    }
+
+    const persisted = useSessionStore.getState().sessions.find((session) => session.id === sessionId);
+    const attach = await invoke<PtyAttachResult>(
+      "pty_attach",
+      { sessionId }
+    );
+    if (!attach.attached) return false;
+
+    const taskStatus = resolveDaemonAttachTaskStatus(attach);
+    const taskUpdatedAt = resolveDaemonAttachUpdatedAt(attach);
+    const attachedMeta = resolveAttachedDaemonSession(persisted, attach);
+    const session: TerminalSession = {
+      id: sessionId,
+      projectId: attachedMeta.projectId,
+      worktreeId: attachedMeta.worktreeId,
+      title: attachedMeta.title,
+      cwd: attachedMeta.cwd,
+      shell: attachedMeta.shell,
+      envVars: persisted?.envVars,
+      startupCmd: undefined,
+      cliSessionId: persisted?.cliSessionId,
+      initialTerminalOutput: decodeBase64Utf8(attach.replayBase64),
+      deferStartupUntilInitialOutput: false,
+    };
+    const unlisten = await listen<PtyStatusPayload>(`pty-status-${sessionId}`, (event) => {
+      const status = event.payload.status as SessionStatus;
+      useTerminalStore.setState((state) => {
+        const sessionStatuses = { ...state.sessionStatuses, [sessionId]: status };
+        if (status === "running") return { sessionStatuses };
+        return {
+          sessionStatuses,
+          ...buildTabStatusUpdate(
+            state,
+            sessionId,
+            "hook",
+            status === "error" ? "failed" : "done",
+            new Date().toISOString()
+          ),
+        };
+      });
+    });
+
+    const nextSessions = [...current.sessions, session];
+    const nextWorkspan = createTerminalWorkspan(createWorkspanId(), createPaneId(), sessionId);
+    const workspans = [...current.workspans, nextWorkspan];
+    const mirror = buildWorkspanMirror(workspans, nextWorkspan.id);
+    const initialTabState = buildTabStatusUpdate(
+      current,
+      sessionId,
+      "hook",
+      taskStatus,
+      taskUpdatedAt
+    );
+    set({
+      sessions: nextSessions,
+      ...mirror,
+      sessionStatuses: {
+        ...current.sessionStatuses,
+        [sessionId]: attach.alive ? "running" : "exited",
+      },
+      statusListeners: { ...current.statusListeners, [sessionId]: unlisten },
+      ...initialTabState,
+    });
+    await useSessionStore.getState().saveSessions(nextSessions);
+    await useSessionStore.getState().saveActiveSessionId(sessionId);
+    await useSessionStore.getState().saveWorkspans(workspans, nextWorkspan.id, nextSessions);
+    return true;
+  },
+
+  discardDaemonSession: async (sessionId) => {
+    if (get().sessions.some((session) => session.id === sessionId)) {
+      await get().closeSession(sessionId);
+      return;
+    }
+    await invoke("pty_close", { sessionId }).catch((err) => {
+      logWarn("daemon session was already unavailable while discarding", { sessionId, err });
+    });
+    const persisted = useSessionStore.getState();
+    const sessions = persisted.sessions.filter((session) => session.id !== sessionId);
+    const workspans = removeSessionFromTerminalWorkspans(persisted.workspans, sessionId);
+    const activeWorkspanId = persisted.activeWorkspanId
+      && workspans.some((workspan) => workspan.id === persisted.activeWorkspanId)
+      ? persisted.activeWorkspanId
+      : workspans[0]?.id ?? null;
+    await persisted.saveSessions(sessions);
+    await persisted.saveActiveSessionId(
+      persisted.activeSessionId === sessionId ? null : persisted.activeSessionId
+    );
+    await persisted.saveWorkspans(workspans, activeWorkspanId, sessions);
   },
 
   getRunningTaskSessionIds: () => {

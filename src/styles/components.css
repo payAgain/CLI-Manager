@@ -39,6 +39,7 @@
   -webkit-backdrop-filter: blur(20px);
 }
 
+#background-tasks-panel,
 #command-history-panel,
 #command-template-panel {
   --terminal-popover-fg: var(--term-panel-fg, #ececec);
@@ -73,6 +74,8 @@
 #command-template-panel .text-on-surface,
 #command-template-panel .text-text-primary,
 #command-template-panel .text-primary,
+#background-tasks-panel .text-on-surface,
+#background-tasks-panel .text-text-primary,
 #command-history-panel .text-on-surface,
 #command-history-panel .text-text-primary,
 #command-history-panel code {
@@ -85,6 +88,8 @@
 
 #command-template-panel .text-on-surface-variant,
 #command-template-panel .text-text-muted,
+#background-tasks-panel .text-on-surface-variant,
+#background-tasks-panel .text-text-muted,
 #command-history-panel .text-on-surface-variant,
 #command-history-panel .text-text-muted {
   color: var(--terminal-popover-muted);
@@ -130,11 +135,100 @@
   box-shadow: none;
 }
 
+#background-tasks-panel .ui-focus-ring:focus-visible,
 #command-template-panel .ui-focus-ring:focus-visible,
 #command-history-panel .ui-focus-ring:focus-visible {
   outline: 1px solid color-mix(in srgb, var(--border) 84%, transparent) !important;
   outline-offset: 1px !important;
   box-shadow: none;
+}
+
+#background-tasks-panel {
+  --background-tasks-running: #dd306e;
+  --background-tasks-attention: var(--term-panel-yellow, #e5c453);
+  --background-tasks-done: var(--term-panel-green, #3dd68c);
+  --background-tasks-failed: var(--term-panel-red, #f25e5e);
+  --background-tasks-scroll-thumb: color-mix(in srgb, var(--term-panel-fg, #ececec) 24%, transparent);
+}
+
+.background-tasks-panel__list {
+  max-height: calc((84px + 8px) * 3 + 8px);
+  overflow-y: auto;
+  padding: 8px;
+  scrollbar-width: none;
+  scrollbar-color: var(--background-tasks-scroll-thumb) transparent;
+}
+
+.background-tasks-panel__list:hover,
+.background-tasks-panel__list:focus-within {
+  scrollbar-width: thin;
+}
+
+.background-tasks-panel__list::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+.background-tasks-panel__list:hover::-webkit-scrollbar,
+.background-tasks-panel__list:focus-within::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.background-tasks-panel__list::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.background-tasks-panel__list::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background-color: var(--background-tasks-scroll-thumb);
+}
+
+.background-tasks-panel__empty,
+.background-tasks-panel__item {
+  border: 1px solid color-mix(in srgb, var(--term-panel-border, #2e2e2e) 82%, transparent);
+  background-color: color-mix(in srgb, var(--term-panel-card, #121212) 88%, var(--term-panel-bg, #0a0a0a) 12%);
+  color: var(--terminal-popover-fg);
+}
+
+.background-tasks-panel__empty {
+  border-style: dashed;
+}
+
+.background-tasks-panel__item {
+  min-height: 84px;
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--term-panel-fg, #ececec) 5%, transparent);
+}
+
+.background-tasks-panel__status[data-status="running"] {
+  color: var(--background-tasks-running);
+}
+
+.background-tasks-panel__status[data-status="attention"] {
+  color: var(--background-tasks-attention);
+}
+
+.background-tasks-panel__status[data-status="done"] {
+  color: var(--background-tasks-done);
+}
+
+.background-tasks-panel__status[data-status="failed"] {
+  color: var(--background-tasks-failed);
+}
+
+.background-tasks-panel__action {
+  border-color: color-mix(in srgb, var(--term-panel-border, #2e2e2e) 78%, transparent);
+  background-color: color-mix(in srgb, var(--term-panel-card-inner, #181818) 76%, transparent);
+  color: var(--terminal-popover-fg);
+}
+
+.background-tasks-panel__action:hover:not(:disabled) {
+  background-color: color-mix(in srgb, var(--term-panel-card-inner, #181818) 72%, var(--primary) 18%);
+  color: var(--terminal-popover-fg);
+}
+
+.background-tasks-panel__action--danger {
+  color: var(--background-tasks-running);
 }
 
 #command-history-panel .ui-search-focus-shell input {
@@ -4212,6 +4306,21 @@
 
 .ui-action-system-resources {
   --terminal-action-color: var(--term-panel-blue, #5b8def);
+}
+
+.ui-action-background-tasks {
+  --terminal-action-color: #dd306e;
+}
+
+.ui-action-background-tasks[data-has-tasks="true"] svg {
+  animation: tab-runtime-breathe 1.7s var(--ease-standard) infinite;
+  filter: drop-shadow(0 0 5px color-mix(in srgb, #dd306e 56%, transparent));
+}
+
+.ui-action-background-tasks:disabled,
+.ui-terminal-action-sidebar .ui-action-background-tasks:disabled {
+  --terminal-action-color: color-mix(in srgb, #dd306e 42%, var(--term-panel-dim, #9ca0a6) 58%);
+  opacity: 0.42;
 }
 
 .ui-action-font-size {
