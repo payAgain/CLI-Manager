@@ -1,22 +1,9 @@
 # Changelog
 
-## [TEMP] - 2026-07-14
+## [V1.2.8] - 2026-07-14
 
 ### 新增
 - **第三方 Hook 通知（Issue #134）**：Hook 设置页新增“三方 Hook 通知”，支持配置多组 DingTalk、Feishu、WeCom、Bark、PushPlus、WxPusher、ServerChan、Telegram、ntfy、Gotify 和 Custom HTTP 通知目标；CLI-Manager 收到 Claude/Codex Hook 后由实际接收端异步批量 fan-out，支持按事件筛选、测试发送、平台业务码判断和少量 emoji 摘要文案。远程通知只发送 CLI 来源、项目名、事件、时间和通知 ID，不发送 Prompt、终端输出、绝对路径、session/tab id 或 transcript；第三方请求失败不会阻塞 Hook 204、本地 toast、系统通知、终端状态更新或 daemon 后台任务。
-
-### 修复
-- **终端文件路径打开方式调整**：点击终端输出中的文件路径时统一使用 Windows 资源管理器打开所在文件夹并选中文件，不再切换到内置文件浏览器或调用系统默认应用打开文件；自动剥离 `:行号`、`:行号:列号` 及其后的源码片段，避免把定位信息误当成文件名。
-- **历史用量分析全屏布局修复**：移除用量概览内容区的最大宽度限制，使统计卡片和图表铺满应用窗口；隐藏内容区横向与纵向滚动条，同时保留滚轮和键盘滚动；Token 构成明细移到饼图下方，并统一同排统计卡片高度，避免宽屏留白、内容溢出和卡片底边错位。
-- **终端 Ctrl+C 中断修复**：Windows PTY daemon 启动时不再创建 detached/new process group，仅隐藏控制台窗口，恢复 ConPTY 对 Ctrl+C 控制事件的正常投递；有文本选区时仍执行复制。
-- **终端 OSC 路径模块缺失修复**：补齐终端工作目录解析模块，恢复 Vite 开发启动，并按运行平台处理 OSC 7 的 Windows 盘符、UNC 与 macOS/Linux 本地路径，避免实时统计使用错误项目路径。
-- **终端切换渐进重绘修复**：保留隐藏终端恢复时的积压输出续写和整视口刷新，在 xterm 完成整屏渲染前临时隐藏绘制层并通过超时兜底恢复显示，避免切换终端时出现从左上到右下的可见重绘，同时不重新引入偶发白屏。
-- **WSL Codex 历史会话兼容修复**：历史查看与恢复回读按 rollout 的 `cwd` 校准真实项目，避免把日期年份误当项目而报 `session_file_not_indexed`；历史缓存会按当前配置根过滤旧的 Windows Codex 条目，避免切到 WSL 后误报 `session_file_outside_history_scope`；转换到 WSL Codex 时写入 Linux rollout 路径并停止从 Windows 跨 UNC 写入 Codex WAL 状态库，避免 `codex_state_register_failed: database is locked`。
-
-### 设置
-- **Hook 桥接独立开关**：Claude Code 与 Codex CLI Hook 桥接可分别关闭；左下角 Hook 状态灯、自动修复和快捷重装只检查已启用的桥接，避免仅安装一种 CLI 时状态灯持续显示黄色。关闭后自动折叠对应桥接的模块、配置路径和安装操作，但不会删除现有 Hook 配置。
-
-## [V1.2.8] - 2026-07-14
 
 ### 历史与统计
 - **历史用量分析全屏看板**：历史用量分析改为应用窗口内全屏工作区，Token / 费用趋势独占中间整行，底部按项目排行、模型排行、24 小时活跃和 Token 构成四列展示，并保留原有筛选、下钻和其他统计能力。
@@ -25,12 +12,19 @@
 
 ### 设置
 - **Claude Code 状态栏中文标签与上下文组件**：实际状态栏为数据组件增加中文短标签，Git 分支显示 `⎇ <branch>`；上下文进度条升级为 16 格，并在同一组件内显示已用量、上下文上限和百分比；Powerline 首组件左侧保留三个空格，其他间距保持紧凑。
+- **Hook 桥接独立开关**：Claude Code 与 Codex CLI Hook 桥接可分别关闭；左下角 Hook 状态灯、自动修复和快捷重装只检查已启用的桥接，避免仅安装一种 CLI 时状态灯持续显示黄色。关闭后自动折叠对应桥接的模块、配置路径和安装操作，但不会删除现有 Hook 配置。
 
 ### 终端
 - **Workspan 自定义名称**：顶层 Workspan 右键菜单新增“重命名工作区”，通过应用内弹窗设置并持久化自定义名称；提交空白名称后恢复单会话终端标题或多会话 `Workspan · N` 默认标题。
 
 ### 修复
-- **Tauri 开发启动修复**：移除仓库根目录误放的 Rust 与 Tauri 配置副本，恢复 CLI 对 `src-tauri` 项目的正确识别，修复 `npm run tauri dev` 在 `cargo metadata` 阶段启动失败。
+- **终端文件路径打开方式调整**：点击终端输出中的文件路径时统一使用 Windows 资源管理器打开所在文件夹并选中文件，不再切换到内置文件浏览器或调用系统默认应用打开文件；自动剥离 `:行号`、`:行号:列号` 及其后的源码片段，避免把定位信息误当成文件名。
+- **历史用量分析全屏布局修复**：移除用量概览内容区的最大宽度限制，使统计卡片和图表铺满应用窗口；隐藏内容区横向与纵向滚动条，同时保留滚轮和键盘滚动；Token 构成明细移到饼图下方，并统一同排统计卡片高度，避免宽屏留白、内容溢出和卡片底边错位。
+- **终端 Ctrl+C 中断修复**：Windows PTY daemon 启动时不再创建 detached/new process group，仅隐藏控制台窗口，恢复 ConPTY 对 Ctrl+C 控制事件的正常投递；有文本选区时仍执行复制。
+- **终端 OSC 路径模块缺失修复**：补齐终端工作目录解析模块，恢复 Vite 开发启动，并按运行平台处理 OSC 7 的 Windows 盘符、UNC 与 macOS/Linux 本地路径，避免实时统计使用错误项目路径。
+- **终端切换渐进重绘修复**：保留隐藏终端恢复时的积压输出续写和整视口刷新，在 xterm 完成整屏渲染前临时隐藏绘制层并通过超时兜底恢复显示，避免切换终端时出现从左上到右下的可见重绘，同时不重新引入偶发白屏。
+- **WSL Codex 历史会话兼容修复**：历史查看与恢复回读按 rollout 的 `cwd` 校准真实项目，避免把日期年份误当项目而报 `session_file_not_indexed`；历史缓存会按当前配置根过滤旧的 Windows Codex 条目，避免切到 WSL 后误报 `session_file_outside_history_scope`；转换到 WSL Codex 时写入 Linux rollout 路径并停止从 Windows 跨 UNC 写入 Codex WAL 状态库，避免 `codex_state_register_failed: database is locked`。
+- **Tauri 开发启动修复**：移除仓库根目录误放的 Rust 与 Tauri 配置副本，恢复 CLI 对 `src-tauri` 项目的正确识别，并统一解析 dev/local 自定义配置路径，修复 `npm run tauri dev` 在 `cargo metadata` 阶段把仓库根目录当作缺少 `src/lib.rs` 的 Rust crate 而启动失败。
 - **Codex 供应商通用配置解析修复**：切换 Codex 供应商时按 TOML 合并 `common_config_codex` 与供应商 `config`，不再把 Codex 通用配置误当 JSON 解析，修复 AnyRouter 等供应商提示“配置解析失败、无法应用”。
 - **Codex 供应商重复配置修复**：合并通用配置与供应商配置时按 TOML 键语义识别单双引号等价表头，避免 Hook 状态表被重复写入 profile 并触发 `duplicate key`。
 - **Mantine 全局上下文修复**：在应用根节点挂载 Mantine 主题 Provider 并全局加载组件样式，修复终端工作区渲染应用内输入弹窗时因缺少 `MantineProvider` 导致的“界面渲染失败”。
@@ -40,7 +34,6 @@
 - **历史统计入口无响应修复**：修正全屏统计面板被共享样式覆盖为相对定位的问题，点击侧边栏历史用量分析后可正常显示看板；同样适用于 ccusage 全屏看板。
 - **鼠标侧键切换 Workspan 修复**：Workspan 默认开启且当前工作区只有一个会话时，鼠标前进/后退侧键和 Tab 切换快捷键会切换到相邻 Workspan，不再因仅在当前 Pane 树内循环而停留在原标签。
 - **终端背景图状态栏可读性修复**：开启背景图时，在终端底部增加随终端主题明暗和现有遮罩强度自适应的渐变可读性遮罩，并提高 ANSI 色块内前景文字的最小对比度；背景图模式下会同步增强终端默认前景色和常用灰色 ANSI 文本颜色，避免 Claude Code 状态栏文字落在复杂图像或深色块上时看不清。未启用背景图的终端保持原样。
-- **Tauri 开发启动修复**：保留根目录 Rust/Tauri 文件，启动脚本改为从 `src-tauri` 工程目录运行 Tauri CLI，并统一解析 dev/local 自定义配置路径，避免 `cargo metadata` 把仓库根目录当作缺少 `src/lib.rs` 的 Rust crate 解析。
 - **WebDAV Worktree 同步修复**：WebDAV 与本地同步 payload 补齐 active Worktree 记录及项目 Worktree 配置字段，旧同步包缺失 `worktrees` 时按空列表兼容；解决 Worktree 子目录记录上传/下载后丢失的问题，已丢弃或 missing 的 Worktree 不进入同步。
 - **WebDAV 冲突处理修复**：点击“保留本地”成功上传后会清除冲突状态；点击“使用远程”会应用远程数据并回写当前设备快照，避免重启后同一冲突再次出现。
 - **WebDAV Worktree 缺失目录拦截**：从远端恢复 Worktree 后会立即校验本机路径，不存在的目录标记为 missing，并阻止打开终端、文件面板、资源管理器或依赖安装终端。
