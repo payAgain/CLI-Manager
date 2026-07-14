@@ -287,8 +287,9 @@ Frontend project override shape:
   - Codex-style provider tables such as `model_providers.<id>.base_url` and
     `model_provider = "<id>"`;
   - lowercase and hyphenated variants by normalizing key names before matching.
-- **Common config merge**: read `settings.common_config_codex` and recursively merge it
-  with the selected provider JSON before parsing; provider fields override common fields.
+- **Common config merge**: read TOML text from `settings.common_config_codex` and merge it
+  into the selected provider JSON's `config` TOML string before parsing. Matching tables
+  are combined without duplicate headers, and provider assignments override common values.
 - **Profile content**: when merged `settings_config.config` contains a valid selected
   `model_provider` table, preserve the complete non-secret TOML (including fields such as
   `wire_api`, verbosity, feature flags, and future Codex settings). Reuse its `env_key`; if

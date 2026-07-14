@@ -3,7 +3,7 @@ use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::{Connection, Row, SqliteConnection};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -161,10 +161,99 @@ fn deep_merge_json(base: &mut Value, overlay: Value) {
     }
 }
 
+fn split_toml_sections(raw: &str) -> Vec<(Option<String>, Vec<String>)> {
+    let mut sections = vec![(None, Vec::new())];
+    for line in raw.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') && trimmed.ends_with(']') {
+            sections.push((Some(trimmed.to_string()), Vec::new()));
+        } else if let Some((_, lines)) = sections.last_mut() {
+            lines.push(line.to_string());
+        }
+    }
+    sections
+}
+
+fn toml_assignment_keys(lines: &[String]) -> HashSet<String> {
+    lines
+        .iter()
+        .filter_map(|line| toml_assignment(line))
+        .map(|(key, _)| normalize_config_key(&key))
+        .collect()
+}
+
+fn merge_codex_common_config_toml(common: &str, provider: &str) -> String {
+    let mut provider_sections = split_toml_sections(provider);
+    for (common_header, common_lines) in split_toml_sections(common) {
+        let matching_index = common_header
+            .as_deref()
+            .filter(|header| !header.starts_with("[["))
+            .and_then(|header| {
+                provider_sections
+                    .iter()
+                    .position(|(provider_header, _)| provider_header.as_deref() == Some(header))
+            })
+            .or_else(|| common_header.is_none().then_some(0));
+
+        if let Some(index) = matching_index {
+            let provider_keys = toml_assignment_keys(&provider_sections[index].1);
+            let common_lines = common_lines.into_iter().filter(|line| {
+                toml_assignment(line)
+                    .map(|(key, _)| !provider_keys.contains(&normalize_config_key(&key)))
+                    .unwrap_or(true)
+            });
+            provider_sections[index].1.splice(0..0, common_lines);
+        } else {
+            provider_sections.push((common_header, common_lines));
+        }
+    }
+
+    let mut merged = Vec::new();
+    for (header, lines) in provider_sections {
+        if let Some(header) = header {
+            if !merged.is_empty() && merged.last().is_some_and(|line: &String| !line.is_empty()) {
+                merged.push(String::new());
+            }
+            merged.push(header);
+        }
+        merged.extend(lines);
+    }
+    let mut text = merged.join("\n");
+    if !text.ends_with('\n') {
+        text.push('\n');
+    }
+    text
+}
+
 fn merge_provider_settings_config(
+    app_type: &str,
     common_config: Option<&str>,
     provider_config: &str,
 ) -> Result<Value, String> {
+    let mut provider: Value =
+        serde_json::from_str(provider_config).map_err(|_| "provider_config_invalid".to_string())?;
+    if !provider.is_object() {
+        return Err("provider_config_invalid".to_string());
+    }
+
+    if app_type == "codex" {
+        if let Some(common) = common_config.filter(|raw| !raw.trim().is_empty()) {
+            let provider_toml = provider
+                .get("config")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            provider
+                .as_object_mut()
+                .expect("provider object checked")
+                .insert(
+                    "config".to_string(),
+                    Value::String(merge_codex_common_config_toml(common, &provider_toml)),
+                );
+        }
+        return Ok(provider);
+    }
+
     let mut merged = match common_config {
         Some(raw) => {
             serde_json::from_str(raw).map_err(|_| "provider_config_invalid".to_string())?
@@ -175,11 +264,6 @@ fn merge_provider_settings_config(
         return Err("provider_config_invalid".to_string());
     }
 
-    let provider: Value =
-        serde_json::from_str(provider_config).map_err(|_| "provider_config_invalid".to_string())?;
-    if !provider.is_object() {
-        return Err("provider_config_invalid".to_string());
-    }
     deep_merge_json(&mut merged, provider);
     Ok(merged)
 }
@@ -884,7 +968,8 @@ async fn load_merged_provider_settings(
     let settings_config: String = row
         .try_get("settings_config")
         .map_err(|err| format!("db_query_failed: {err}"))?;
-    let settings = merge_provider_settings_config(common_config.as_deref(), &settings_config)?;
+    let settings =
+        merge_provider_settings_config(app_type, common_config.as_deref(), &settings_config)?;
     Ok((name, settings))
 }
 
@@ -2006,6 +2091,7 @@ mod tests {
     #[test]
     fn merge_provider_settings_preserves_common_config_and_provider_overrides() {
         let merged = merge_provider_settings_config(
+            "claude",
             Some(
                 r#"{
                     "permissions": {"defaultMode": "acceptEdits"},
@@ -2044,6 +2130,48 @@ mod tests {
         assert_eq!(
             merged.pointer("/model").and_then(Value::as_str),
             Some("claude-provider-model")
+        );
+    }
+
+    #[test]
+    fn merge_provider_settings_merges_codex_common_toml_into_config() {
+        let merged = merge_provider_settings_config(
+            "codex",
+            Some(
+                r#"model_reasoning_effort = "xhigh"
+
+[features]
+hooks = true
+
+[tui]
+status_line = ["model-name"]
+alternate_screen = "always""#,
+            ),
+            r#"{
+                "auth": {"OPENAI_API_KEY": "sk-provider"},
+                "config": "model_provider = \"custom\"\n\n[model_providers.custom]\nbase_url = \"https://provider.example.com/v1\"\n\n[features]\nweb_search = true\n\n[tui]\nalternate_screen = \"never\"\n"
+            }"#,
+        )
+        .expect("codex TOML config should merge");
+
+        let config = merged
+            .get("config")
+            .and_then(Value::as_str)
+            .expect("merged config should remain TOML text");
+        assert!(config.contains("model_reasoning_effort = \"xhigh\""));
+        assert!(config.contains("model_provider = \"custom\""));
+        assert!(config.contains("hooks = true"));
+        assert!(config.contains("web_search = true"));
+        assert!(config.contains("status_line = [\"model-name\"]"));
+        assert!(config.contains("alternate_screen = \"never\""));
+        assert!(!config.contains("alternate_screen = \"always\""));
+        assert_eq!(config.matches("[features]").count(), 1);
+        assert_eq!(config.matches("[tui]").count(), 1);
+        assert_eq!(
+            merged
+                .pointer("/auth/OPENAI_API_KEY")
+                .and_then(Value::as_str),
+            Some("sk-provider")
         );
     }
 
