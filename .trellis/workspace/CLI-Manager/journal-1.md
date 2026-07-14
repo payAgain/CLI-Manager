@@ -396,3 +396,36 @@ Claude 启动阶段提前订阅子任务 transcript，Codex rollout 增加有界
 ### Next Steps
 
 - None - task complete
+
+
+## Session 12: 统一应用内文本输入弹窗
+
+**Date**: 2026-07-14
+**Task**: 统一应用内文本输入弹窗
+**Branch**: `master`
+
+### Summary
+
+移除状态栏配置流程中的 window.prompt，新增主题化应用内输入弹窗，并将禁用 window.prompt 写入前端规范。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `4132e23` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

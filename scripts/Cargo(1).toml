@@ -1,0 +1,79 @@
+[package]
+name = "cli-manager"
+version = "1.2.7"
+description = "A lightweight desktop app for managing CLI tools across multiple projects"
+authors = ["tianhao.zhao", "zhang.yuan"]
+license = "AGPL-3.0-or-later"
+edition = "2021"
+# 新增 cli-manager-daemon 第二个 bin 后，`cargo run`（tauri dev）需要显式默认目标
+default-run = "cli-manager"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+# The `_lib` suffix may seem redundant but it is necessary
+# to make the lib name unique and wouldn't conflict with the bin name.
+# This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
+name = "cli_manager_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon", "protocol-asset", "devtools"] }
+tauri-plugin-log = "2"
+tauri-plugin-opener = "2"
+tauri-plugin-sql = { version = "2", features = ["sqlite"] }
+tauri-plugin-store = "2"
+tauri-plugin-notification = "2"
+notify-rust = "4.18"
+log = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+portable-pty = "0.8"
+uuid = { version = "1", features = ["v4"] }
+tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "macros", "sync", "time", "io-util"] }
+tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "http2"] }
+base64 = "0.22"
+sha2 = "0.10"
+chrono = { version = "0.4", features = ["serde"] }
+zip = { version = "0.6", default-features = false, features = ["deflate"] }
+memchr = "2"
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
+tauri-plugin-single-instance = { version = "2.4.2", features = ["semver"] }
+# 只读解析 cc-switch.db；复用 tauri-plugin-sql 依赖树中既有的 sqlx/libsqlite3-sys，无新增原生依赖
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite"] }
+# 文件系统监听 + 去抖：fs-watcher 替代 Git 变更面板的定时轮询
+notify = "6"
+notify-debouncer-mini = "0.4"
+fontdb = "0.23"
+tauri-plugin-clipboard-manager = "2"
+sysinfo = "0.39.5"
+local-ip-address = "0.6.13"
+
+# macOS universal 交叉编译时不能复用宿主架构的 OpenSSL，因此仅在 macOS 使用 vendored 构建。
+[target.'cfg(target_os = "macos")'.dependencies]
+git2 = { version = "0.19", features = ["vendored-libgit2", "vendored-openssl"] }
+
+# 其他平台保持系统原生依赖解析，避免增加 Windows 构建工具要求和编译耗时。
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+git2 = "0.19"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_Storage_FileSystem", "Win32_System_Performance", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging", "Win32_System_JobObjects", "Win32_System_Threading"] }
+# WebDAV 密码存 Windows 凭据管理器（keyring v4 生态，仅拉 Windows 后端）
+keyring-core = "1"
+windows-native-keyring-store = "1"
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+strip = "symbols"
+panic = "abort"
