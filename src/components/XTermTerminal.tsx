@@ -371,7 +371,18 @@ const isLikelyMacPlatform = (os: OsPlatform) => (
   os === "macos" || (os === "unknown" && navigator.platform.toLowerCase().includes("mac"))
 );
 
-const withVisibleSelectionTheme = (theme: ITheme): ITheme => {
+// When search is active, SearchAddon calls terminal.select() on each match to
+// position it. A visible selection color would then cover the yellow match
+// decoration, so the current match looks "selected blue" until focus leaves.
+// Make the selection transparent while searching so the decoration shows.
+const withVisibleSelectionTheme = (theme: ITheme, searchActive = false): ITheme => {
+  if (searchActive) {
+    return {
+      ...theme,
+      selectionBackground: "rgba(0, 0, 0, 0)",
+      selectionInactiveBackground: "rgba(0, 0, 0, 0)",
+    };
+  }
   const isLight = isLightTerminalTheme(theme);
   return {
     ...theme,
@@ -1399,7 +1410,7 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
     const baseTheme = getTerminalTheme(terminalThemeName, resolvedTheme, lightThemePalette, darkThemePalette);
     const minimumContrastRatio = getTerminalMinimumContrastRatio(baseTheme, isTransparent);
     const nextTheme = isTransparent ? applyTransparency(baseTheme, background.overlayDarken) : baseTheme;
-    terminal.options.theme = withVisibleSelectionTheme(nextTheme);
+    terminal.options.theme = withVisibleSelectionTheme(nextTheme, searchOpen);
     if (terminal.options.minimumContrastRatio !== minimumContrastRatio) {
       terminal.options.minimumContrastRatio = minimumContrastRatio;
     }
@@ -1422,7 +1433,7 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
     }
     normalizeTuiComposerBackground(terminal);
     scheduleTuiComposerBackgroundNormalization(terminal);
-  }, [fontSize, effectiveFontFamily, terminalScrollbackRows, resolvedTheme, terminalThemeName, lightThemePalette, darkThemePalette, isTransparent, background.overlayDarken, lowMemoryMode, disableHardwareAcceleration, linuxGraphicsDisableWebgl]);
+  }, [fontSize, effectiveFontFamily, terminalScrollbackRows, resolvedTheme, terminalThemeName, lightThemePalette, darkThemePalette, isTransparent, background.overlayDarken, lowMemoryMode, disableHardwareAcceleration, linuxGraphicsDisableWebgl, searchOpen]);
 
   // Visibility drives live rendering. A pane tab is "visible" when it is the
   // shown tab in its own pane — which, in a split, includes panes that are not
@@ -1568,7 +1579,7 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
       // xterm cannot toggle transparency after construction, so keep it enabled
       // even though WebGL is disabled while a background image is active.
       allowTransparency: true,
-      theme: withVisibleSelectionTheme(isTransparentRef.current ? applyTransparency(baseTheme, background.overlayDarken) : baseTheme),
+      theme: withVisibleSelectionTheme(isTransparentRef.current ? applyTransparency(baseTheme, background.overlayDarken) : baseTheme, false),
       // OSC 8 超链接（codex 等 CLI 输出）默认点击行为是 window.open，在 Tauri
       // webview 里会被拦成"是否导航"确认框。接管为系统默认浏览器打开，仅放行
       // http/https，避免恶意 scheme。
