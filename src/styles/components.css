@@ -7072,7 +7072,23 @@
   content: "";
   position: absolute;
   inset: 0;
+  --terminal-bg-status-scrim-alpha: clamp(
+    0,
+    calc(0.46 - var(--terminal-bg-darken, 0)),
+    0.46
+  );
   background-color: rgba(var(--terminal-bg-overlay-color, 0, 0, 0), var(--terminal-bg-darken, 0));
+  background-image: linear-gradient(
+    to bottom,
+    transparent,
+    rgba(
+      var(--terminal-bg-overlay-color, 0, 0, 0),
+      var(--terminal-bg-status-scrim-alpha)
+    )
+  );
+  background-position: bottom;
+  background-repeat: no-repeat;
+  background-size: 100% 6rem;
   z-index: 1;
   transition: background-color 300ms ease;
 }

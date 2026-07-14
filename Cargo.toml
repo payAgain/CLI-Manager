@@ -5,6 +5,7 @@ description = "A lightweight desktop app for managing CLI tools across multiple 
 authors = ["tianhao.zhao", "zhang.yuan"]
 license = "AGPL-3.0-or-later"
 edition = "2021"
+build = "src-tauri/build.rs"
 # 新增 cli-manager-daemon 第二个 bin 后，`cargo run`（tauri dev）需要显式默认目标
 default-run = "cli-manager"
 
@@ -16,6 +17,15 @@ default-run = "cli-manager"
 # This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
 name = "cli_manager_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
+path = "src-tauri/src/lib.rs"
+
+[[bin]]
+name = "cli-manager"
+path = "src-tauri/src/main.rs"
+
+[[bin]]
+name = "cli-manager-daemon"
+path = "src-tauri/src/bin/cli-manager-daemon.rs"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

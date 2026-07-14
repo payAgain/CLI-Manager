@@ -27,6 +27,7 @@ export const TERMINAL_THEME_GROUPS: TerminalThemeGroup[] = [
 ];
 
 const HEX_COLOR_PATTERN = /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i;
+const TERMINAL_BACKGROUND_IMAGE_MINIMUM_CONTRAST_RATIO = 6;
 
 function normalizeHexColor(value: string | undefined): string | null {
   if (!value || !HEX_COLOR_PATTERN.test(value)) return null;
@@ -64,8 +65,29 @@ export function getTerminalBackgroundOverlayColor(theme: ITheme): string {
   return isLightTerminalTheme(theme) ? "255, 255, 255" : "0, 0, 0";
 }
 
-export function getTerminalMinimumContrastRatio(theme: ITheme): number {
-  return isLightTerminalTheme(theme) ? 6 : 1;
+export function getTerminalMinimumContrastRatio(theme: ITheme, backgroundImageEnabled = false): number {
+  const themeMinimumContrastRatio = isLightTerminalTheme(theme) ? 6 : 1;
+  return backgroundImageEnabled
+    ? Math.max(themeMinimumContrastRatio, TERMINAL_BACKGROUND_IMAGE_MINIMUM_CONTRAST_RATIO)
+    : themeMinimumContrastRatio;
+}
+
+function applyBackgroundImageForegroundContrast(theme: ITheme, isLight: boolean): ITheme {
+  return isLight
+    ? {
+        ...theme,
+        foreground: "#111827",
+        cursor: "#111827",
+        brightBlack: "#334155",
+      }
+    : {
+        ...theme,
+        foreground: "#f8fafc",
+        cursor: "#f8fafc",
+        white: "#e2e8f0",
+        brightBlack: "#94a3b8",
+        brightWhite: "#ffffff",
+      };
 }
 
 export type LightTerminalPalette =
@@ -1540,7 +1562,10 @@ export function applyTransparency(theme: ITheme, darkenPct: number = 0): ITheme 
   const floor = (clamped / 100) * 0.6;
   const isLight = isLightTerminalTheme(theme);
   const cellBackground = isLight ? "255,255,255" : "0,0,0";
-  const next: ITheme = { ...theme, background: `rgba(${cellBackground},${floor.toFixed(3)})` };
+  const next: ITheme = applyBackgroundImageForegroundContrast(
+    { ...theme, background: `rgba(${cellBackground},${floor.toFixed(3)})` },
+    isLight
+  );
   const selection = theme.selectionBackground;
   // Only override opaque selection backgrounds (HEX or rgb without alpha).
   // Already-translucent rgba selections are kept as-is.

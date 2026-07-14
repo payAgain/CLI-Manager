@@ -1557,7 +1557,7 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
     const terminal = terminalRef.current;
     if (!terminal) return;
     const baseTheme = getTerminalTheme(terminalThemeName, resolvedTheme, lightThemePalette, darkThemePalette);
-    const minimumContrastRatio = getTerminalMinimumContrastRatio(baseTheme);
+    const minimumContrastRatio = getTerminalMinimumContrastRatio(baseTheme, isTransparent);
     const nextTheme = isTransparent ? applyTransparency(baseTheme, background.overlayDarken) : baseTheme;
     terminal.options.theme = withVisibleSelectionTheme(nextTheme);
     if (terminal.options.minimumContrastRatio !== minimumContrastRatio) {
@@ -1722,7 +1722,7 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
       scrollOnEraseInDisplay: true,
       allowProposedApi: true,
       windowsPty: { backend: "conpty" },
-      minimumContrastRatio: getTerminalMinimumContrastRatio(baseTheme),
+      minimumContrastRatio: getTerminalMinimumContrastRatio(baseTheme, isTransparentRef.current),
       // xterm cannot toggle transparency after construction, so keep it enabled
       // even though WebGL is disabled while a background image is active.
       allowTransparency: true,
