@@ -363,3 +363,36 @@ Claude 启动阶段提前订阅子任务 transcript，Codex rollout 增加有界
 ### Next Steps
 
 - None - task complete
+
+
+## Session 11: 修复本地路径打开权限
+
+**Date**: 2026-07-14
+**Task**: 修复本地路径打开权限
+**Branch**: `master`
+
+### Summary
+
+将项目、Worktree 与终端本地路径统一改由 Rust 命令打开，避免 WebView opener ACL/scope 拒绝；补充后端路径打开契约并完成编译、类型和格式验证。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `8701471` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
