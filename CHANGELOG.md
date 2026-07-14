@@ -8,6 +8,7 @@
 - **ccusage 全屏看板**：ccusage 看板改为应用窗口内全屏布局，重排现有趋势、峰值摘要、Token 构成、热点图和模型排行，不增加数据源、指标或交互功能。
 
 ### 修复
+- **本地路径打开权限修复**：项目、Worktree 和终端路径统一通过 Rust 命令调用系统文件管理器或默认应用，不再依赖 WebView opener 路径 scope，修复 `open_path not allowed by ACL` 及 `Not allowed to open path` 错误。
 - **历史统计入口无响应修复**：修正全屏统计面板被共享样式覆盖为相对定位的问题，点击侧边栏历史用量分析后可正常显示看板；同样适用于 ccusage 全屏看板。
 - **鼠标侧键切换 Workspan 修复**：Workspan 默认开启且当前工作区只有一个会话时，鼠标前进/后退侧键和 Tab 切换快捷键会切换到相邻 Workspan，不再因仅在当前 Pane 树内循环而停留在原标签。
 

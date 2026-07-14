@@ -53,7 +53,6 @@ import { WorktreeFinishDialog } from "./worktree/WorktreeFinishDialog";
 import { FileEditorPane } from "./files/FileEditorPane";
 import { FileExplorerSidebar } from "./files/FileExplorerSidebar";
 import { openWindowsTerminal } from "../lib/externalTerminal";
-import { openPath } from "@tauri-apps/plugin-opener";
 import { normalizeDirectCodexStartupCommand, resolveProjectStartupCommand } from "../lib/projectStartupCommand";
 import { parseProjectEnvVars } from "../lib/providerSwitching";
 import { Activity, Terminal, Plus, ListClockIcon, X, Copy, Maximize2, Minimize2, ChevronDown, ChevronRight, BarChart3, GitBranch, Folder, Check, Cpu } from "./icons";
@@ -2645,7 +2644,9 @@ export function TerminalTabs({
   }, [checkWorktreeDeps, createSession, dismissWorktreeDepsPrompt, t]);
 
   const handleOpenWorktreeDirectory = useCallback((worktree: WorktreeRecord) => {
-    void openPath(worktree.path).catch((err) => toast.error(t("sidebar.toast.openDirectoryFailed"), { description: String(err) }));
+    void invoke("open_folder_in_explorer", { path: worktree.path }).catch((err) =>
+      toast.error(t("sidebar.toast.openDirectoryFailed"), { description: String(err) }),
+    );
   }, [t]);
 
   const handleOpenWorktreeChanges = useCallback((sessionId: string) => {

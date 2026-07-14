@@ -11,7 +11,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { openPath, openUrl } from "@tauri-apps/plugin-opener";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { useShallow } from "zustand/shallow";
 import {
   applyTransparency,
@@ -622,7 +622,7 @@ const openTerminalFilePath = async (sessionId: string, rawPath: string) => {
     }
   }
 
-  void openPath(systemPath).catch((err) => {
+  void invoke("open_folder_in_explorer", { path: systemPath, openFile: true }).catch((err) => {
     logError("Failed to open terminal file", { sessionId, path: systemPath, err });
     toast.error(translateCurrent("files.toast.openFileFailed"), { description: String(err) });
   });

@@ -2,7 +2,6 @@
 import { useShallow } from "zustand/shallow";
 import type { DragEndEvent } from "@dnd-kit/core";
 import { invoke } from "@tauri-apps/api/core";
-import { openPath } from "@tauri-apps/plugin-opener";
 import { useProjectStore } from "../../stores/projectStore";
 import { useTerminalStore, type SessionStatus, type SplitTerminalOptions } from "../../stores/terminalStore";
 import { isProjectFileDirty, useFileExplorerStore } from "../../stores/fileExplorerStore";
@@ -1148,7 +1147,7 @@ export function Sidebar({
 
   const handleOpenWorktreeDirectory = useCallback(async (worktree: WorktreeRecord) => {
     try {
-      await openPath(worktree.path);
+      await invoke("open_folder_in_explorer", { path: worktree.path });
     } catch (err) {
       logError("Failed to open worktree directory", err);
       toast.error(t("sidebar.toast.openDirectoryFailed"), { description: String(err) });
