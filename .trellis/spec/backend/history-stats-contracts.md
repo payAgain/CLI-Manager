@@ -126,6 +126,7 @@ interface TerminalSession {
 - Stats aggregates must include input, output, cache read, cache creation, estimated cost, and unpriced token counts at every exposed usage level: total, project, model, source, daily series, and hourly activity.
 - History stats token/cost/model aggregates must bucket by each deduped usage event timestamp (`timestamp`, `time`, `created_at`, `createdAt`, or `message.timestamp`), not by the session file `updated_at`. If a usage event has no parseable timestamp, fall back to the session `updated_at`. Range-level `sessions` must be counted by unique session identity so multiple usage events in one session do not inflate session counts.
 - `history_get_stats.project_path` filters by the user's configured project path and must use the same `session_matches_project_path` rules as `history_list_sessions`: Claude project-key normalization, WSL/UNC path variants, and metadata `cwd` matching for Codex. `project_key` remains an exact raw history-key filter for history-derived chart interactions. If both filters are present, both must match.
+- Realtime “today project usage” must pass the active terminal's effective project path. For Worktree terminals this is the Worktree checkout path. When that path is available, the frontend request must use `project_path` and omit `project_key`; raw history keys are not stable project identities across Worktree, Claude, Codex, Windows, and WSL layouts.
 - Stats aggregation and daily-index cache keys must include both `project_key` and `project_path`, so custom project-path filters never reuse raw-key/all-project cached results.
 - Heatmap-compatible buckets must include `sessions`, `messages`, `level`, and `session_refs`. Daily heatmap buckets use `day_start_utc`; hourly activity buckets use `hour_start_utc` plus `hour` so the frontend can render 24-hour drilldowns without guessing local bucket anchors.
 - `historyStore` must accept snake_case payload fields and legacy camelCase fallbacks when normalizing stats data. `normalizeDetail` must pass message token fields through (it previously dropped them, making per-session token panels read 0).
@@ -172,6 +173,7 @@ interface TerminalSession {
 | `project_path` is empty or whitespace | Treat it as absent; do not filter by path. |
 | `project_path` points to a configured project with Claude/Codex history | Return only sessions matching that project path using `session_matches_project_path`. |
 | `project_path` and `project_key` are both present | Apply both filters; do not OR them together. |
+| Realtime today-usage request has an active Worktree path | Send it as `project_path` with `project_key = null`; aggregate only that Worktree directory. |
 | Codex session lacks metadata cwd | Fall back to the path-derived project key. |
 | History detail has no discoverable cwd | Return `cwd: null`; resume UI may fall back to a configured project match, otherwise show an error instead of opening a terminal in the wrong directory. |
 | Codex rollout session lacks `session_meta.payload.id` | Fall back to the file-stem `session_id`. |
@@ -197,10 +199,12 @@ interface TerminalSession {
 - Good: a Claude assistant usage row with `max_context_tokens` returns `usage.context_window`, while the same row without explicit context metadata leaves it `null`.
 - Good: a session where `claude-old` appears in more usage rows but the last assistant row uses `claude-new` returns `dominant_model = "claude-old"` and `current_model = "claude-new"`.
 - Good: StatsPanel selects a configured project path such as `D:\work\pythonProject\CLI-Manager`; frontend sends `projectPath`, backend matches Claude/Codex sessions through `session_matches_project_path`, and cache keys stay distinct from raw `projectKey` queries.
+- Good: TerminalStatsPanel on a Worktree tab sends the Worktree checkout path for today's usage, so tokens and cost produced inside that checkout are included.
 - Base: a Codex session without model pricing still appears in stats with token totals and `unpriced_tokens`; a single-day stats view can map `hourly_activity` into 24 hourly trend and heatmap buckets.
 - Bad: frontend assumes a newly added numeric field is always present and renders `NaN` when older cached payloads omit it; realtime stats uses only project latest-session lookup and shows another window's current context.
 - Bad: realtime stats concatenates parent and child `token_trend` arrays directly or derives tool totals from merged `tool_events`, causing out-of-order trend points or inflated tool-call counts.
 - Bad: StatsPanel populates its dropdown from raw `history_list_stats_projects` values and sends those opaque keys for user-created project selection; this diverges from the left project tree and fails for path-normalized Claude/WSL/Codex sessions.
+- Bad: realtime today-usage reuses `latestSession.project_key` as the only filter after the session was found by Worktree path; the path context is lost and usage may be omitted.
 
 ### 6. Tests Required
 
@@ -232,6 +236,7 @@ interface TerminalSession {
   - History resume creates a new internal terminal with `claude --resume <id>` or `codex resume <id>` only after resolving a `cwd` from detail payload or configured project match.
   - Single-day stats must use `hourly_activity` for Token/cost trend and session heatmap; multi-day ranges must keep using `daily_series` and `heatmap`.
   - Historical usage project filter must render configured `Project`/`Group` data from `projectStore`; selecting a project sends `projectPath`, while project-ranking chart clicks may still send raw `projectKey`.
+  - Realtime today-usage must pass `lookupProjectPath`; ordinary projects and Worktree projects must both use path-based aggregation when a path is available.
 - Release checks:
   - `cargo test` must pass before tagging a release that changes history stats contracts.
 
@@ -301,3 +306,19 @@ await fetchHistoryStatsPayload({ sourceFilter, projectPath: selectedProject.path
 ```
 
 Use the configured project path for user project-list filtering; keep raw `projectKey` only for history-derived ranking interactions.
+
+#### Wrong
+
+```ts
+await fetchTodayProjectStats(latestSession.project_key, sourceFilter);
+```
+
+This drops the Worktree path that was used to locate the active session.
+
+#### Correct
+
+```ts
+await fetchTodayProjectStats(latestSession.project_key, sourceFilter, lookupProjectPath);
+```
+
+When `lookupProjectPath` is present, the store sends `projectPath` and clears `projectKey`, preserving the active checkout scope.

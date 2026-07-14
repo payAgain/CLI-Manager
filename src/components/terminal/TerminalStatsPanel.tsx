@@ -502,7 +502,7 @@ export function TerminalStatsPanel({ activeSessionId, open, visible = true, embe
     }
     let cancelled = false;
     setLoadingToday(true);
-    void fetchTodayProjectStats(latestSession.project_key, sourceFilter).then((result) => {
+    void fetchTodayProjectStats(latestSession.project_key, sourceFilter, lookupProjectPath).then((result) => {
       if (cancelled) return;
       setTodayStats(result);
       setLoadingToday(false);
@@ -510,7 +510,7 @@ export function TerminalStatsPanel({ activeSessionId, open, visible = true, embe
     return () => {
       cancelled = true;
     };
-  }, [panelActive, latestSession, sourceFilter]);
+  }, [lookupProjectPath, panelActive, latestSession, sourceFilter]);
 
   // 空闲时数据轮询返回 unchanged 不会触发重渲染，需独立 tick 让头部相对时间文案随时间走字
   useEffect(() => {

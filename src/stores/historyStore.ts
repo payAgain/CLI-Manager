@@ -818,7 +818,8 @@ export async function fetchDiscoveredModels(): Promise<string[]> {
 
 export async function fetchTodayProjectStats(
   projectKey: string,
-  source?: HistorySource | null
+  source?: HistorySource | null,
+  projectPath?: string | null
 ): Promise<TodayProjectStats | null> {
   const todayStart = new Date();
   todayStart.setHours(0, 0, 0, 0);
@@ -826,7 +827,8 @@ export async function fetchTodayProjectStats(
     const raw = await invoke<unknown>("history_get_stats", {
       source: source ?? null,
       ...getHistoryPathArgs(),
-      projectKey,
+      projectKey: projectPath ? null : projectKey,
+      projectPath: projectPath ?? null,
       rangeDays: null,
       startAt: todayStart.getTime(),
       endAt: Date.now(),

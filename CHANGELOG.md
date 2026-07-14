@@ -12,6 +12,7 @@
 
 ### 修复
 - **状态栏配置输入框统一**：状态栏配置的新建、复制、重命名、外部配置另存和整库导入冲突处理改为应用内主题弹窗，移除 WebView `window.prompt` 系统式输入框。
+- **Worktree 今日项目用量统计修复**：实时统计按当前 Worktree 实际路径聚合当天用量，不再因只使用历史会话的 `project_key` 而遗漏 Worktree 中产生的 Token 与费用。
 - **本地路径打开权限修复**：项目、Worktree 和终端路径统一通过 Rust 命令调用系统文件管理器或默认应用，不再依赖 WebView opener 路径 scope，修复 `open_path not allowed by ACL` 及 `Not allowed to open path` 错误。
 - **历史统计入口无响应修复**：修正全屏统计面板被共享样式覆盖为相对定位的问题，点击侧边栏历史用量分析后可正常显示看板；同样适用于 ccusage 全屏看板。
 - **鼠标侧键切换 Workspan 修复**：Workspan 默认开启且当前工作区只有一个会话时，鼠标前进/后退侧键和 Tab 切换快捷键会切换到相邻 Workspan，不再因仅在当前 Pane 树内循环而停留在原标签。
