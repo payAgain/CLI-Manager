@@ -4229,7 +4229,8 @@
 }
 
 .ui-terminal-action-sort-item[data-tooltip]:hover::after,
-.ui-terminal-action-sort-item[data-tooltip]:focus-within::after,
+.ui-terminal-action-sort-item[data-tooltip]:focus-visible::after,
+.ui-terminal-action-sort-item[data-tooltip]:has(:focus-visible)::after,
 .ui-file-tooltip[data-tooltip]:hover::after,
 .ui-file-tooltip[data-tooltip]:focus-visible::after {
   opacity: 1;

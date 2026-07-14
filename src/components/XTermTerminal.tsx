@@ -28,6 +28,7 @@ import { debugConsoleWarn } from "../lib/debugConsole";
 import { translateCurrent, useI18n } from "../lib/i18n";
 import { buildFastCursorMoveSequence } from "../lib/terminalCursorMovement";
 import { normalizeTerminalFontFamily } from "../lib/terminalFontFamily";
+import { decodeOscPathValue, parseOsc7Cwd } from "../lib/terminalOscPath";
 import {
   absolutePathToProjectRelative,
   findTerminalFileLinks,
@@ -147,29 +148,6 @@ type OscPrefixMatch =
   | { kind: "match"; prefix: string }
   | { kind: "partial" }
   | { kind: "none" };
-
-function decodeOscPathValue(value: string): string {
-  try {
-    return decodeURIComponent(value);
-  } catch {
-    return value;
-  }
-}
-
-function parseOsc7Cwd(body: string): string | null {
-  const value = body.trim();
-  if (!value.toLocaleLowerCase().startsWith("file://")) return null;
-  try {
-    const url = new URL(value);
-    if (url.protocol !== "file:") return null;
-    const path = decodeOscPathValue(url.pathname);
-    if (/^\/[a-z]:[\\/]/iu.test(path)) return path.slice(1);
-    if (url.hostname && url.hostname !== "localhost") return `//${url.hostname}${path}`;
-    return path || null;
-  } catch {
-    return null;
-  }
-}
 
 function parseStandardIntegrationCwd(command: string, rest: string): string | null {
   if (command !== "P") return null;
@@ -1044,7 +1022,7 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
   // 标准 OSC 7/133/633：OSC 7 与 633;P;Cwd 同步 cwd；A=prompt 开始，C=命令开始执行，D[;exit]=命令结束。
   // D 不带 exit code 表示没跑命令（空回车 / prompt 处 Ctrl+C），不改变状态。
   const handleStandardIntegrationOsc = (body: string) => {
-    const osc7Cwd = parseOsc7Cwd(body);
+    const osc7Cwd = parseOsc7Cwd(body, osPlatformRef.current);
     if (osc7Cwd) {
       updateSessionCwdIfChanged(osc7Cwd);
       return;

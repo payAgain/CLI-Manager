@@ -40,6 +40,7 @@ import {
 import { useI18n } from "../../lib/i18n";
 import { DiffViewerModal } from "../git/DiffViewerModal";
 import { parseDiffBlocksFromMessages } from "../../lib/diffParser";
+import { resolveTerminalProjectPath } from "../../lib/terminalOscPath";
 import { TerminalSquare } from "../icons";
 
 interface TerminalStatsPanelProps {
@@ -410,8 +411,13 @@ export function TerminalStatsPanel({ activeSessionId, open, visible = true, embe
   const activeWorktree = terminalSession?.worktreeId
     ? worktrees.find((worktree) => worktree.id === terminalSession.worktreeId) ?? null
     : null;
-  const lookupProjectPath = activeWorktree?.path || terminalSession?.cwd || project?.path || null;
-  const displayProjectPath = terminalSession?.cwd || activeWorktree?.path || project?.path || null;
+  const terminalProjectPath = resolveTerminalProjectPath(
+    terminalSession?.cwd,
+    project?.path,
+    "unknown"
+  );
+  const lookupProjectPath = activeWorktree?.path || terminalProjectPath;
+  const displayProjectPath = activeWorktree?.path || terminalProjectPath;
 
   // 终端运行的 CLI 工具（claude/codex），来自项目设置；推断不出则不过滤
   const sourceFilter = useMemo(
