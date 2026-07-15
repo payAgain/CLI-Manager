@@ -1,4 +1,5 @@
 ﻿import { useVirtualizer } from "@tanstack/react-virtual";
+import { invoke } from "@tauri-apps/api/core";
 import {
   ArrowRightLeft,
   BookCopy,
@@ -8,6 +9,7 @@ import {
   ChevronRight,
   Copy,
   CornerDownRight,
+  FolderOpen,
   GitCompare,
   History,
   ListChecks,
@@ -648,6 +650,12 @@ export function SessionDetailPane({
       .catch((err) => toast.error(t("history.detail.copyFailed"), { description: String(err) }));
   };
 
+  const openSessionFile = () => {
+    void invoke("open_folder_in_explorer", { path: activeView.file_path }).catch((err) =>
+      toast.error(t("history.detail.openFileFailed"), { description: String(err) }),
+    );
+  };
+
   const copyMessageContent = (message: HistoryMessage) => {
     void navigator.clipboard
       .writeText(message.editable_text ?? message.content)
@@ -741,13 +749,6 @@ export function SessionDetailPane({
     }
   };
 
-  const locationText = [
-    `sessionId=${activeView.session_id}`,
-    `source=${activeView.source}`,
-    `project=${activeView.project_key}`,
-    `filePath=${activeView.file_path}`,
-  ].join("\n");
-
   return (
     <>
       <div className="ui-history-detail-top [grid-row:1] min-h-0 shrink-0 overflow-y-auto p-3">
@@ -771,13 +772,14 @@ export function SessionDetailPane({
                 {t("history.detail.copyId")}
               </button>
               <button
-                onClick={() => copyText(locationText, t("history.detail.copyLocationLabel"))}
+                onClick={openSessionFile}
+                aria-label={t("history.detail.openFile")}
                 className="ui-flat-action ui-toolbar-button ui-toolbar-button-compact"
                 style={{ color: "var(--primary)" }}
-                title={t("history.detail.copyLocation")}
+                title={t("history.detail.openFileTitle")}
               >
-                <Copy size={11} />
-                {t("history.detail.copyLocationShort")}
+                <FolderOpen size={11} />
+                {t("history.detail.openFile")}
               </button>
             </div>
           </div>

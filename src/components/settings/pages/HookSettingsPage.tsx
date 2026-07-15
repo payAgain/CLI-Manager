@@ -436,6 +436,8 @@ function CollapsibleHookSection({
   open,
   onToggle,
   children,
+  action,
+  collapsible = true,
   right,
 }: {
   title: string;
@@ -443,36 +445,59 @@ function CollapsibleHookSection({
   open: boolean;
   onToggle: () => void;
   children: ReactNode;
+  action?: ReactNode;
+  collapsible?: boolean;
   right?: ReactNode;
 }) {
+  const titleContent = (
+    <Box className="min-w-0">
+      <Text size="sm" fw={600} c="var(--on-surface)">
+        {title}
+      </Text>
+      {description && (
+        <Text mt={4} size="xs" c="var(--on-surface-variant)">
+          {description}
+        </Text>
+      )}
+    </Box>
+  );
+
   return (
     <section className="ui-surface-card overflow-hidden rounded-2xl border border-border">
-      <button
-        type="button"
-        onClick={onToggle}
-        className="ui-focus-ring flex w-full items-center justify-between gap-3 p-4 text-left outline-none transition-colors hover:bg-surface-container-highest/50"
-        aria-expanded={open}
-      >
-        <Box className="min-w-0">
-          <Text size="sm" fw={600} c="var(--on-surface)">
-            {title}
-          </Text>
-          {description && (
-            <Text mt={4} size="xs" c="var(--on-surface-variant)">
-              {description}
-            </Text>
-          )}
-        </Box>
+      <div className="flex w-full items-center gap-3 p-4 transition-colors hover:bg-surface-container-highest/50">
+        {collapsible ? (
+          <button
+            type="button"
+            onClick={onToggle}
+            className="ui-focus-ring min-w-0 flex-1 text-left outline-none"
+            aria-expanded={open}
+          >
+            {titleContent}
+          </button>
+        ) : (
+          <div className="min-w-0 flex-1">{titleContent}</div>
+        )}
         <Group gap="xs" wrap="nowrap">
+          {action}
           {right}
-          <ChevronDown
-            size={18}
-            strokeWidth={1.8}
-            className={`shrink-0 text-text-muted transition-transform ${open ? "rotate-180" : ""}`}
-          />
+          {collapsible && (
+            <button
+              type="button"
+              onClick={onToggle}
+              className="ui-focus-ring rounded-md outline-none"
+              aria-label={title}
+              aria-expanded={open}
+            >
+              <ChevronDown
+                size={18}
+                strokeWidth={1.8}
+                className={`shrink-0 text-text-muted transition-transform ${open ? "rotate-180" : ""}`}
+              />
+            </button>
+          )}
         </Group>
-      </button>
-      {open && <Box px="md" pt="sm" pb="md">{children}</Box>}
+      </div>
+      {collapsible && open && <Box px="md" pt="sm" pb="md">{children}</Box>}
     </section>
   );
 }
@@ -909,15 +934,18 @@ export function HookSettingsPage() {
         description={text("Claude Code 的运行中、待审批、完成和异常退出状态通过 Hook 上报。", "Claude Code running, approval, completion, and failure states are reported through Hook.")}
         open={hookSettingsSectionsExpanded.claude}
         onToggle={() => toggleHookSection("claude")}
-        right={<StatusPill status={claudeStatus} />}
+        collapsible={claudeHookBridgeEnabled}
+        action={(
+          <Switch
+            color="cliPrimary"
+            checked={claudeHookBridgeEnabled}
+            onChange={(event) => void updateSetting("claudeHookBridgeEnabled", event.currentTarget.checked)}
+            aria-label={t("settings.hooks.bridge.enabled")}
+          />
+        )}
+        right={claudeHookBridgeEnabled ? <StatusPill status={claudeStatus} /> : undefined}
       >
         <Stack gap="lg">
-          <SettingsSwitchRow
-            title={t("settings.hooks.bridge.enabled")}
-            description={t("settings.hooks.bridge.claudeEnabled")}
-            checked={claudeHookBridgeEnabled}
-            onCheckedChange={(checked) => void updateSetting("claudeHookBridgeEnabled", checked)}
-          />
           {claudeHookBridgeEnabled && (
             <>
               <SimpleGrid cols={{ base: 2, sm: 3 }} spacing="md">
@@ -1105,15 +1133,18 @@ export function HookSettingsPage() {
         description={text("Codex 的运行中、待审批和完成状态通过 Hook 上报。", "Codex running, approval, and completion states are reported through Hook.")}
         open={hookSettingsSectionsExpanded.codex}
         onToggle={() => toggleHookSection("codex")}
-        right={<StatusPill status={codexStatus} />}
+        collapsible={codexHookBridgeEnabled}
+        action={(
+          <Switch
+            color="cliPrimary"
+            checked={codexHookBridgeEnabled}
+            onChange={(event) => void updateSetting("codexHookBridgeEnabled", event.currentTarget.checked)}
+            aria-label={t("settings.hooks.bridge.enabled")}
+          />
+        )}
+        right={codexHookBridgeEnabled ? <StatusPill status={codexStatus} /> : undefined}
       >
         <Stack gap="lg">
-          <SettingsSwitchRow
-            title={t("settings.hooks.bridge.enabled")}
-            description={t("settings.hooks.bridge.codexEnabled")}
-            checked={codexHookBridgeEnabled}
-            onCheckedChange={(checked) => void updateSetting("codexHookBridgeEnabled", checked)}
-          />
           {codexHookBridgeEnabled && (
             <>
               <SimpleGrid cols={{ base: 2, sm: 3 }} spacing="md">
