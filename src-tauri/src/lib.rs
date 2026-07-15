@@ -5,6 +5,7 @@ mod claude_hook;
 pub mod codex_statusline;
 mod commands;
 mod conpty_sideload;
+mod credential_store;
 // daemon 二进制（src/bin/cli-manager-daemon.rs）经 lib 复用以下模块，
 // 因此 app_paths 与 daemon 需 pub。
 pub mod daemon;
@@ -626,6 +627,15 @@ pub fn run() {
                 }
             }
             // 注入 appLocalData 目录用于历史索引磁盘缓存（加速冷启动加载）。
+            {
+                let handle = app.handle().clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_millis(750));
+                    if let Err(err) = commands::cc_connect::auto_start(&handle) {
+                        log::warn!("cc-connect auto-start skipped: {err}");
+                    }
+                });
+            }
             if let Ok(dir) = app_paths::history_cache_dir() {
                 commands::history::set_history_index_cache_dir(dir);
             }
@@ -692,6 +702,7 @@ pub fn run() {
         .manage(file_watcher::FileWatcherBridge::new())
         .manage(git_watcher::GitWatcherBridge::new())
         .manage(commands::subagent_transcript::SubagentTranscriptBridge::new())
+        .manage(commands::cc_connect::CcConnectManager::new())
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(
             SqlBuilder::default()
@@ -710,6 +721,13 @@ pub fn run() {
             commands::terminal::pty_daemon_active,
             commands::terminal::pty_daemon_sessions,
             commands::terminal::pty_attach,
+            commands::cc_connect::cc_connect_get_status,
+            commands::cc_connect::cc_connect_save_profile,
+            commands::cc_connect::cc_connect_clear_credentials,
+            commands::cc_connect::cc_connect_start,
+            commands::cc_connect::cc_connect_stop,
+            commands::cc_connect::cc_connect_restart,
+            commands::cc_connect::cc_connect_get_logs,
             take_pending_background_session,
             commands::terminal_shell::terminal_shell_scan,
             commands::logging::set_debug_logging,
@@ -868,6 +886,10 @@ pub fn run() {
         .build(context)
         .expect("error while building tauri application")
         .run(|app, event| {
+            if let tauri::RunEvent::Exit = &event {
+                app.state::<commands::cc_connect::CcConnectManager>().shutdown();
+            }
+
             #[cfg(target_os = "macos")]
             if let tauri::RunEvent::Reopen {
                 has_visible_windows,

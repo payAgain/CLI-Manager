@@ -1,4 +1,5 @@
 pub mod background;
+pub mod cc_connect;
 pub mod ccswitch;
 pub mod ccusage;
 pub mod command_suggestion;

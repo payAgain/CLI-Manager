@@ -198,18 +198,7 @@ pub async fn sync_local_import(zip_path: String) -> Result<SyncData, String> {
 // WebDAV 密码存 Windows 凭据管理器，固定条目（service=CLI-Manager, user=webdav），不落明文配置文件
 #[cfg(target_os = "windows")]
 fn webdav_password_entry() -> Result<keyring_core::Entry, String> {
-    use std::sync::OnceLock;
-    static STORE_INIT: OnceLock<Result<(), String>> = OnceLock::new();
-    STORE_INIT
-        .get_or_init(|| {
-            let store = windows_native_keyring_store::Store::new()
-                .map_err(|e| format!("初始化 Windows 凭据存储失败: {}", e))?;
-            keyring_core::set_default_store(store);
-            Ok(())
-        })
-        .clone()?;
-    keyring_core::Entry::new("CLI-Manager", "webdav")
-        .map_err(|e| format!("创建凭据条目失败: {}", e))
+    crate::credential_store::entry("webdav")
 }
 
 #[cfg(target_os = "windows")]
