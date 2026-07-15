@@ -272,6 +272,58 @@ terminalRef.current = null;
 
 **Tests**: Run `npx tsc --noEmit`. Manually enable low memory mode, switch away from a terminal for more than 10 seconds, verify the session keeps running, then switch back and confirm the current viewport repaints without restarting the shell or losing scrollback.
 
+### Convention: Visibility-restoration refresh stays masked until xterm render completes
+
+**What**: When `XTermTerminal` changes from hidden to visible, keep the existing queued-write recovery and full viewport refresh, but hide the xterm drawing container until `Terminal.onRender` reports a range covering the current viewport. Reveal on the next animation frame and keep a bounded timeout fallback.
+
+**Why**: `Terminal.refresh(0, rows - 1)` schedules work for the next rendering opportunity; it does not mean the pixels are complete when `refresh()` returns. Exposing the container immediately can show xterm repainting from the top-left toward the bottom-right. Removing the refresh instead can restore the intermittent blank/stale terminal bug that the visibility recovery path was added to prevent.
+
+**Correct**:
+
+```tsx
+const beginVisibilityRestore = () => {
+  visibilityRestorePendingRef.current = true;
+  setVisibilityRestorePending(true);
+  revealTimerRef.current = window.setTimeout(finishVisibilityRestore, 500);
+};
+
+terminal.onRender((range) => {
+  if (!visibilityRestorePendingRef.current) return;
+  if (!didRenderFullTerminalViewport(range, terminal.rows)) return;
+  revealRafRef.current = window.requestAnimationFrame(finishVisibilityRestore);
+});
+
+const hidden = inactiveReplayPending || visibilityRestorePending;
+```
+
+**Wrong**:
+
+```tsx
+// Removing the refresh can bring back blank/stale restored terminals.
+if (becameVisible) scheduleFit(false);
+
+// Revealing immediately exposes the renderer's progressive full repaint.
+terminal.refresh(0, terminal.rows - 1);
+setVisibilityRestorePending(false);
+```
+
+**Contracts**:
+
+- Mask only the xterm drawing container; keep the wrapper/background mounted and never recreate the `Terminal`, PTY listener, addons, scrollback, or input state.
+- The hidden-to-visible render must be masked synchronously from the first visible React commit, before the visibility effect schedules fit/refresh.
+- Use the public `Terminal.onRender` row range as the primary completion signal. A full viewport render covers row `0` through the current `terminal.rows - 1`.
+- Reveal on the next animation frame after the full render event so canvas/WebGL output can reach the compositor.
+- Keep a short timeout fallback and clear timer, animation-frame, and pending state on repeated restores, visibility loss, and unmount.
+- Inactive-output replay masking remains independent. Clearing visibility-refresh masking must not reveal a terminal whose queued replay is still running.
+
+**Tests**:
+
+- Unit-test full, partial, and zero-row render-range decisions.
+- Run `npx tsc --noEmit` and the terminal visibility regression tests.
+- Manually switch normal tabs and Workspans repeatedly; verify there is no progressive diagonal repaint.
+- Manually switch back to a terminal with background output; verify the final buffer appears without blanking, partial replay, lost scrollback, or shell restart.
+- Manually verify the timeout fallback cannot leave the terminal permanently hidden.
+
 ### Convention: Session history transcripts use a history render layer before Markdown
 
 **What**: When rendering Claude/Codex session history message bodies, use `src/components/history/SessionTranscriptContent.tsx` instead of rendering raw message content directly with `MarkdownContent`. `SessionTranscriptContent` may detect session-log structures such as XML-ish blocks, workflow-state blocks, Git status lines, long lists, paths, commit hashes, and status tokens; ordinary Markdown content must still delegate to `HistoryMarkdownContent` / shared `MarkdownContent`.

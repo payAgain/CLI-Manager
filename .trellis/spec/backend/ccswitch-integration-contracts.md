@@ -266,12 +266,20 @@ Frontend project override shape:
   `model_provider`, `model_providers`, `openai_base_url`, `profile`, or auth keys
   into `<project>/.codex/config.toml`; Codex ignores these keys in project-local
   config and emits warnings.
-- **Profile location**: generated profiles are written under
-  `~/.cli-manager/providers/codex`; PTY launch injects
-  `CODEX_HOME=<that dir>` so `codex --profile` can find the generated profile.
-  For WSL/Bash shells on Windows, injected `CODEX_HOME` must be converted to
-  `/mnt/<drive>/...` while the generated profile is still written through the
-  Windows filesystem path.
+- **Profile location**: generated profiles are written into the user's **real
+  Codex home** — the custom `codexHookConfigDir` when set, otherwise `~/.codex` —
+  so they sit next to the user's own `config.toml` and `auth.json`. `codex --profile
+  <name>` layers `$CODEX_HOME/<name>.config.toml` on top of that base config, so the
+  profile must live in the same home the user's account/base config live in.
+  Do **not** redirect `CODEX_HOME` to an isolated `~/.cli-manager/providers/codex`
+  directory: that empty home strips the user's auth and base config. PTY launch
+  injects `CODEX_HOME=<resolved real home>` (equal to the default `~/.codex` when no
+  custom home is set, so it is a no-op for local shells but guarantees the generated
+  profile is discoverable for WSL/Bash shells too). For WSL/Bash shells on Windows,
+  the injected `CODEX_HOME` is converted to `/mnt/<drive>/...` while the profile is
+  still written through the Windows filesystem path.
+  Legacy profiles left in `~/.cli-manager/providers/codex` by the old redirect design
+  are purged during cleanup.
 - **Provider input shapes**: cc-switch Codex providers may not be shaped like
   Claude `settings_config.env`. The parser must accept both env-style and
   Codex/config-style shapes:

@@ -9,6 +9,8 @@ use std::time::Duration;
 use tauri::{AppHandle, Emitter};
 use uuid::Uuid;
 
+use crate::third_party_notification::{DispatcherHandle, HookNotificationJob};
+
 const EVENT_NAME: &str = "claude-hook-notification";
 const REQUEST_PATH: &str = "/api/claude-hook";
 const MAX_BODY_BYTES: usize = 64 * 1024;
@@ -78,6 +80,15 @@ impl ClaudeHookPayload {
     pub fn event(&self) -> &str {
         &self.event
     }
+
+    pub fn to_notification_job(&self) -> HookNotificationJob {
+        HookNotificationJob {
+            source: self.source.clone(),
+            event: self.event.clone(),
+            cwd: self.cwd.clone(),
+            timestamp: self.timestamp.clone(),
+        }
+    }
 }
 
 impl ClaudeHookBridge {
@@ -86,7 +97,9 @@ impl ClaudeHookBridge {
             Ok(listener) => {
                 let port = listener.local_addr().map(|addr| addr.port()).unwrap_or(0);
                 let token = Uuid::new_v4().to_string();
+                let dispatcher = DispatcherHandle::start("app");
                 let sink: HookPayloadSink = Arc::new(move |payload| {
+                    dispatcher.try_enqueue(payload.to_notification_job());
                     if let Err(err) = app_handle.emit(EVENT_NAME, payload) {
                         warn!("cli hook bridge emit failed: {}", err);
                     }

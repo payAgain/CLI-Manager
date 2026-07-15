@@ -62,10 +62,18 @@ cd src-tauri && cargo test <test_name>   # 运行单个 Rust 测试
 - `src-tauri/capabilities/default.json` 控制 Tauri 权限/asset 协议 scope（终端背景图等资源访问受其严格限制）。新增需要文件/资源访问的能力时要同步更新 capability。
 - 终端背景图片复制到 `appLocalData/backgrounds/<hash>.<ext>`，asset scope 锁定该目录。
 
+## 修复与新需求前置（强制）
+
+改任何 bug、加任何需求前，先过分诊闸机 `.trellis/spec/guides/fix-triage-guide.md`：
+
+- **修 bug**：先判定"最小修复"还是"根因修复"。表现层静态值（颜色/文案/常量）走最小修复；行为性、跨边界、回归、偶发或你想加兜底的，一律走根因——产出根因陈述 + 发现清单，禁止只在症状处打补丁。
+- **加需求**：动手前对照该文档 §5 的场景维度清单枚举场景（窗口焦点、分屏、WSL、Worktree、hook 装没装……），别只做主路径漏掉边界场景。
+- 找全代码触点优先用 GitNexus，不可用时降级到 `.trellis/spec/*-contracts.md` 契约 + grep。
+
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **CLI-Manager** (13434 symbols, 25594 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **CLI-Manager** (13529 symbols, 25798 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > If any GitNexus tool warns the index is stale, run `npx gitnexus analyze` in terminal first.
 

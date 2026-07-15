@@ -1719,12 +1719,32 @@ async fn load_codex_runtime_config(
     codex_runtime_from_provider(provider_id.trim().to_string(), name, settings_config)
 }
 
+/// 纯函数：解析 Codex 真实 home 目录。
+/// 有自定义目录（用户设置的 codexHookConfigDir）→ 用它；否则回退到 `<home>/.codex`。
+/// 方案A：profile 写进真实 codex home，与用户的 config.toml / auth.json 同处，
+/// 不再重定向 CODEX_HOME 到隔离目录（那会丢失账号与基础配置）。
+fn codex_home_from_config_or_default(codex_config_dir: Option<&str>, home: &Path) -> PathBuf {
+    match codex_config_dir
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        Some(value) => PathBuf::from(value),
+        None => home.join(".codex"),
+    }
+}
+
 fn resolve_codex_config_dir(
     app: &tauri::AppHandle,
     codex_config_dir: Option<String>,
 ) -> Result<PathBuf, String> {
-    let _ = (app, codex_config_dir);
-    app_paths::codex_providers_dir()
+    let home = app
+        .path()
+        .home_dir()
+        .map_err(|err| format!("home_dir_unavailable: {err}"))?;
+    Ok(codex_home_from_config_or_default(
+        codex_config_dir.as_deref(),
+        &home,
+    ))
 }
 
 fn write_codex_profile(
@@ -1848,7 +1868,19 @@ pub async fn ccswitch_cleanup_codex_profiles(
     codex_config_dir: Option<String>,
 ) -> Result<CcSwitchCodexProfileCleanupResult, String> {
     let codex_dir = resolve_codex_config_dir(&app, codex_config_dir)?;
-    let deleted_profile_names = cleanup_codex_profiles_in_dir(&codex_dir, &keep_profile_names)?;
+    let mut deleted_profile_names = cleanup_codex_profiles_in_dir(&codex_dir, &keep_profile_names)?;
+
+    // 方案A 迁移清理：旧实现把 profile 写进隔离目录 `.cli-manager/providers/codex`
+    // （CODEX_HOME 曾被重定向到那里）。现在 profile 落在真实 codex home，遗留目录里的
+    // `cli-manager-*.config.toml` 一律作废——全部删除（keep 传空），避免陈旧副本残留。
+    if let Ok(legacy_dir) = app_paths::codex_providers_dir() {
+        if legacy_dir != codex_dir {
+            if let Ok(mut legacy_deleted) = cleanup_codex_profiles_in_dir(&legacy_dir, &[]) {
+                deleted_profile_names.append(&mut legacy_deleted);
+            }
+        }
+    }
+
     Ok(CcSwitchCodexProfileCleanupResult {
         deleted_profile_names,
     })
@@ -2469,6 +2501,48 @@ enabled = true"#,
 
         assert_eq!(fs::read_to_string(&target_path).unwrap(), "new");
         assert!(!tmp_path.exists());
+    }
+
+    #[test]
+    fn codex_home_defaults_to_dot_codex_under_home() {
+        let home = Path::new("/home/user");
+        // 无自定义目录 → 真实 codex home 是 <home>/.codex（方案A：不再用隔离目录）
+        assert_eq!(
+            codex_home_from_config_or_default(None, home),
+            home.join(".codex")
+        );
+        assert_eq!(
+            codex_home_from_config_or_default(Some("   "), home),
+            home.join(".codex")
+        );
+    }
+
+    #[test]
+    fn codex_home_uses_custom_dir_when_present() {
+        let home = Path::new("/home/user");
+        assert_eq!(
+            codex_home_from_config_or_default(Some("/custom/codex"), home),
+            PathBuf::from("/custom/codex")
+        );
+    }
+
+    #[test]
+    fn cleanup_codex_profiles_removes_all_when_keep_empty() {
+        let tmp = tempfile::tempdir().unwrap();
+        let managed = tmp.path().join("cli-manager-legacy.config.toml");
+        let unmanaged = tmp.path().join("user-owned.config.toml");
+        fs::write(
+            &managed,
+            format!("# {CLI_MANAGER_CODEX_PROFILE_MARKER}\nmodel = \"gpt-5\"\n"),
+        )
+        .unwrap();
+        fs::write(&unmanaged, "model = \"user-owned\"\n").unwrap();
+
+        // keep 传空 → 遗留目录里带标记的 cli-manager-* 全删，用户自有文件保留
+        let deleted = cleanup_codex_profiles_in_dir(tmp.path(), &[]).unwrap();
+        assert_eq!(deleted, vec!["cli-manager-legacy".to_string()]);
+        assert!(!managed.exists());
+        assert!(unmanaged.exists());
     }
 
     #[test]

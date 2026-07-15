@@ -21,6 +21,7 @@ These guides help you **ask the right questions before coding**.
 
 | Guide | Purpose | When to Use |
 |-------|---------|-------------|
+| [Fix Triage Guide](./fix-triage-guide.md) | Triage: minimal fix vs root-cause fix; scenario-enumeration gate for new features / root causes | **Before every bug fix or new feature — pass this gate first** |
 | [Code Reuse Thinking Guide](./code-reuse-thinking-guide.md) | Identify patterns and reduce duplication | When you notice repeated patterns |
 | [Cross-Layer Thinking Guide](./cross-layer-thinking-guide.md) | Think through data flow across layers | Features spanning multiple layers |
 | [Task Delivery Checklist](./task-delivery-checklist.md) | Enforce repo-specific start/finish delivery rules | Before any file-writing task and before final commit |
@@ -30,6 +31,15 @@ These guides help you **ask the right questions before coding**.
 ---
 
 ## Quick Reference: Thinking Triggers
+
+### First Decision: Minimal Fix or Root-Cause Fix? (before any bug fix / new feature)
+
+- [ ] Task is "fix a bug / fix an issue" → run the triage test first, don't rush to edit
+- [ ] Task is "add a feature / requirement" → enumerate scenarios first, don't build only the happy path
+- [ ] You feel the urge to "wrap it in a try/catch / add a fallback" at the error site
+- [ ] The bug only reproduces under a specific state (focus, split pane, WSL, Worktree, hook installed or not…)
+
+→ Read [Fix Triage Guide](./fix-triage-guide.md) (entry gate; points back to the two guides below for depth)
 
 ### When to Think About Cross-Layer Issues
 

@@ -74,6 +74,37 @@ grep -r "keyword" .
 
 ---
 
+## File Size: A Signal, Not a Limit
+
+> **A large file is a signal to look, not a rule to obey.** There is no hard line count.
+
+Do **not** split a file just to hit a number. Splitting a cohesive file by line count scatters
+related logic and makes it *harder* to follow. Tooling (grep + offset reads + the GitNexus symbol
+graph) locates symbols fine regardless of file length — "help the AI read it" is **not** a valid
+reason to split.
+
+The real cost of a large file is **implicit coupling**, not reading effort: when 100 functions
+share the same refs, closures, and effect dependencies in one module, changing one safely means
+reasoning about all of them. That is exactly the "patch here, break there" risk the
+[fix-triage-guide](./fix-triage-guide.md) §1 flags as a cross-boundary hazard.
+
+### When a big file trips the signal, ask one question
+
+**"Is this file doing several unrelated things, or one thing thoroughly?"**
+
+| The file is… | Action |
+|---|---|
+| A **junk drawer** — rendering + IPC/PTY bridging + shortcuts + state sync tangled together | Consider splitting **along responsibility seams** — to decouple and reduce blast radius, not to shrink the number |
+| **Cohesive** — single responsibility, clear state, rarely churns (even if long) | Leave it. Splitting wastes effort and hurts readability |
+
+### If you do split
+
+- Split by **responsibility boundary**, never by line count.
+- Don't create a `utils.ts` junk drawer — that hides coupling instead of removing it.
+- This is a refactor: run `gitnexus_impact` first, and it needs its own task/approval — don't fold it into an unrelated change.
+
+---
+
 ## After Batch Modifications
 
 When you've made similar changes to multiple files:

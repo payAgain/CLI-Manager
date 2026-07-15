@@ -25,12 +25,13 @@
 - 鉴权：仅 `127.0.0.1`；token 随机 UUID，首帧校验失败立即断连并记日志；`daemon.json` 写入用户主目录（继承用户 ACL），不进日志。所有请求帧字段做格式/范围校验（sessionId 必须是已知 UUID，cols/rows 有界），非法帧断连——WebView→Rust→daemon 全程按不可信输入处理。
 - Ring buffer：每会话保留尾部输出，字节上限默认 2 MiB/会话（≈对齐 `SNAPSHOT_MAX_LINES=2000` 的量级），attach 回放该 buffer；超限丢头部，必须在 ANSI 安全边界处丢弃。
 - 生命周期：
-  - app 启动：读 daemon.json → 版本握手成功且 pid 存活 → attach `list` 全部会话；文件不存在/连接失败/token 拒绝 → 视为无 daemon，拉起新 daemon（Windows `DETACHED_PROCESS|CREATE_NEW_PROCESS_GROUP`，Unix `setsid`）；拉起失败 → **降级进程内 PTY，应用必须照常可用**，仅 toast 提示后台续跑不可用。
+  - app 启动：读 daemon.json → 版本握手成功且 pid 存活 → attach `list` 全部会话；文件不存在/连接失败/token 拒绝 → 视为无 daemon，拉起新 daemon（Windows 仅使用 `CREATE_NO_WINDOW`，Unix `setsid`）；拉起失败 → **降级进程内 PTY，应用必须照常可用**，仅 toast 提示后台续跑不可用。
   - app 正常退出：默认 `detach`（daemon 续跑）；用户在 Phase 1 弹窗选"仍然退出"→ 先 `close_all` 再退出（保持"仍然退出=中断任务"语义不变）。
   - daemon 自灭：无会话 且 无客户端连接 持续 10 分钟 → 自动退出并删 daemon.json。有会话时永不自灭。
   - 版本握手不匹配：daemon 无会话 → daemon 自杀，app 拉起新版本；有会话 → 沿用旧 daemon 并记 warn（协议帧需向后兼容：未知字段忽略，未知 type 报错不崩）。
 - 孤儿回收：`pty_reconcile_active_sessions` 语义改为对 daemon 会话集执行；app 崩溃后 daemon 中的会话不是孤儿（这正是特性），只有 daemon.json 中 pid 已死而残留的 PTY 子进程才按现有孤儿清理逻辑处理。
 - **★进程治理（防孤儿/防性能劣化）**：
+  - **Windows ConPTY Ctrl+C 契约**：daemon 自举禁止使用 `DETACHED_PROCESS` 或 `CREATE_NEW_PROCESS_GROUP`。ConPTY 收到 ETX (`0x03`) 后需要向兼容的控制台进程组投递 Ctrl+C；错误 flags 会造成普通输入正常、但运行中的 PowerShell/CMD/Claude/Codex 任务无法中断。GUI 主进程本身无控制台，Windows daemon 仅使用 `CREATE_NO_WINDOW` 隐藏窗口。
   - **Job Object 兜底**：Windows 上 daemon 启动即创建 `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` 的 Job Object，所有 PTY 子进程挂入——daemon 无论正常退出还是被强杀，系统自动回收全部子进程树，物理上杜绝 PTY 孤儿（Unix 对应 `setsid` + 进程组 kill）。
   - **daemon 单实例**：启动时以独占创建方式写 daemon.json；发现已有存活实例（pid 活且端口可握手）→ 新 daemon 立即自退，禁止多 daemon 并存。
   - **孤儿 daemon 清扫**：app 每次启动扫描一次——daemon.json 存在但 pid 已死 → 删文件；反向情况（无文件但存在同名 `cli-manager-daemon` 进程且属当前用户、且非另一环境实例）→ 尝试连接握手，握手不上视为僵尸，优雅终止失败后 kill。
@@ -59,7 +60,7 @@
 
 ### 6. Tests Required（验收标准）
 
-- Rust 单测：协议帧编解码（含未知字段/未知 type）、auth 失败断连、ring buffer 上限与 ANSI 边界丢弃、daemon.json 读写与 pid 存活判定、dev/安装版文件名选择。
+- Rust 单测：协议帧编解码（含未知字段/未知 type）、auth 失败断连、ring buffer 上限与 ANSI 边界丢弃、daemon.json 读写与 pid 存活判定、dev/安装版文件名选择；Windows daemon flags 必须等于 `CREATE_NO_WINDOW` 且不得包含 `DETACHED_PROCESS` / `CREATE_NEW_PROCESS_GROUP`。
 - `cd src-tauri && cargo check && cargo test`；`npx tsc --noEmit`。
 - 手动：真退出→daemon 续跑→重开 attach 回放；杀 daemon→app 降级可用；杀 app→daemon 10 分钟内因仍有会话不自灭；无会话 10 分钟后 daemon 自灭且 daemon.json 删除；"仍然退出"确实 close_all；hook 通知在 app 重启后仍能绑定 Tab 状态；WSL/PowerShell/CMD/Pwsh 各建一次会话行为一致；dev 与安装版并行互不串扰。
 
@@ -80,4 +81,17 @@ app_handle.emit(&format!("pty-output-{id}"), base64(chunk));
 let safe = safe_emit_boundary(&pending); // daemon 侧
 send_frame(OutputFrame { session_id, data: base64(safe) });
 // app 侧收到帧后原样 re-emit，不做任何再分片
+```
+
+#### Wrong
+
+```rust
+command.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW);
+```
+
+#### Correct
+
+```rust
+// 保持 ConPTY Ctrl+C 控制事件的进程组兼容性。
+command.creation_flags(CREATE_NO_WINDOW);
 ```

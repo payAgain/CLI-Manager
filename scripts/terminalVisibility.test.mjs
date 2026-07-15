@@ -32,6 +32,28 @@ test("refreshTerminalViewport skips terminals without visible rows", () => {
   assert.deepEqual(calls, []);
 });
 
+test("didRenderFullTerminalViewport accepts a render covering every visible row", () => {
+  assert.equal(
+    terminalVisibility.didRenderFullTerminalViewport({ start: 0, end: 23 }, 24),
+    true,
+  );
+});
+
+test("didRenderFullTerminalViewport rejects partial or empty viewport renders", () => {
+  assert.equal(
+    terminalVisibility.didRenderFullTerminalViewport({ start: 0, end: 22 }, 24),
+    false,
+  );
+  assert.equal(
+    terminalVisibility.didRenderFullTerminalViewport({ start: 1, end: 23 }, 24),
+    false,
+  );
+  assert.equal(
+    terminalVisibility.didRenderFullTerminalViewport({ start: 0, end: 0 }, 0),
+    false,
+  );
+});
+
 test("planTerminalVisibilityRestore resumes queued active writes when a hidden terminal becomes visible again", () => {
   const plan = terminalVisibility.planTerminalVisibilityRestore({
     wasVisible: false,

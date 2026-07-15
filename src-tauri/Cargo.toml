@@ -1,6 +1,6 @@
 [package]
 name = "cli-manager"
-version = "1.2.7"
+version = "1.2.8"
 description = "A lightweight desktop app for managing CLI tools across multiple projects"
 authors = ["tianhao.zhao", "zhang.yuan"]
 license = "AGPL-3.0-or-later"
@@ -40,6 +40,7 @@ tauri-plugin-fs = "2"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "http2"] }
 base64 = "0.22"
 sha2 = "0.10"
+hmac = "0.12.1"
 chrono = { version = "0.4", features = ["serde"] }
 zip = { version = "0.6", default-features = false, features = ["deflate"] }
 memchr = "2"

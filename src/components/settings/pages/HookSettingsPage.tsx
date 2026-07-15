@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
-import { ActionIcon, Badge, Box, Button, Card, Group, SimpleGrid, Stack, Switch, Text, TextInput } from "@mantine/core";
+import { ActionIcon, Badge, Box, Button, Card, Divider, Group, SimpleGrid, Stack, Switch, Text, TextInput } from "@mantine/core";
 import { Play, CheckCircle, HelpCircle, ChevronDown, ChevronUp, Folder, FileCode, Copy, Check, X, Activity, Bell, ShieldAlert, ToggleRight, AlertTriangle, BellOff, XCircle, Layers } from "lucide-react";
-import { useSettingsStore, type HookEventType } from "@/stores/settingsStore";
+import { useSettingsStore, type HookEventType, type HookSettingsSectionKey } from "@/stores/settingsStore";
 import { useI18n, type AppLanguage } from "@/lib/i18n";
+import { ThirdPartyNotificationSection } from "../ThirdPartyNotificationSection";
 
 type HookInstallStatus = "directoryMissing" | "notInstalled" | "partialInstalled" | "installed";
 type HookTool = "claude" | "codex";
@@ -429,6 +430,53 @@ function SettingsSwitchRow({
   );
 }
 
+function CollapsibleHookSection({
+  title,
+  description,
+  open,
+  onToggle,
+  children,
+  right,
+}: {
+  title: string;
+  description?: string;
+  open: boolean;
+  onToggle: () => void;
+  children: ReactNode;
+  right?: ReactNode;
+}) {
+  return (
+    <section className="ui-surface-card overflow-hidden rounded-2xl border border-border">
+      <button
+        type="button"
+        onClick={onToggle}
+        className="ui-focus-ring flex w-full items-center justify-between gap-3 p-4 text-left outline-none transition-colors hover:bg-surface-container-highest/50"
+        aria-expanded={open}
+      >
+        <Box className="min-w-0">
+          <Text size="sm" fw={600} c="var(--on-surface)">
+            {title}
+          </Text>
+          {description && (
+            <Text mt={4} size="xs" c="var(--on-surface-variant)">
+              {description}
+            </Text>
+          )}
+        </Box>
+        <Group gap="xs" wrap="nowrap">
+          {right}
+          <ChevronDown
+            size={18}
+            strokeWidth={1.8}
+            className={`shrink-0 text-text-muted transition-transform ${open ? "rotate-180" : ""}`}
+          />
+        </Group>
+      </button>
+      {open && <Box px="md" pt="sm" pb="md">{children}</Box>}
+    </section>
+  );
+}
+
 export function HookSettingsPage() {
   const { language, t } = useI18n();
   const text = (zh: string, en: string) => pickText(language, zh, en);
@@ -444,9 +492,12 @@ export function HookSettingsPage() {
   const hookPopupAutoCloseEnabled = useSettingsStore((s) => s.hookPopupAutoCloseEnabled);
   const hookPopupAutoCloseSeconds = useSettingsStore((s) => s.hookPopupAutoCloseSeconds);
   const hookSubagentSplitViewEnabled = useSettingsStore((s) => s.hookSubagentSplitViewEnabled);
+  const claudeHookBridgeEnabled = useSettingsStore((s) => s.claudeHookBridgeEnabled);
+  const codexHookBridgeEnabled = useSettingsStore((s) => s.codexHookBridgeEnabled);
   const systemNotificationsEnabled = useSettingsStore((s) => s.systemNotificationsEnabled);
   const suppressSystemNotificationsWhenFocused = useSettingsStore((s) => s.suppressSystemNotificationsWhenFocused);
   const systemNotificationEvents = useSettingsStore((s) => s.systemNotificationEvents);
+  const hookSettingsSectionsExpanded = useSettingsStore((s) => s.hookSettingsSectionsExpanded);
   const ccSwitchDbPath = useSettingsStore((s) => s.ccSwitchDbPath);
   const claudeHookAutoRepairKnownInstalled = useSettingsStore((s) => s.claudeHookAutoRepairKnownInstalled);
   const claudeHookAutoRepairNoticeShown = useSettingsStore((s) => s.claudeHookAutoRepairNoticeShown);
@@ -456,6 +507,14 @@ export function HookSettingsPage() {
   const [claudeInfoOpen, setClaudeInfoOpen] = useState(false);
   const [codexPathsOpen, setCodexPathsOpen] = useState(false);
   const [codexInfoOpen, setCodexInfoOpen] = useState(false);
+
+  const toggleHookSection = (key: HookSettingsSectionKey) => {
+    const current = useSettingsStore.getState().hookSettingsSectionsExpanded;
+    void updateSetting("hookSettingsSectionsExpanded", {
+      ...current,
+      [key]: !current[key],
+    });
+  };
 
   useEffect(() => {
     setAutoCloseSecondsDraft(String(hookPopupAutoCloseSeconds));
@@ -471,7 +530,7 @@ export function HookSettingsPage() {
         selectedDir: dir,
         codexSelectedDir: codexDir,
         ccSwitchDbPath: ccSwitchDbPath ?? undefined,
-        autoRepair: claudeHookAutoRepairKnownInstalled,
+        autoRepair: claudeHookBridgeEnabled && claudeHookAutoRepairKnownInstalled,
       });
       setStatus(nextStatus);
       if (nextStatus.claude.configDir) {
@@ -730,17 +789,14 @@ export function HookSettingsPage() {
   };
   const notifyState = (events: HookEventType[]) => events.every((e) => systemNotificationEvents[e]);
   return (
-    <Stack gap="md">
-      <section className="ui-surface-card rounded-2xl border border-border p-4">
+    <Stack gap="lg">
+      <CollapsibleHookSection
+        title={text("Hook 通知弹框", "Hook Toast Notifications")}
+        description={text("控制 Claude Code 和 Codex CLI Hook 事件的右上角弹框；终端标签小圆点不受这里的弹框开关影响。", "Controls top-right toast cards for Claude Code and Codex CLI Hook events. Terminal tab dots are not affected.")}
+        open={hookSettingsSectionsExpanded.toast}
+        onToggle={() => toggleHookSection("toast")}
+      >
         <Stack gap="md">
-          <Box>
-            <Text size="sm" fw={600} c="var(--on-surface)">
-              {text("Hook 通知弹框", "Hook Toast Notifications")}
-            </Text>
-            <Text mt={4} size="xs" c="var(--on-surface-variant)">
-              {text("控制 Claude Code 和 Codex CLI Hook 事件的右上角弹框；终端标签小圆点不受这里的弹框开关影响。", "Controls top-right toast cards for Claude Code and Codex CLI Hook events. Terminal tab dots are not affected.")}
-            </Text>
-          </Box>
           <SettingsSwitchRow
             title={text("通知弹框", "Toast Notifications")}
             description={text("关闭后不再弹出 Hook 通知卡片，只更新标签栏小圆点颜色。", "When disabled, Hook notification cards stop popping up; only tab dot color updates.")}
@@ -795,11 +851,14 @@ export function HookSettingsPage() {
             </Group>
           </Card>
         </Stack>
-      </section>
+      </CollapsibleHookSection>
 
-      <CcSwitchProtectionCard status={ccSwitchProtection} />
-
-      <Card className="border border-border bg-surface-container-low" p="sm" radius="lg">
+      <CollapsibleHookSection
+        title={text("Hook 通知", "Hook Notifications")}
+        description={text("管理系统通知和第三方通知派发。", "Manage OS notifications and third-party delivery.")}
+        open={hookSettingsSectionsExpanded.notifications}
+        onToggle={() => toggleHookSection("notifications")}
+      >
         <Stack gap="sm">
           <Group justify="space-between" align="center" gap="md">
             <Group gap="sm">
@@ -840,24 +899,28 @@ export function HookSettingsPage() {
               aria-label={t("settings.hooks.systemNotifications.focusSuppress.title")}
             />
           </Group>
+          <Divider />
+          <ThirdPartyNotificationSection embedded />
         </Stack>
-      </Card>
+      </CollapsibleHookSection>
 
-      <section className="ui-surface-card rounded-2xl border border-border p-4">
+      <CollapsibleHookSection
+        title={text("Claude Code Hook 桥接", "Claude Code Hook Bridge")}
+        description={text("Claude Code 的运行中、待审批、完成和异常退出状态通过 Hook 上报。", "Claude Code running, approval, completion, and failure states are reported through Hook.")}
+        open={hookSettingsSectionsExpanded.claude}
+        onToggle={() => toggleHookSection("claude")}
+        right={<StatusPill status={claudeStatus} />}
+      >
         <Stack gap="lg">
-          <Group justify="space-between" align="flex-start" gap="md">
-            <Box>
-              <Text size="sm" fw={600} c="var(--on-surface)">
-                {text("Claude Code Hook 桥接", "Claude Code Hook Bridge")}
-              </Text>
-              <Text mt={4} size="xs" c="var(--on-surface-variant)">
-                {text("Claude Code 的运行中、待审批、完成和异常退出状态通过 Hook 上报；普通 shell 命令由通用 Shell 运行监控补充。", "Claude Code running, approval, completion, and failure states are reported through Hook. Normal shell commands are covered by generic Shell runtime monitoring.")}
-              </Text>
-            </Box>
-            <StatusPill status={claudeStatus} />
-          </Group>
-
-          <SimpleGrid cols={{ base: 2, sm: 3 }} spacing="md">
+          <SettingsSwitchRow
+            title={t("settings.hooks.bridge.enabled")}
+            description={t("settings.hooks.bridge.claudeEnabled")}
+            checked={claudeHookBridgeEnabled}
+            onCheckedChange={(checked) => void updateSetting("claudeHookBridgeEnabled", checked)}
+          />
+          {claudeHookBridgeEnabled && (
+            <>
+              <SimpleGrid cols={{ base: 2, sm: 3 }} spacing="md">
             <HookCard
               icon={<Play />}
               label={claudeSessionStartLabel}
@@ -1031,25 +1094,29 @@ export function HookSettingsPage() {
             <Button variant="default" color="gray" size="xs" onClick={() => void refreshStatus()} disabled={loading || claudeWorking || codexWorking}>
               {loading ? text("刷新中...", "Refreshing...") : text("刷新状态", "Refresh Status")}
             </Button>
-          </Group>
+              </Group>
+            </>
+          )}
         </Stack>
-      </section>
+      </CollapsibleHookSection>
 
-      <section className="ui-surface-card rounded-2xl border border-border p-4">
+      <CollapsibleHookSection
+        title={text("Codex CLI Hook 桥接", "Codex CLI Hook Bridge")}
+        description={text("Codex 的运行中、待审批和完成状态通过 Hook 上报。", "Codex running, approval, and completion states are reported through Hook.")}
+        open={hookSettingsSectionsExpanded.codex}
+        onToggle={() => toggleHookSection("codex")}
+        right={<StatusPill status={codexStatus} />}
+      >
         <Stack gap="lg">
-          <Group justify="space-between" align="flex-start" gap="md">
-            <Box>
-              <Text size="sm" fw={600} c="var(--on-surface)">
-                {text("Codex CLI Hook 桥接", "Codex CLI Hook Bridge")}
-              </Text>
-              <Text mt={4} size="xs" c="var(--on-surface-variant)">
-                {text("Codex 的运行中、待审批和完成状态通过 Hook 上报；普通 shell 命令由通用 Shell 运行监控补充。", "Codex running, approval, and completion states are reported through Hook. Normal shell commands are covered by generic Shell runtime monitoring.")}
-              </Text>
-            </Box>
-            <StatusPill status={codexStatus} />
-          </Group>
-
-          <SimpleGrid cols={{ base: 2, sm: 3 }} spacing="md">
+          <SettingsSwitchRow
+            title={t("settings.hooks.bridge.enabled")}
+            description={t("settings.hooks.bridge.codexEnabled")}
+            checked={codexHookBridgeEnabled}
+            onCheckedChange={(checked) => void updateSetting("codexHookBridgeEnabled", checked)}
+          />
+          {codexHookBridgeEnabled && (
+            <>
+              <SimpleGrid cols={{ base: 2, sm: 3 }} spacing="md">
             <HookCard
               icon={<Play />}
               label={codexSessionStartLabel}
@@ -1226,9 +1293,13 @@ export function HookSettingsPage() {
             <Button variant="default" color="gray" size="xs" onClick={() => void refreshStatus()} disabled={loading || claudeWorking || codexWorking}>
               {loading ? text("刷新中...", "Refreshing...") : text("刷新状态", "Refresh Status")}
             </Button>
-          </Group>
+              </Group>
+            </>
+          )}
         </Stack>
-      </section>
+      </CollapsibleHookSection>
+
+      <CcSwitchProtectionCard status={ccSwitchProtection} />
     </Stack>
   );
 }

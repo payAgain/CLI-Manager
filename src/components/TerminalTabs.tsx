@@ -2835,10 +2835,13 @@ export function TerminalTabs({
           selectedDir: settings.claudeHookConfigDir?.trim() || null,
           codexSelectedDir: settings.codexHookConfigDir?.trim() || null,
           ccSwitchDbPath: settings.ccSwitchDbPath ?? undefined,
-          autoRepair: settings.claudeHookAutoRepairKnownInstalled,
+          autoRepair: settings.claudeHookBridgeEnabled && settings.claudeHookAutoRepairKnownInstalled,
         }
       );
-      if (status.claude.status !== "installed" && status.codex.status !== "installed") {
+      const hasEnabledInstalledHook =
+        (settings.claudeHookBridgeEnabled && status.claude.status === "installed") ||
+        (settings.codexHookBridgeEnabled && status.codex.status === "installed");
+      if (!hasEnabledInstalledHook) {
         toast.warning(t("notifications.stats.needHook"), {
           description: t("notifications.stats.needHookDescription"),
         });

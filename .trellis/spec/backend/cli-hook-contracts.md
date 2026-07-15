@@ -2,6 +2,78 @@
 
 Concrete contracts for Claude/Codex hook integration.
 
+## Scenario: Per-Tool Hook Bridge Enablement
+
+### 1. Scope / Trigger
+
+- Trigger: users may install only Claude Code or only Codex CLI, so the unused bridge must not keep the shared Hook health indicator in a warning state.
+- Applies to: persisted frontend settings, Hook settings UI, sidebar health/reinstall behavior, stats availability checks, Claude auto-repair, and terminal Hook environment injection.
+
+### 2. Signatures
+
+```ts
+interface Settings {
+  claudeHookBridgeEnabled: boolean;
+  codexHookBridgeEnabled: boolean;
+}
+```
+
+- Both settings default to `true` for backward compatibility.
+- Backend `hook_settings_get_status` keeps its existing signature; frontend callers gate `autoRepair` and interpret the returned per-tool status through the enable settings.
+
+### 3. Contracts
+
+- Disabled tools are excluded from the sidebar Hook health aggregation and one-click reinstall target list.
+- A disabled tool keeps only its settings-section header, enable switch, and status pill visible; module cards, paths, install notes, and install/remove actions are not rendered until the bridge is enabled again.
+- When both tools are disabled, the sidebar light is neutral/gray and clicking it only opens Hook settings.
+- Claude auto-repair may be requested only when `claudeHookBridgeEnabled && claudeHookAutoRepairKnownInstalled`.
+- Stats availability is true only when at least one enabled tool reports `status === "installed"`.
+- New terminals inject the shared Hook bridge environment only when at least one enabled tool reports `status === "installed"`.
+- Disabling a bridge does not uninstall or rewrite existing user Hook files.
+
+### 4. Validation & Error Matrix
+
+| Condition | Behavior |
+|-----------|----------|
+| Stored enable value is missing/invalid | Use default `true` |
+| Claude disabled, Codex installed/enabled | Health is green; no Claude auto-repair |
+| Codex disabled, Claude installed/enabled | Health is green; Claude auto-repair may run when previously installed |
+| Both disabled | Neutral light; no reinstall; no Hook env injection |
+| Enabled tool status request fails | Preserve existing caller error handling; do not assume installed |
+
+### 5. Good/Base/Bad Cases
+
+- Good: a Claude-only user disables Codex and gets a green health light when Claude is fully installed.
+- Good: disabling Codex immediately collapses its detail content; enabling it again restores the detail content from the existing status and local UI state.
+- Base: an existing user upgrades with no stored enable settings; both bridges remain enabled.
+- Bad: a disabled Codex bridge remains part of the shared health aggregation and keeps the light yellow.
+- Bad: disabling Claude still sends `autoRepair: true` and rewrites Claude settings.
+
+### 6. Tests Required
+
+- TypeScript type-check after settings fields, migration, or status filtering changes.
+- Manual settings persistence check across restart for both switches.
+- Manual settings UI check: disabling either bridge collapses only that bridge's detail content and enabling it restores the content.
+- Manual health matrix: Claude-only, Codex-only, both enabled, both disabled, and partial enabled installation.
+- Manual terminal check: both disabled must not inject the Hook bridge environment into new PTY sessions.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```ts
+return status.claude.status === "installed" || status.codex.status === "installed";
+```
+
+#### Correct
+
+```ts
+return (
+  (settings.claudeHookBridgeEnabled && status.claude.status === "installed") ||
+  (settings.codexHookBridgeEnabled && status.codex.status === "installed")
+);
+```
+
 ## Scenario: Sub-Agent Transcript Hook
 
 ### 1. Scope / Trigger
@@ -220,6 +292,33 @@ showClaudeHookToast(payload, tabId);
 showClaudeHookToast(payload, tabId);
 void sendSystemNotification(payload, tabTitle);
 ```
+
+## Scenario: Third-party Hook Notifications
+
+### 1. Scope / Trigger
+
+- Trigger: the local bridge or daemon accepts a validated Claude/Codex Hook payload for `SessionStart`, `UserPromptSubmit`, `Notification`, `Stop`, `StopFailure`, or `PermissionRequest`.
+- Applies to: `src-tauri/src/claude_hook.rs`, `src-tauri/src/daemon/server.rs`, `src-tauri/src/third_party_notification/*`, `thirdPartyHookTargets` in settings, and the Hook settings UI.
+
+### 2. Contracts
+
+- Dispatch ownership belongs to the process that actually receives the Hook HTTP request: app bridge in in-process mode, daemon hook sink in daemon mode.
+- Frontend `listen("claude-hook-notification")` handlers must not send third-party notifications; daemon cache replay is for UI state only and must not cause a second remote send.
+- Dispatch is best-effort and non-blocking: the sink may only try to enqueue into the bounded queue and must continue original emit/status/broadcast work even when the queue is full.
+- `thirdPartyHookNotificationsEnabled === false` disables production fan-out while keeping saved targets untouched; manual test send remains available for validating a draft target.
+- Remote message content is limited to a safe summary: CLI source, cwd basename project name, event label, 24-hour local time from the user's system timezone, generated notification UUID, and a short action summary derived only from the event enum. It must not include `payload.message`, Prompt, terminal output, absolute cwd, tab/session id, transcript paths/content, tool args, or environment variables.
+- Default remote copy may include fixed event emoji derived from the event enum only.
+- Supported providers: DingTalk, Feishu, WeCom, Bark, PushPlus, WxPusher, ServerChan, Telegram, ntfy, Gotify, and Custom HTTP.
+- Built-in providers must parse provider business responses, not treat HTTP 2xx alone as success. Custom HTTP accepts any 2xx.
+- Custom HTTP supports only GET/POST, fixed variable replacement, query, headers, JSON/form/text body, and no scripts/conditions/functions.
+- Secrets remain in the existing settings store; UI masking is not encryption. Logs must not include full URL/query/header/body/token/secret/device key or raw remote response.
+
+### 3. Tests Required
+
+- Rust unit tests for message minimization, unsupported event filtering, Custom HTTP JSON leaf replacement, and controlled header rejection.
+- Rust compile check must pass after bridge/daemon/command changes.
+- TypeScript type-check must pass after settings migration or Hook settings UI changes.
+- Regression: one Hook payload produces at most one third-party dispatch in app mode and one in daemon mode; frontend reconnect/cache replay produces zero additional remote dispatches.
 
 ## Scenario: CLI Hook Protection Through cc-switch Common Config
 

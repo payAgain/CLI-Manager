@@ -88,10 +88,18 @@ src-tauri/src/
 - migrations 定义在 `src-tauri/src/lib.rs`
 - 前端通过 `@tauri-apps/plugin-sql` 的 `Database.load("sqlite:cli-manager.db")` 直接执行 SQL
 
+## 修复与新需求前置（强制）
+
+改任何 bug、加任何需求前，先过分诊闸机 `.trellis/spec/guides/fix-triage-guide.md`：
+
+- **修 bug**：先判定"最小修复"还是"根因修复"。表现层静态值（颜色/文案/常量）走最小修复；行为性、跨边界、回归、偶发或你想加兜底的，一律走根因——产出根因陈述 + 发现清单，禁止只在症状处打补丁。
+- **加需求**：动手前对照该文档 §5 的场景维度清单枚举场景（窗口焦点、分屏、WSL、Worktree、hook 装没装……），别只做主路径漏掉边界场景。
+- 找全代码触点优先用 GitNexus，不可用时降级到 `.trellis/spec/*-contracts.md` 契约 + grep。
+
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **CLI-Manager** (13434 symbols, 25594 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **CLI-Manager** (13529 symbols, 25798 relationships, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > If any GitNexus tool warns the index is stale, run `npx gitnexus analyze` in terminal first.
 

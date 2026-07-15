@@ -618,15 +618,15 @@ function TokenCompositionStrip({ stats }: { stats: HistoryStatsPayload }) {
 
   return (
     <section className="rounded-2xl border border-border/60 bg-bg-secondary px-4 py-3">
-      <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
-        <div className="min-w-[150px]">
+      <div className="flex flex-col gap-3">
+        <div>
           <div className="inline-flex items-center gap-1.5 text-[12px] font-semibold text-text-primary">
             <Layers size={13} className="text-accent" />
             {t("stats.tokenComposition")}
           </div>
           <div className="mt-0.5 text-[11px] text-text-muted">{t("stats.tokenCompositionHint")}</div>
         </div>
-        <div className="h-[150px] min-w-[180px] flex-1">
+        <div className="h-[150px] w-full">
           {chartData.length > 0 ? (
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
@@ -649,7 +649,7 @@ function TokenCompositionStrip({ stats }: { stats: HistoryStatsPayload }) {
             <EmptyBlock text={t("stats.trend.empty")} />
           )}
         </div>
-        <div className="grid min-w-[260px] grid-cols-1 gap-1.5 text-[11px] text-text-secondary sm:grid-cols-2 lg:grid-cols-1">
+        <div className="grid w-full grid-cols-1 gap-1.5 text-[11px] text-text-secondary">
           {parts.map((item) => (
             <div key={item.key} className="flex items-center justify-between gap-3 rounded-lg bg-bg-primary px-2 py-1.5">
               <span className="inline-flex min-w-0 items-center gap-1.5">
@@ -1395,11 +1395,11 @@ export function StatsPanel({ open, onClose, onOpenSession }: StatsPanelProps) {
           </div>
         )}
 
-        <div className="min-h-0 flex-1 overflow-y-auto p-4 xl:p-5">
+        <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto p-4 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden xl:p-5">
           {activeTab === "requests" ? (
             <RequestLogsView onOpenSession={async (key) => { await onOpenSession(key); onClose(); }} />
           ) : (
-            <div className="mx-auto w-full max-w-[1800px] space-y-3">
+            <div className="w-full space-y-3">
               {(waitingForStatsQuery || (loadingStats && !stats)) && <StatsSkeleton />}
               {!waitingForStatsQuery && !loadingStats && statsError && (
                 <section className="space-y-2 rounded-2xl border border-border/60 bg-bg-secondary p-4 text-[12px] text-danger">
@@ -1414,7 +1414,7 @@ export function StatsPanel({ open, onClose, onOpenSession }: StatsPanelProps) {
                   <ContextNote sourceLabel={sourceLabel} projectLabel={projectLabel} dateRangeLabel={dateRangeLabel} stats={stats} />
                   <DailyUsageTrendChart items={trendItems} granularity={statsGranularity} />
 
-                  <div className="grid grid-cols-1 gap-3 md:grid-cols-2 2xl:grid-cols-4">
+                  <div className="grid grid-cols-1 gap-3 md:grid-cols-2 2xl:grid-cols-4 [&>*]:h-full">
                     <ProjectRanking
                       items={stats.project_ranking}
                       selectedProjectKey={projectKey}
@@ -1426,7 +1426,7 @@ export function StatsPanel({ open, onClose, onOpenSession }: StatsPanelProps) {
                     <TokenCompositionStrip stats={stats} />
                   </div>
 
-                  <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
+                  <div className="grid grid-cols-1 gap-3 xl:grid-cols-2 [&>*]:h-full">
                     <SourceBreakdown items={stats.source_distribution} />
                     <section className="rounded-2xl border border-border/60 bg-bg-secondary p-4">
                       <SectionHeading icon={Activity} title={heatmapTitle} />

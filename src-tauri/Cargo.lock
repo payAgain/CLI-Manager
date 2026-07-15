@@ -628,12 +628,13 @@ dependencies = [
 
 [[package]]
 name = "cli-manager"
-version = "1.2.7"
+version = "1.2.8"
 dependencies = [
  "base64 0.22.1",
  "chrono",
  "fontdb",
  "git2",
+ "hmac",
  "keyring-core",
  "local-ip-address",
  "log",

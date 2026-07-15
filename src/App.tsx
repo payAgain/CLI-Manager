@@ -142,7 +142,7 @@ async function hasInstalledCliHook(): Promise<boolean> {
     selectedDir: settings.claudeHookConfigDir?.trim() || null,
     codexSelectedDir: settings.codexHookConfigDir?.trim() || null,
     ccSwitchDbPath: settings.ccSwitchDbPath ?? undefined,
-    autoRepair: settings.claudeHookAutoRepairKnownInstalled,
+    autoRepair: settings.claudeHookBridgeEnabled && settings.claudeHookAutoRepairKnownInstalled,
   });
   if (status.claudeAutoRepaired && !settings.claudeHookAutoRepairNoticeShown) {
     toast.info(translateCurrent("notifications.hook.autoRepaired.title"), {
@@ -150,7 +150,10 @@ async function hasInstalledCliHook(): Promise<boolean> {
     });
     void settings.update("claudeHookAutoRepairNoticeShown", true);
   }
-  return status.claude.status === "installed" || status.codex.status === "installed";
+  return (
+    (settings.claudeHookBridgeEnabled && status.claude.status === "installed") ||
+    (settings.codexHookBridgeEnabled && status.codex.status === "installed")
+  );
 }
 
 type ClaudeHookToastVariant = "attention" | "approval" | "finished" | "failed";

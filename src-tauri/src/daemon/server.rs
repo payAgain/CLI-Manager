@@ -10,6 +10,7 @@ use super::protocol::{
     SessionStatusInfo, MAX_FRAME_BYTES,
 };
 use crate::claude_hook::{spawn_hook_listener, HookPayloadSink};
+use crate::third_party_notification::DispatcherHandle;
 use crate::pty::manager::{PtyEventSink, PtyManager, PtyProcessStatus};
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
@@ -346,8 +347,10 @@ impl DaemonServer {
         });
 
         let hook_host = Arc::clone(&server.host);
+        let dispatcher = DispatcherHandle::start("daemon");
         let hook_sink: HookPayloadSink = Arc::new(move |payload| {
             maybe_activate_app_for_hook(&payload);
+            dispatcher.try_enqueue(payload.to_notification_job());
             match serde_json::to_value(&payload) {
                 Ok(value) => {
                     hook_host.update_task_status_from_hook(&value);

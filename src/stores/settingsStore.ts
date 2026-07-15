@@ -18,6 +18,10 @@ import {
   migrateTerminalShellProfiles,
   type TerminalShellProfile,
 } from "../lib/terminalShellProfiles";
+import {
+  sanitizeThirdPartyHookTargets,
+  type ThirdPartyHookTarget,
+} from "../lib/thirdPartyNotifications";
 
 export type ThemeMode = "dark" | "light" | "system";
 export type LightThemePalette =
@@ -85,6 +89,8 @@ export type TerminalPanelWidthKey = "merged" | "stats" | "git" | "replay" | "fil
 export type TerminalPanelWidthSettings = Record<TerminalPanelWidthKey, number>;
 export type TerminalSettingsSectionKey = "behavior" | "shells" | "themes" | "background";
 export type TerminalSettingsSectionsExpanded = Record<TerminalSettingsSectionKey, boolean>;
+export type HookSettingsSectionKey = "toast" | "notifications" | "claude" | "codex";
+export type HookSettingsSectionsExpanded = Record<HookSettingsSectionKey, boolean>;
 export const UI_FONT_SIZE_MIN = 11;
 export const UI_FONT_SIZE_MAX = 18;
 export const UI_FONT_SIZE_DEFAULT = 13;
@@ -114,6 +120,18 @@ export const TERMINAL_SETTINGS_SECTIONS_EXPANDED_DEFAULT: TerminalSettingsSectio
   shells: false,
   themes: false,
   background: false,
+};
+export const HOOK_SETTINGS_SECTION_KEYS: readonly HookSettingsSectionKey[] = [
+  "toast",
+  "notifications",
+  "claude",
+  "codex",
+];
+export const HOOK_SETTINGS_SECTIONS_EXPANDED_DEFAULT: HookSettingsSectionsExpanded = {
+  toast: false,
+  notifications: false,
+  claude: false,
+  codex: false,
 };
 export type ShortcutAction =
   | "newTerminal"
@@ -321,9 +339,15 @@ interface Settings {
   hookPopupAutoCloseEnabled: boolean;
   hookPopupAutoCloseSeconds: number;
   hookSubagentSplitViewEnabled: boolean;
+  claudeHookBridgeEnabled: boolean;
+  codexHookBridgeEnabled: boolean;
   systemNotificationsEnabled: boolean;
   suppressSystemNotificationsWhenFocused: boolean;
   systemNotificationEvents: Record<HookEventType, boolean>;
+  /** Hook 设置页各可折叠区块的展开状态记忆。 */
+  hookSettingsSectionsExpanded: HookSettingsSectionsExpanded;
+  thirdPartyHookNotificationsEnabled: boolean;
+  thirdPartyHookTargets: ThirdPartyHookTarget[];
   claudeHookConfigDir: string | null;
   claudeHookAutoRepairKnownInstalled: boolean;
   claudeHookAutoRepairNoticeShown: boolean;
@@ -465,6 +489,8 @@ const DEFAULTS: Settings = {
   hookPopupAutoCloseEnabled: true,
   hookPopupAutoCloseSeconds: 60,
   hookSubagentSplitViewEnabled: true,
+  claudeHookBridgeEnabled: true,
+  codexHookBridgeEnabled: true,
   systemNotificationsEnabled: true,
   suppressSystemNotificationsWhenFocused: true,
   systemNotificationEvents: {
@@ -475,6 +501,9 @@ const DEFAULTS: Settings = {
     StopFailure: true,
     PermissionRequest: true,
   },
+  hookSettingsSectionsExpanded: { ...HOOK_SETTINGS_SECTIONS_EXPANDED_DEFAULT },
+  thirdPartyHookNotificationsEnabled: true,
+  thirdPartyHookTargets: [],
   claudeHookConfigDir: null,
   claudeHookAutoRepairKnownInstalled: false,
   claudeHookAutoRepairNoticeShown: false,
@@ -671,6 +700,18 @@ export function migrateTerminalSettingsSectionsExpanded(value: unknown): Termina
   }
   const raw = value as Partial<Record<TerminalSettingsSectionKey, unknown>>;
   return TERMINAL_SETTINGS_SECTION_KEYS.reduce<TerminalSettingsSectionsExpanded>((next, key) => {
+    next[key] = typeof raw[key] === "boolean" ? raw[key] : defaults[key];
+    return next;
+  }, { ...defaults });
+}
+
+export function migrateHookSettingsSectionsExpanded(value: unknown): HookSettingsSectionsExpanded {
+  const defaults = HOOK_SETTINGS_SECTIONS_EXPANDED_DEFAULT;
+  if (typeof value !== "object" || value === null) {
+    return { ...defaults };
+  }
+  const raw = value as Partial<Record<HookSettingsSectionKey, unknown>>;
+  return HOOK_SETTINGS_SECTION_KEYS.reduce<HookSettingsSectionsExpanded>((next, key) => {
     next[key] = typeof raw[key] === "boolean" ? raw[key] : defaults[key];
     return next;
   }, { ...defaults });
@@ -1151,6 +1192,14 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
       typeof entries.hookSubagentSplitViewEnabled === "boolean"
         ? entries.hookSubagentSplitViewEnabled
         : DEFAULTS.hookSubagentSplitViewEnabled;
+    entries.claudeHookBridgeEnabled =
+      typeof entries.claudeHookBridgeEnabled === "boolean"
+        ? entries.claudeHookBridgeEnabled
+        : DEFAULTS.claudeHookBridgeEnabled;
+    entries.codexHookBridgeEnabled =
+      typeof entries.codexHookBridgeEnabled === "boolean"
+        ? entries.codexHookBridgeEnabled
+        : DEFAULTS.codexHookBridgeEnabled;
     entries.systemNotificationsEnabled =
       typeof entries.systemNotificationsEnabled === "boolean"
         ? entries.systemNotificationsEnabled
@@ -1160,6 +1209,12 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
         ? entries.suppressSystemNotificationsWhenFocused
         : DEFAULTS.suppressSystemNotificationsWhenFocused;
     entries.systemNotificationEvents = migrateSystemNotificationEvents(entries.systemNotificationEvents);
+    entries.hookSettingsSectionsExpanded = migrateHookSettingsSectionsExpanded(entries.hookSettingsSectionsExpanded);
+    entries.thirdPartyHookNotificationsEnabled =
+      typeof entries.thirdPartyHookNotificationsEnabled === "boolean"
+        ? entries.thirdPartyHookNotificationsEnabled
+        : DEFAULTS.thirdPartyHookNotificationsEnabled;
+    entries.thirdPartyHookTargets = sanitizeThirdPartyHookTargets(entries.thirdPartyHookTargets);
     entries.claudeHookConfigDir =
       typeof entries.claudeHookConfigDir === "string" && entries.claudeHookConfigDir.trim()
         ? entries.claudeHookConfigDir

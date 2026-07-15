@@ -28,6 +28,14 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const SPAWN_RETRY_INTERVAL: Duration = Duration::from_millis(250);
 const SPAWN_RETRY_MAX: usize = 20;
 
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+#[cfg(target_os = "windows")]
+fn windows_daemon_creation_flags() -> u32 {
+    CREATE_NO_WINDOW
+}
+
 pub struct DaemonClient {
     info: DaemonInfo,
     writer: Mutex<TcpStream>,
@@ -447,12 +455,9 @@ fn spawn_daemon_process() -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
         use std::os::windows::process::CommandExt;
-        // DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW：
-        // 与 app 进程解绑、独立进程组、无控制台窗口（契约）。
-        const DETACHED_PROCESS: u32 = 0x0000_0008;
-        const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        command.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW);
+        // 仅隐藏控制台窗口。不要创建 detached/new process group：ConPTY 收到 ETX
+        // 后需要向兼容的控制台进程组投递 Ctrl+C，否则普通输入正常但运行任务无法中断。
+        command.creation_flags(windows_daemon_creation_flags());
     }
     #[cfg(unix)]
     {
@@ -486,5 +491,21 @@ fn read_line_bounded(reader: &mut BufReader<TcpStream>) -> Option<String> {
             log::warn!("daemon client read failed: {err}");
             None
         }
+    }
+}
+
+#[cfg(all(test, target_os = "windows"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn windows_daemon_keeps_conpty_ctrl_c_process_group_compatible() {
+        const DETACHED_PROCESS: u32 = 0x0000_0008;
+        const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+
+        let flags = windows_daemon_creation_flags();
+        assert_eq!(flags, CREATE_NO_WINDOW);
+        assert_eq!(flags & DETACHED_PROCESS, 0);
+        assert_eq!(flags & CREATE_NEW_PROCESS_GROUP, 0);
     }
 }

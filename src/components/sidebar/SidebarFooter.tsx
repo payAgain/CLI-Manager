@@ -38,13 +38,21 @@ function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function getApplicableTools(status: HookSettingsStatus | null): HookTool[] {
+function getApplicableTools(
+  status: HookSettingsStatus | null,
+  enabledTools: Record<HookTool, boolean>
+): HookTool[] {
   if (!status) return [];
-  return (["claude", "codex"] as const).filter((tool) => Boolean(status[tool].configDir));
+  return (["claude", "codex"] as const).filter(
+    (tool) => enabledTools[tool] && Boolean(status[tool].configDir)
+  );
 }
 
-function getHookLightStatus(status: HookSettingsStatus | null): HookLightStatus {
-  const tools = getApplicableTools(status);
+function getHookLightStatus(
+  status: HookSettingsStatus | null,
+  enabledTools: Record<HookTool, boolean>
+): HookLightStatus {
+  const tools = getApplicableTools(status, enabledTools);
   if (tools.length === 0) return "missing";
 
   const statuses = tools.map((tool) => status?.[tool].status ?? "directoryMissing");
@@ -58,6 +66,8 @@ function HookStatusLight({ onOpenSettings }: { onOpenSettings: (tab?: SettingsTa
   const claudeHookConfigDir = useSettingsStore((s) => s.claudeHookConfigDir);
   const codexHookConfigDir = useSettingsStore((s) => s.codexHookConfigDir);
   const ccSwitchDbPath = useSettingsStore((s) => s.ccSwitchDbPath);
+  const claudeHookBridgeEnabled = useSettingsStore((s) => s.claudeHookBridgeEnabled);
+  const codexHookBridgeEnabled = useSettingsStore((s) => s.codexHookBridgeEnabled);
   const claudeHookAutoRepairKnownInstalled = useSettingsStore((s) => s.claudeHookAutoRepairKnownInstalled);
   const claudeHookAutoRepairNoticeShown = useSettingsStore((s) => s.claudeHookAutoRepairNoticeShown);
   const updateSetting = useSettingsStore((s) => s.update);
@@ -67,7 +77,12 @@ function HookStatusLight({ onOpenSettings }: { onOpenSettings: (tab?: SettingsTa
 
   const selectedDir = useMemo(() => trimDir(claudeHookConfigDir), [claudeHookConfigDir]);
   const codexSelectedDir = useMemo(() => trimDir(codexHookConfigDir), [codexHookConfigDir]);
-  const lightStatus = getHookLightStatus(status);
+  const enabledTools = useMemo<Record<HookTool, boolean>>(
+    () => ({ claude: claudeHookBridgeEnabled, codex: codexHookBridgeEnabled }),
+    [claudeHookBridgeEnabled, codexHookBridgeEnabled]
+  );
+  const allBridgesDisabled = !claudeHookBridgeEnabled && !codexHookBridgeEnabled;
+  const lightStatus = getHookLightStatus(status, enabledTools);
 
   const refreshStatus = useCallback(async () => {
     setLoading(true);
@@ -76,7 +91,7 @@ function HookStatusLight({ onOpenSettings }: { onOpenSettings: (tab?: SettingsTa
         selectedDir,
         codexSelectedDir,
         ccSwitchDbPath: ccSwitchDbPath ?? undefined,
-        autoRepair: claudeHookAutoRepairKnownInstalled,
+        autoRepair: claudeHookBridgeEnabled && claudeHookAutoRepairKnownInstalled,
       });
       setStatus(nextStatus);
       if (nextStatus.claudeAutoRepaired && !claudeHookAutoRepairNoticeShown) {
@@ -92,6 +107,7 @@ function HookStatusLight({ onOpenSettings }: { onOpenSettings: (tab?: SettingsTa
     }
   }, [
     ccSwitchDbPath,
+    claudeHookBridgeEnabled,
     claudeHookAutoRepairKnownInstalled,
     claudeHookAutoRepairNoticeShown,
     codexSelectedDir,
@@ -104,7 +120,7 @@ function HookStatusLight({ onOpenSettings }: { onOpenSettings: (tab?: SettingsTa
   }, [refreshStatus]);
 
   const reinstallHooks = async () => {
-    const tools = getApplicableTools(status);
+    const tools = getApplicableTools(status, enabledTools);
     if (tools.length === 0) {
       toast.info(t("sidebar.hook.chooseConfigDir"));
       onOpenSettings("hooks");
@@ -150,6 +166,10 @@ function HookStatusLight({ onOpenSettings }: { onOpenSettings: (tab?: SettingsTa
   };
 
   const handleClick = () => {
+    if (allBridgesDisabled) {
+      onOpenSettings("hooks");
+      return;
+    }
     if (lightStatus === "installed") {
       onOpenSettings("hooks");
       return;
@@ -157,8 +177,9 @@ function HookStatusLight({ onOpenSettings }: { onOpenSettings: (tab?: SettingsTa
     void reinstallHooks();
   };
 
-  const title =
-    lightStatus === "installed"
+  const title = allBridgesDisabled
+    ? t("sidebar.hook.disabled")
+    : lightStatus === "installed"
       ? t("sidebar.hook.ok")
       : lightStatus === "partial"
         ? t("sidebar.hook.partial")

@@ -982,14 +982,18 @@ function scheduleHookRunningTimeout(tabId: string, updatedAt: string) {
 
 async function shouldEnableHookEnv(): Promise<boolean> {
   const settings = useSettingsStore.getState();
+  if (!settings.claudeHookBridgeEnabled && !settings.codexHookBridgeEnabled) return false;
   try {
     const status = await invoke<HookSettingsStatusPayload>("hook_settings_get_status", {
       selectedDir: settings.claudeHookConfigDir?.trim() || null,
       codexSelectedDir: settings.codexHookConfigDir?.trim() || null,
       ccSwitchDbPath: settings.ccSwitchDbPath ?? undefined,
-      autoRepair: settings.claudeHookAutoRepairKnownInstalled,
+      autoRepair: settings.claudeHookBridgeEnabled && settings.claudeHookAutoRepairKnownInstalled,
     });
-    return status.claude.status === "installed" || status.codex.status === "installed";
+    return (
+      (settings.claudeHookBridgeEnabled && status.claude.status === "installed") ||
+      (settings.codexHookBridgeEnabled && status.codex.status === "installed")
+    );
   } catch (err) {
     logError("hook_settings_get_status failed while deciding terminal hook env", { err });
     return false;

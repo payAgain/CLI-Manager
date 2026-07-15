@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { Terminal, type IBufferCell, type IBufferLine, type ILink, type ITheme } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { ImageAddon } from "@xterm/addon-image";
-import { SearchAddon, type ISearchOptions } from "@xterm/addon-search";
+import { SearchAddon } from "@xterm/addon-search";
 import { SerializeAddon } from "@xterm/addon-serialize";
 import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { WebLinksAddon } from "@xterm/addon-web-links";
@@ -28,13 +28,43 @@ import { debugConsoleWarn } from "../lib/debugConsole";
 import { translateCurrent, useI18n } from "../lib/i18n";
 import { buildFastCursorMoveSequence } from "../lib/terminalCursorMovement";
 import { normalizeTerminalFontFamily } from "../lib/terminalFontFamily";
-import { decodeOscPathValue, parseOsc7Cwd } from "../lib/terminalOscPath";
+import { parseOsc7Cwd } from "../lib/terminalOscPath";
 import {
-  absolutePathToProjectRelative,
-  findTerminalFileLinks,
-  resolveTerminalFileSystemPath,
-} from "../lib/terminalFileLinks";
-import { findProjectByPath, findWorktreeByPath, projectWithWorktreePath } from "../lib/terminalProject";
+  LEGACY_RUNTIME_OSC_PREFIX,
+  OSC_PREFIX,
+  findOscTerminator,
+  formatSpecialColorReply,
+  matchIntegrationOscPrefix,
+  parseSpecialColorQuery,
+  parseStandardIntegrationCwd,
+} from "../lib/terminalOscParse";
+import { findTerminalFileLinks, resolveTerminalFileSystemPath } from "../lib/terminalFileLinks";
+import { findProjectByPath, findWorktreeByPath } from "../lib/terminalProject";
+import { useTerminalSearch } from "../hooks/useTerminalSearch";
+import { useTerminalContextMenu } from "../hooks/useTerminalContextMenu";
+import { getTerminalCellWidth, resolveCursorIndexFromCellOffset } from "../lib/terminalCellWidth";
+import {
+  clampTextCursorIndex,
+  getTextCursorLength,
+  insertTextAtCursor,
+  removeTextAtCursor,
+  removeTextBeforeCursor,
+  repeatControlSequence,
+  sliceTextByCursor,
+} from "../lib/terminalTextEditing";
+import { hexToRgba, normalizeHexColor } from "../lib/terminalColor";
+import {
+  arrayBufferToBase64,
+  createClipboardImageFileName,
+  getClipboardImageFile,
+  hasDataTransferType,
+} from "../lib/terminalClipboardImage";
+import {
+  terminalShortcutMatches,
+  trimTerminalPasteBoundaryLineBreaks,
+  wrapTerminalPasteTextForCtrlShiftV,
+} from "../lib/terminalKeyboard";
+import { formatShellPathList, joinLocalPath, normalizeShellForKnownOs } from "../lib/terminalShellPath";
 import {
   TERMINAL_INPUT_SUGGESTION_BUILTIN_PROMPT,
   TERMINAL_INPUT_SUGGESTION_AI_MODEL,
@@ -54,7 +84,11 @@ import {
   registerTerminalDropZone,
   updateTerminalFileDragPointFromEvent,
 } from "../lib/terminalFileDrag";
-import { planTerminalVisibilityRestore, refreshTerminalViewport } from "../lib/terminalVisibility";
+import {
+  didRenderFullTerminalViewport,
+  planTerminalVisibilityRestore,
+  refreshTerminalViewport,
+} from "../lib/terminalVisibility";
 import {
   getLinuxGraphicsDiagnostics,
   isLinuxGraphicsConstrained,
@@ -63,14 +97,11 @@ import {
 import {
   defaultShellForOs,
   getOsPlatform,
-  normalizeShellForOs,
   normalizeShellKey,
   type OsPlatform,
-  type ShellKey,
 } from "../lib/shell";
 import { Portal } from "./ui/Portal";
 import { useCommandHistoryStore } from "../stores/commandHistoryStore";
-import { useFileExplorerStore } from "../stores/fileExplorerStore";
 import { useProjectStore } from "../stores/projectStore";
 import { useTemplateStore } from "../stores/templateStore";
 import { formatStartupInputForPty, useTerminalStore, type ShellRuntimeEventName } from "../stores/terminalStore";
@@ -93,6 +124,7 @@ const SUGGESTION_LOCAL_DEBOUNCE_MS = 80;
 const SUGGESTION_AI_DEBOUNCE_MS = 400;
 const ENABLE_CLICK_CURSOR_POSITIONING = false;
 const HIDDEN_WEBGL_DISPOSE_DELAY_MS = 10_000;
+const VISIBILITY_RESTORE_REVEAL_TIMEOUT_MS = 500;
 // Minimum time the app must stay in the background before a foreground return
 // triggers a glyph-atlas rebuild. GPU sleep / lock screen (the corruption
 // trigger) implies a long absence; quick alt-tabs skip the re-rasterization.
@@ -104,17 +136,7 @@ import { toast } from "sonner";
 import { logError, logInfo, logWarn } from "../lib/logger";
 import { registerTerminalSnapshotSource, markTerminalSnapshotDirty } from "../lib/sessionSnapshotPersistence";
 
-// Shell integration OSC 序列在原始 PTY 流上解析（而非 xterm parser hook）：
-// 后台 Tab 的输出会进入 inactive ring buffer 且可能被截断丢弃，状态事件必须
-// 在丢弃之前提取，否则后台 Tab 不再上报状态。
-// 777 为本应用私有协议（消费后剥离）；7/133/633 为 cwd / FinalTerm / VS Code 标准
-// shell integration 序列（消费后原样放行，xterm 会忽略），借此兼容 oh-my-posh、
-// VS Code shell integration 等用户自带集成。
-const LEGACY_RUNTIME_OSC_PREFIX = "\x1b]777;cli-manager;";
-const CWD_OSC_PREFIX = "\x1b]7;";
-const INTEGRATION_OSC_PREFIXES = ["\x1b]133;", "\x1b]633;", CWD_OSC_PREFIX, LEGACY_RUNTIME_OSC_PREFIX];
 const OSC_CARRY_BUFFER_MAX = 8192;
-const OSC_PREFIX = "\x1b]";
 const XTERM_BG_COLOR_MASK = 0x03ffffff;
 const XTERM_COLOR_MODE_RGB = 0x03000000;
 const XTERM_INVERSE_FLAG = 0x04000000;
@@ -136,50 +158,7 @@ const IME_CROSS_SOURCE_DUPLICATE_WINDOW_MS = 80;
 const NATIVE_TEXT_INPUT_DEDUP_WINDOW_MS = 16;
 const CJK_NATIVE_PUNCTUATION_PATTERN = /^[\u3000-\u303f\uff01-\uff0f\uff1a-\uff20\uff3b-\uff40\uff5b-\uff65]+$/u;
 
-type SpecialColorQueryId = 10 | 11;
 type TerminalInputSource = "onData" | "nativeTextInput";
-
-type OscPrefixMatch =
-  | { kind: "match"; prefix: string }
-  | { kind: "partial" }
-  | { kind: "none" };
-
-function parseStandardIntegrationCwd(command: string, rest: string): string | null {
-  if (command !== "P") return null;
-  const field = rest.split(";").find((part) => part.toLocaleLowerCase().startsWith("cwd="));
-  if (!field) return null;
-  const value = decodeOscPathValue(field.slice(field.indexOf("=") + 1)).trim();
-  return value || null;
-}
-
-const matchIntegrationOscPrefix = (text: string, start: number): OscPrefixMatch => {
-  let partial = false;
-  for (const prefix of INTEGRATION_OSC_PREFIXES) {
-    const available = Math.min(prefix.length, text.length - start);
-    if (text.startsWith(prefix.slice(0, available), start)) {
-      if (available === prefix.length) return { kind: "match", prefix };
-      partial = true;
-    }
-  }
-  return partial ? { kind: "partial" } : { kind: "none" };
-};
-
-// 终止符：BEL 或 ST（ESC \）。null 表示序列尚未完整（跨 chunk，需缓冲）。
-type OscTerminator = { index: number; length: number } | { abortAt: number } | null;
-
-const findOscTerminator = (text: string, from: number): OscTerminator => {
-  for (let i = from; i < text.length; i += 1) {
-    const code = text.charCodeAt(i);
-    if (code === 0x07) return { index: i, length: 1 };
-    if (code === 0x1b) {
-      if (i + 1 >= text.length) return null;
-      if (text[i + 1] === "\\") return { index: i, length: 2 };
-      // OSC body 内不应出现裸 ESC，按非法序列放行避免吞掉正常输出
-      return { abortAt: i };
-    }
-  }
-  return null;
-};
 
 type MutableXtermCell = IBufferCell & {
   fg: number;
@@ -196,11 +175,6 @@ type XtermBufferLineApiView = IBufferLine & {
   // xterm's public buffer line is read-only; v6 keeps the mutable line here.
   _line?: MutableXtermLine;
 };
-
-interface SearchResultState {
-  resultIndex: number;
-  resultCount: number;
-}
 
 interface TerminalSuggestionGhostState {
   suffix: string;
@@ -223,12 +197,6 @@ interface CodexImeDebugState {
   lastNearCompositionAt: number;
 }
 
-const EMPTY_SEARCH_RESULT: SearchResultState = { resultIndex: 0, resultCount: 0 };
-
-const normalizeHexColor = (value: string | undefined, fallback: string) => (
-  value && /^#[0-9a-f]{6}$/i.test(value) ? value : fallback
-);
-
 const summarizeTextForDiagnostics = (value: string): TextDiagnosticSummary => {
   let hash = 0;
   let hasNonAscii = false;
@@ -248,16 +216,6 @@ const getInactiveBufferLimit = (scrollbackRows: number) => Math.min(
   INACTIVE_BUFFER_MAX_CHARS,
   Math.max(INACTIVE_BUFFER_MIN_CHARS, scrollbackRows * INACTIVE_BUFFER_CHARS_PER_SCROLLBACK_ROW)
 );
-
-const hexToRgba = (value: string | undefined, alpha: number, fallback: string) => {
-  const normalized = normalizeHexColor(value, "");
-  if (!normalized) return fallback;
-  const hex = normalized.slice(1);
-  const r = Number.parseInt(hex.slice(0, 2), 16);
-  const g = Number.parseInt(hex.slice(2, 4), 16);
-  const b = Number.parseInt(hex.slice(4, 6), 16);
-  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
-};
 
 const getTerminalRenderedCellSize = (terminal: Terminal, terminalContainer: HTMLElement, fallbackFontSize: number) => {
   const renderedCell = (
@@ -295,25 +253,6 @@ const getTerminalRenderedCellSize = (terminal: Terminal, terminalContainer: HTML
   };
 };
 
-const parseSpecialColorQuery = (body: string): SpecialColorQueryId | null => {
-  const separator = body.indexOf(";");
-  if (separator < 0) return null;
-  const oscId = body.slice(0, separator);
-  const payload = body.slice(separator + 1).trim();
-  if (payload !== "?") return null;
-  if (oscId === "10") return 10;
-  if (oscId === "11") return 11;
-  return null;
-};
-
-const formatSpecialColorReply = (queryId: SpecialColorQueryId, hex: string) => {
-  const normalized = normalizeHexColor(hex, queryId === 10 ? "#d8dee9" : "#0c0e10");
-  const r = normalized.slice(1, 3);
-  const g = normalized.slice(3, 5);
-  const b = normalized.slice(5, 7);
-  return `${OSC_PREFIX}${queryId};rgb:${r}${r}/${g}${g}/${b}${b}\x1b\\`;
-};
-
 const copyTextToClipboard = async (text: string) => {
   if (!text) return;
   try {
@@ -335,67 +274,6 @@ const copyTextToClipboard = async (text: string) => {
 };
 
 const readClipboardText = async () => navigator.clipboard.readText();
-
-const terminalEventToCombo = (e: KeyboardEvent): string => {
-  const parts: string[] = [];
-  if (e.ctrlKey) parts.push("Ctrl");
-  if (e.shiftKey) parts.push("Shift");
-  if (e.altKey) parts.push("Alt");
-  if (e.metaKey) parts.push("Meta");
-
-  if (["Control", "Shift", "Alt", "Meta"].includes(e.key)) return "";
-  parts.push(e.key.length === 1 ? e.key.toUpperCase() : e.key);
-  return parts.join("+");
-};
-
-const terminalShortcutMatches = (e: KeyboardEvent, shortcut: string) => (
-  shortcut.trim() !== "" && terminalEventToCombo(e) === shortcut
-);
-
-const trimTerminalPasteBoundaryLineBreaks = (text: string) => (
-  text.replace(/^(?:\r\n?|\n)+|(?:\r\n?|\n)+$/gu, "")
-);
-
-const wrapTerminalPasteTextForCtrlShiftV = (text: string) => {
-  const trimmed = trimTerminalPasteBoundaryLineBreaks(text);
-  return /[\r\n]/u.test(trimmed) ? `'${trimmed}'` : trimmed;
-};
-
-const isCombiningCodePoint = (codePoint: number) => (
-  (codePoint >= 0x0300 && codePoint <= 0x036f) ||
-  (codePoint >= 0x1ab0 && codePoint <= 0x1aff) ||
-  (codePoint >= 0x1dc0 && codePoint <= 0x1dff) ||
-  (codePoint >= 0x20d0 && codePoint <= 0x20ff) ||
-  (codePoint >= 0xfe00 && codePoint <= 0xfe0f)
-);
-
-const isWideCodePoint = (codePoint: number) => (
-  codePoint >= 0x1100 && (
-    codePoint <= 0x115f ||
-    codePoint === 0x2329 ||
-    codePoint === 0x232a ||
-    (codePoint >= 0x2e80 && codePoint <= 0xa4cf && codePoint !== 0x303f) ||
-    (codePoint >= 0xac00 && codePoint <= 0xd7a3) ||
-    (codePoint >= 0xf900 && codePoint <= 0xfaff) ||
-    (codePoint >= 0xfe10 && codePoint <= 0xfe19) ||
-    (codePoint >= 0xfe30 && codePoint <= 0xfe6f) ||
-    (codePoint >= 0xff00 && codePoint <= 0xff60) ||
-    (codePoint >= 0xffe0 && codePoint <= 0xffe6) ||
-    (codePoint >= 0x1f300 && codePoint <= 0x1faff) ||
-    (codePoint >= 0x20000 && codePoint <= 0x3fffd)
-  )
-);
-
-const getTerminalCellWidth = (text: string) => {
-  let width = 0;
-  for (const char of text) {
-    const codePoint = char.codePointAt(0) ?? 0;
-    if (codePoint === 0) continue;
-    if (codePoint < 32 || (codePoint >= 0x7f && codePoint < 0xa0) || isCombiningCodePoint(codePoint)) continue;
-    width += isWideCodePoint(codePoint) ? 2 : 1;
-  }
-  return width;
-};
 
 const lineHasVisibleTextAfterColumn = (line: IBufferLine, column: number, cols: number) => {
   const width = Math.min(cols, line.length);
@@ -421,90 +299,28 @@ const canShowSuggestionAtCurrentInputEnd = (terminal: Terminal, input: string) =
   return beforeCursor.endsWith(input);
 };
 
-const getTextCursorLength = (text: string) => Array.from(text).length;
-
-const sliceTextByCursor = (text: string, start: number, end?: number) => (
-  Array.from(text).slice(start, end).join("")
-);
-
-const clampTextCursorIndex = (text: string, index: number) => (
-  Math.min(Math.max(0, index), getTextCursorLength(text))
-);
-
-const insertTextAtCursor = (text: string, cursorIndex: number, insertion: string) => {
-  const chars = Array.from(text);
-  const index = Math.min(Math.max(0, cursorIndex), chars.length);
-  chars.splice(index, 0, ...Array.from(insertion));
-  return chars.join("");
-};
-
-const removeTextBeforeCursor = (text: string, cursorIndex: number) => {
-  const chars = Array.from(text);
-  const index = Math.min(Math.max(0, cursorIndex), chars.length);
-  if (index <= 0) return { text, cursorIndex: index };
-  chars.splice(index - 1, 1);
-  return { text: chars.join(""), cursorIndex: index - 1 };
-};
-
-const removeTextAtCursor = (text: string, cursorIndex: number) => {
-  const chars = Array.from(text);
-  const index = Math.min(Math.max(0, cursorIndex), chars.length);
-  if (index >= chars.length) return { text, cursorIndex: index };
-  chars.splice(index, 1);
-  return { text: chars.join(""), cursorIndex: index };
-};
-
-const resolveCursorIndexFromCellOffset = (text: string, cellOffset: number) => {
-  const chars = Array.from(text);
-  if (cellOffset <= 0) return 0;
-  let consumedCells = 0;
-  for (let index = 0; index < chars.length; index += 1) {
-    const charWidth = Math.max(1, getTerminalCellWidth(chars[index]));
-    consumedCells += charWidth;
-    if (cellOffset < consumedCells) return index + 1;
-  }
-  return chars.length;
-};
-
-const repeatControlSequence = (sequence: string, count: number) => (
-  count > 0 ? sequence.repeat(count) : ""
-);
-
 const isLikelyMacPlatform = (os: OsPlatform) => (
   os === "macos" || (os === "unknown" && navigator.platform.toLowerCase().includes("mac"))
 );
 
-const withVisibleSelectionTheme = (theme: ITheme): ITheme => {
+// When search is active, SearchAddon calls terminal.select() on each match to
+// position it. A visible selection color would then cover the yellow match
+// decoration, so the current match looks "selected blue" until focus leaves.
+// Make the selection transparent while searching so the decoration shows.
+const withVisibleSelectionTheme = (theme: ITheme, searchActive = false): ITheme => {
+  if (searchActive) {
+    return {
+      ...theme,
+      selectionBackground: "rgba(0, 0, 0, 0)",
+      selectionInactiveBackground: "rgba(0, 0, 0, 0)",
+    };
+  }
   const isLight = isLightTerminalTheme(theme);
   return {
     ...theme,
     selectionBackground: isLight ? "rgba(37, 99, 235, 0.28)" : "rgba(56, 189, 248, 0.52)",
     selectionInactiveBackground: isLight ? "rgba(37, 99, 235, 0.18)" : "rgba(56, 189, 248, 0.34)",
-    selectionForeground: isLight ? "#0f172a" : "#f8fafc",
   };
-};
-
-const normalizeShellForKnownOs = (shell: string | null | undefined, os: OsPlatform): ShellKey | undefined => (
-  os === "unknown" ? normalizeShellKey(shell) : normalizeShellForOs(shell, os)
-);
-
-const quoteShellPath = (path: string, shell: string | null | undefined) => {
-  const normalized = normalizeShellKey(shell);
-  if (normalized === "cmd") return `"${path.replace(/"/g, "\"\"")}"`;
-  if (normalized === "powershell" || normalized === "pwsh") return `'${path.replace(/'/g, "''")}'`;
-  return `'${path.replace(/'/g, "'\\''")}'`;
-};
-
-const formatShellPathList = (paths: string[], shell: string | null | undefined) => (
-  paths.filter(Boolean).map((path) => quoteShellPath(path, shell)).join(" ")
-);
-
-const joinLocalPath = (rootPath: string, relativePath: string) => {
-  const normalizedRelativePath = relativePath.replace(/^[/\\]+/u, "");
-  if (/[\\/]/u.test(rootPath) && rootPath.includes("\\")) {
-    return `${rootPath.replace(/[\\/]+$/u, "")}\\${normalizedRelativePath.replace(/\//g, "\\")}`;
-  }
-  return `${rootPath.replace(/\/+$/u, "")}/${normalizedRelativePath.replace(/\\/g, "/")}`;
 };
 
 const attachClipboardImageData = async (rootPath: string, fileName: string, dataBase64: string) => (
@@ -514,45 +330,6 @@ const attachClipboardImageData = async (rootPath: string, fileName: string, data
 const cleanupExpiredAttachments = async (rootPath: string) => (
   invoke<number>("file_cleanup_expired_attachments", { rootPath })
 );
-
-const getClipboardImageFile = (clipboardData: DataTransfer | null) => {
-  const items = Array.from(clipboardData?.items ?? []);
-  const imageItem = items.find((item) => item.kind === "file" && item.type.startsWith("image/"));
-  return imageItem?.getAsFile() ?? null;
-};
-
-const getImageFileExtension = (file: File) => {
-  const typeExtension = file.type.split("/")[1]?.replace("jpeg", "jpg").replace(/[^a-z0-9]/gi, "").toLowerCase();
-  if (typeExtension) return typeExtension;
-  const nameExtension = file.name.split(".").pop()?.replace(/[^a-z0-9]/gi, "").toLowerCase();
-  return nameExtension || "png";
-};
-
-const createClipboardImageFileName = (file: File) => {
-  const trimmedName = file.name.trim();
-  if (trimmedName && /\.[a-z0-9]+$/iu.test(trimmedName)) return trimmedName;
-  const timestamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/u, "");
-  return `screenshot-${timestamp}.${getImageFileExtension(file)}`;
-};
-
-const arrayBufferToBase64 = (buffer: ArrayBuffer) => {
-  const bytes = new Uint8Array(buffer);
-  let binary = "";
-  const chunkSize = 0x8000;
-  for (let index = 0; index < bytes.length; index += chunkSize) {
-    binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize));
-  }
-  return btoa(binary);
-};
-
-const hasDataTransferType = (dataTransfer: DataTransfer | null, type: string): boolean => {
-  if (!dataTransfer) return false;
-  const types = dataTransfer.types as DataTransfer["types"] & {
-    contains?: (value: string) => boolean;
-  };
-  if (typeof types.contains === "function") return types.contains(type);
-  return Array.from(types).includes(type);
-};
 
 const openHttpUrl = (sessionId: string, uri: string) => {
   if (!/^https?:\/\//i.test(uri)) return;
@@ -573,34 +350,7 @@ const openTerminalFilePath = async (sessionId: string, rawPath: string) => {
   const systemPath = resolveTerminalFileSystemPath(rawPath, currentRootPath);
   if (!systemPath) return;
 
-  const targetWorktree = findWorktreeByPath(projectState.worktrees, systemPath);
-  const targetProject = targetWorktree
-    ? projectState.projects.find((item) => item.id === targetWorktree.project_id) ?? null
-    : findProjectByPath(projectState.projects, systemPath);
-  const fileProject = targetProject && targetWorktree
-    ? projectWithWorktreePath(targetProject, targetWorktree)
-    : targetProject;
-  const relativePath = fileProject ? absolutePathToProjectRelative(fileProject.path, systemPath) : null;
-
-  if (fileProject && relativePath) {
-    const fileName = relativePath.split("/").pop() || relativePath;
-    try {
-      const fileStore = useFileExplorerStore.getState();
-      await fileStore.openProject(fileProject);
-      await useFileExplorerStore.getState().openFile({
-        name: fileName,
-        path: relativePath,
-        kind: "file",
-        sizeBytes: 0,
-      });
-      terminalState.openFileEditorPane(fileProject);
-      return;
-    } catch (err) {
-      logError("Failed to open terminal file in editor", { sessionId, path: systemPath, err });
-    }
-  }
-
-  void invoke("open_folder_in_explorer", { path: systemPath, openFile: true }).catch((err) => {
+  void invoke("open_folder_in_explorer", { path: systemPath }).catch((err) => {
     logError("Failed to open terminal file", { sessionId, path: systemPath, err });
     toast.error(translateCurrent("files.toast.openFileFailed"), { description: String(err) });
   });
@@ -658,7 +408,6 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
   const { t } = useI18n();
   const wrapperRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-  const searchInputRef = useRef<HTMLInputElement | null>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const searchAddonRef = useRef<SearchAddon | null>(null);
@@ -682,6 +431,9 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
   const inactiveReplayStickToBottomRef = useRef(false);
   const inactiveReplayPendingWritesRef = useRef(0);
   const inactiveReplayPendingRef = useRef(false);
+  const visibilityRestorePendingRef = useRef(false);
+  const visibilityRestoreRevealTimerRef = useRef<number | null>(null);
+  const visibilityRestoreRevealRafRef = useRef<number | null>(null);
   const cursorShowTimerRef = useRef<number | null>(null);
   const tuiComposerNormalizeRafRef = useRef<number | null>(null);
   const runtimeOscBufferRef = useRef("");
@@ -715,16 +467,12 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
   const hiddenForThisSession = useTerminalStore((s) => s.hiddenBackgroundSessionIds.has(sessionId));
 
   const [assetUrl, setAssetUrl] = useState<string | null>(null);
-  const [searchOpen, setSearchOpen] = useState(false);
-  const [searchTerm, setSearchTerm] = useState("");
-  const [searchMatched, setSearchMatched] = useState<boolean | null>(null);
-  const [searchResult, setSearchResult] = useState<SearchResultState>(EMPTY_SEARCH_RESULT);
-  const [menuState, setMenuState] = useState<{ x: number; y: number; hasSelection: boolean } | null>(null);
   const [inactiveReplayPending, setInactiveReplayPending] = useState(false);
+  const [visibilityRestorePending, setVisibilityRestorePending] = useState(false);
   const [suggestionGhost, setSuggestionGhost] = useState<TerminalSuggestionGhostState | null>(null);
   const [linuxGraphicsConstrained, setLinuxGraphicsConstrained] = useState(false);
   const [linuxGraphicsDisableWebgl, setLinuxGraphicsDisableWebgl] = useState(false);
-  const menuRef = useRef<HTMLDivElement | null>(null);
+  const { menuState, menuRef, openMenu, closeContextMenu } = useTerminalContextMenu();
   const osPlatformRef = useRef<OsPlatform>("unknown");
   const codexImeDebugRef = useRef<CodexImeDebugState>({
     compositionEndAt: -1,
@@ -791,15 +539,36 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
     };
   }, [background.imagePath]);
 
-  useEffect(() => {
-    if (!searchOpen) return;
-    const rafId = window.requestAnimationFrame(() => {
-      searchInputRef.current?.focus();
-      searchInputRef.current?.select();
-    });
-    return () => window.cancelAnimationFrame(rafId);
-  }, [searchOpen]);
+  const isTransparent = background.enabled && background.imagePath !== null && !hiddenForThisSession;
+  const isTransparentRef = useRef(isTransparent);
+  isTransparentRef.current = isTransparent;
+  const terminalTheme = getTerminalTheme(terminalThemeName, resolvedTheme, lightThemePalette, darkThemePalette);
+  const isLightTerminalRef = useRef(isLightTerminalTheme(terminalTheme));
+  isLightTerminalRef.current = isLightTerminalTheme(terminalTheme);
+  const effectiveFontFamily = normalizeTerminalFontFamily(fontFamily);
 
+  // Derive search decoration colors before calling useTerminalSearch
+  const backgroundColor = getTerminalBackground(terminalThemeName, resolvedTheme, lightThemePalette, darkThemePalette);
+  const searchDecorationColors = {
+    matchBackground: normalizeHexColor(terminalTheme.yellow, "#e0af68"),
+    activeMatchBackground: normalizeHexColor(terminalTheme.blue, "#7aa2f7"),
+    accent: normalizeHexColor(terminalTheme.cursor, normalizeHexColor(terminalTheme.foreground, "#d8dee9")),
+  };
+
+  const {
+    searchOpen,
+    searchTerm,
+    searchMatched,
+    searchResult,
+    searchInputRef,
+    handleSearchResults,
+    runTerminalSearch,
+    handleSearchTermChange,
+    openSearch,
+    closeTerminalSearch,
+  } = useTerminalSearch(terminalRef, searchAddonRef, searchDecorationColors);
+
+  // Clear suggestions when search opens (must come after hook call to read searchOpen)
   useEffect(() => {
     if (terminalInputSuggestionsEnabled && !searchOpen) return;
     suggestionRef.current = null;
@@ -810,14 +579,6 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
     suggestionRef.current = null;
     setSuggestionGhost(null);
   }, [terminalInputSuggestionProvider]);
-
-  const isTransparent = background.enabled && background.imagePath !== null && !hiddenForThisSession;
-  const isTransparentRef = useRef(isTransparent);
-  isTransparentRef.current = isTransparent;
-  const terminalTheme = getTerminalTheme(terminalThemeName, resolvedTheme, lightThemePalette, darkThemePalette);
-  const isLightTerminalRef = useRef(isLightTerminalTheme(terminalTheme));
-  isLightTerminalRef.current = isLightTerminalTheme(terminalTheme);
-  const effectiveFontFamily = normalizeTerminalFontFamily(fontFamily);
 
   const clearHiddenWebglDisposeTimer = () => {
     if (webglDisposeTimerRef.current === null) return;
@@ -1410,6 +1171,56 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
     setInactiveReplayPending(pending);
   };
 
+  const clearVisibilityRestoreRevealSchedule = () => {
+    if (visibilityRestoreRevealTimerRef.current !== null) {
+      window.clearTimeout(visibilityRestoreRevealTimerRef.current);
+      visibilityRestoreRevealTimerRef.current = null;
+    }
+    if (visibilityRestoreRevealRafRef.current !== null) {
+      window.cancelAnimationFrame(visibilityRestoreRevealRafRef.current);
+      visibilityRestoreRevealRafRef.current = null;
+    }
+  };
+
+  const finishVisibilityRestoreReveal = () => {
+    clearVisibilityRestoreRevealSchedule();
+    if (!visibilityRestorePendingRef.current) return;
+    visibilityRestorePendingRef.current = false;
+    setVisibilityRestorePending(false);
+  };
+
+  const beginVisibilityRestoreReveal = () => {
+    clearVisibilityRestoreRevealSchedule();
+    if (!visibilityRestorePendingRef.current) {
+      visibilityRestorePendingRef.current = true;
+      setVisibilityRestorePending(true);
+    }
+    visibilityRestoreRevealTimerRef.current = window.setTimeout(() => {
+      visibilityRestoreRevealTimerRef.current = null;
+      finishVisibilityRestoreReveal();
+    }, VISIBILITY_RESTORE_REVEAL_TIMEOUT_MS);
+  };
+
+  const handleVisibilityRestoreRender = (terminal: Terminal, range: { start: number; end: number }) => {
+    if (
+      !visibilityRestorePendingRef.current
+      || terminalRef.current !== terminal
+      || !isVisibleRef.current
+      || !didRenderFullTerminalViewport(range, terminal.rows)
+      || visibilityRestoreRevealRafRef.current !== null
+    ) {
+      return;
+    }
+    if (visibilityRestoreRevealTimerRef.current !== null) {
+      window.clearTimeout(visibilityRestoreRevealTimerRef.current);
+      visibilityRestoreRevealTimerRef.current = null;
+    }
+    visibilityRestoreRevealRafRef.current = window.requestAnimationFrame(() => {
+      visibilityRestoreRevealRafRef.current = null;
+      finishVisibilityRestoreReveal();
+    });
+  };
+
   const hasQueuedInactiveReplay = () => activeWriteQueueRef.current.some((item) => item.inactiveReplay);
 
   const finishInactiveReplayIfReady = (terminal: Terminal) => {
@@ -1537,7 +1348,7 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
     const baseTheme = getTerminalTheme(terminalThemeName, resolvedTheme, lightThemePalette, darkThemePalette);
     const minimumContrastRatio = getTerminalMinimumContrastRatio(baseTheme, isTransparent);
     const nextTheme = isTransparent ? applyTransparency(baseTheme, background.overlayDarken) : baseTheme;
-    terminal.options.theme = withVisibleSelectionTheme(nextTheme);
+    terminal.options.theme = withVisibleSelectionTheme(nextTheme, searchOpen);
     if (terminal.options.minimumContrastRatio !== minimumContrastRatio) {
       terminal.options.minimumContrastRatio = minimumContrastRatio;
     }
@@ -1560,7 +1371,7 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
     }
     normalizeTuiComposerBackground(terminal);
     scheduleTuiComposerBackgroundNormalization(terminal);
-  }, [fontSize, effectiveFontFamily, terminalScrollbackRows, resolvedTheme, terminalThemeName, lightThemePalette, darkThemePalette, isTransparent, background.overlayDarken, lowMemoryMode, disableHardwareAcceleration, linuxGraphicsDisableWebgl]);
+  }, [fontSize, effectiveFontFamily, terminalScrollbackRows, resolvedTheme, terminalThemeName, lightThemePalette, darkThemePalette, isTransparent, background.overlayDarken, lowMemoryMode, disableHardwareAcceleration, linuxGraphicsDisableWebgl, searchOpen]);
 
   // Visibility drives live rendering. A pane tab is "visible" when it is the
   // shown tab in its own pane — which, in a split, includes panes that are not
@@ -1572,6 +1383,7 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
     isVisibleRef.current = isVisible;
 
     if (!isVisible) {
+      finishVisibilityRestoreReveal();
       clearHiddenWebglDisposeTimer();
       if ((lowMemoryMode || linuxGraphicsConstrained) && webglAddonRef.current) {
         webglDisposeTimerRef.current = window.setTimeout(() => {
@@ -1622,6 +1434,7 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
       activeWriteRafRef.current = requestAnimationFrame(flushActiveWriteQueue);
     }
     if (restorePlan.shouldRefreshViewport) {
+      beginVisibilityRestoreReveal();
       needsViewportRefreshRef.current = true;
     }
     // Wait for display:block to take effect and the layout to stabilize.
@@ -1704,7 +1517,7 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
       // xterm cannot toggle transparency after construction, so keep it enabled
       // even though WebGL is disabled while a background image is active.
       allowTransparency: true,
-      theme: withVisibleSelectionTheme(isTransparentRef.current ? applyTransparency(baseTheme, background.overlayDarken) : baseTheme),
+      theme: withVisibleSelectionTheme(isTransparentRef.current ? applyTransparency(baseTheme, background.overlayDarken) : baseTheme, false),
       // OSC 8 超链接（codex 等 CLI 输出）默认点击行为是 window.open，在 Tauri
       // webview 里会被拦成"是否导航"确认框。接管为系统默认浏览器打开，仅放行
       // http/https，避免恶意 scheme。
@@ -1752,9 +1565,7 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
     terminal.open(containerRef.current);
     // 注册定时节流落盘的快照来源：让崩溃/强杀也能恢复到最近一次落盘的画面。
     const unregisterSnapshotSource = registerTerminalSnapshotSource(sessionId, () => serializeAddon.serialize());
-    const searchResultDisposable = searchAddon.onDidChangeResults((event) => {
-      setSearchResult({ resultIndex: event.resultIndex, resultCount: event.resultCount });
-    });
+    const searchResultDisposable = searchAddon.onDidChangeResults(handleSearchResults);
 
     let webglAddon: WebglAddon | null = null;
     if (!(lowMemoryMode && !isVisibleRef.current) && canUseWebglRenderer(baseTheme)) {
@@ -1946,10 +1757,10 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
         keyboardInputSelection = null;
         selectedInputSnapshot = null;
         terminal.focus();
-        setMenuState(null);
+        closeContextMenu();
         return;
       }
-      setMenuState({ x: e.clientX, y: e.clientY, hasSelection: false });
+      openMenu(e.clientX, e.clientY, false);
     };
     contextMenuTarget.addEventListener("contextmenu", onContextMenu);
 
@@ -2297,28 +2108,81 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
     const removeSelectedInputText = () => {
       const selectedText = terminal.getSelection();
       const currentInput = inputBuffer.current;
+      const findSelectedTextRange = (preferredStartIndex?: number) => {
+        if (!selectedText || !currentInput) return null;
+        const candidates = [
+          selectedText,
+          selectedText.replace(/\r\n?/g, "\n"),
+          selectedText.replace(/\r\n?|\n/g, ""),
+        ].filter((text, index, list) => Boolean(text) && list.indexOf(text) === index);
+        const inputChars = Array.from(currentInput);
+
+        for (const candidate of candidates) {
+          const candidateChars = Array.from(candidate);
+          if (!candidateChars.length || candidateChars.length > inputChars.length) continue;
+
+          const ranges: Array<{ startIndex: number; endIndex: number }> = [];
+          for (let index = 0; index <= inputChars.length - candidateChars.length; index += 1) {
+            const matched = candidateChars.every((char, offset) => inputChars[index + offset] === char);
+            if (matched) {
+              ranges.push({ startIndex: index, endIndex: index + candidateChars.length });
+            }
+          }
+
+          if (ranges.length === 1 || (ranges.length && preferredStartIndex !== undefined)) {
+            return ranges.reduce((best, range) => (
+              Math.abs(range.startIndex - (preferredStartIndex ?? range.startIndex)) <
+              Math.abs(best.startIndex - (preferredStartIndex ?? best.startIndex))
+                ? range
+                : best
+            ));
+          }
+        }
+
+        return null;
+      };
+      const deleteInputRange = (startIndex: number, endIndex: number, stage: string) => {
+        if (startIndex >= endIndex) return false;
+        const nextInput = `${sliceTextByCursor(currentInput, 0, startIndex)}${sliceTextByCursor(currentInput, endIndex)}`;
+        rewriteCurrentInput(nextInput, stage, startIndex);
+        return true;
+      };
+
       if (keyboardInputSelection && terminal.hasSelection()) {
         const startIndex = Math.min(keyboardInputSelection.anchorIndex, keyboardInputSelection.focusIndex);
         const endIndex = Math.max(keyboardInputSelection.anchorIndex, keyboardInputSelection.focusIndex);
-        if (startIndex < endIndex) {
-          const focusIndex = keyboardInputSelection.focusIndex;
-          const nextInput = `${sliceTextByCursor(currentInput, 0, startIndex)}${sliceTextByCursor(currentInput, endIndex)}`;
-          const moveToSelectionEnd = repeatControlSequence("\x1b[C", endIndex - focusIndex);
-          const deleteSelection = repeatControlSequence("\x7f", endIndex - startIndex);
-          inputBuffer.current = nextInput;
-          inputCursorIndexRef.current = startIndex;
-          terminal.clearSelection();
-          keyboardInputSelection = null;
-          selectedInputSnapshot = null;
-          markAttentionInputHandled();
-          clearSuggestionGhost();
-          cancelAiSuggestionRefresh();
-          invoke("pty_write", { sessionId, data: `${moveToSelectionEnd}${deleteSelection}` })
-            .catch((err) => reportPtyWriteError("keyboard_selection_delete", err));
+        if (deleteInputRange(startIndex, endIndex, "keyboard_selection_delete")) return true;
+      }
+      keyboardInputSelection = null;
+
+      if (terminal.hasSelection() && currentInput) {
+        const selectionPosition = terminal.getSelectionPosition();
+        const visibleSelection = resolveVisibleInputSelection();
+        if (selectionPosition && visibleSelection) {
+          const inputStartCellIndex = (visibleSelection.startRow * terminal.cols) + visibleSelection.startColumn;
+          const inputEndCellIndex = inputStartCellIndex + visibleSelection.length;
+          const selectionStartCellIndex = (selectionPosition.start.y * terminal.cols) + selectionPosition.start.x;
+          const selectionEndCellIndex = (selectionPosition.end.y * terminal.cols) + selectionPosition.end.x;
+          const selectedStartCellIndex = Math.max(inputStartCellIndex, Math.min(selectionStartCellIndex, selectionEndCellIndex));
+          const selectedEndCellIndex = Math.min(inputEndCellIndex, Math.max(selectionStartCellIndex, selectionEndCellIndex));
+
+          if (selectedEndCellIndex > selectedStartCellIndex) {
+            const startIndex = resolveCursorIndexFromCellOffset(currentInput, selectedStartCellIndex - inputStartCellIndex);
+            const endIndex = resolveCursorIndexFromCellOffset(currentInput, selectedEndCellIndex - inputStartCellIndex);
+            const textRange = findSelectedTextRange(startIndex);
+            if (textRange && deleteInputRange(textRange.startIndex, textRange.endIndex, "selection_delete_text")) {
+              return true;
+            }
+            if (deleteInputRange(startIndex, endIndex, "selection_delete")) return true;
+          }
+        }
+
+        const textRange = findSelectedTextRange();
+        if (textRange && deleteInputRange(textRange.startIndex, textRange.endIndex, "selection_delete_text")) {
           return true;
         }
       }
-      keyboardInputSelection = null;
+
       if (!selectedText && selectedInputSnapshot === currentInput && currentInput) {
         rewriteCurrentInput("", "selection_delete_all");
         return true;
@@ -2334,20 +2198,9 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
         return true;
       }
 
-      const candidates = [
-        selectedText,
-        selectedText.replace(/\r\n?/g, "\n"),
-        selectedText.replace(/\r\n?|\n/g, ""),
-      ].filter(Boolean);
-      const matchedText = candidates.find((text, index) => (
-        candidates.indexOf(text) === index && currentInput.includes(text)
-      ));
-      if (!matchedText) return false;
-
-      const index = currentInput.indexOf(matchedText);
-      const nextInput = `${currentInput.slice(0, index)}${currentInput.slice(index + matchedText.length)}`;
-      rewriteCurrentInput(nextInput, "selection_delete", getTextCursorLength(currentInput.slice(0, index)));
-      return true;
+      const textRange = findSelectedTextRange();
+      if (!textRange) return false;
+      return deleteInputRange(textRange.startIndex, textRange.endIndex, "selection_delete_text");
     };
 
     terminal.attachCustomKeyEventHandler((e) => {
@@ -2485,38 +2338,42 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
         });
         return false;
       }
-      if (
-        e.type === "keydown" &&
-        e.key.toLowerCase() === "c" &&
-        !e.shiftKey &&
-        !e.altKey &&
-        ((isMacSelectAll && e.metaKey && !e.ctrlKey) || (!isMacSelectAll && e.ctrlKey && !e.metaKey)) &&
-        terminal.hasSelection()
-      ) {
-        e.preventDefault();
-        void copySelection();
-        terminal.clearSelection();
-        keyboardInputSelection = null;
-        selectedInputSnapshot = null;
-        return false;
+      if (e.type === "keydown" && e.key.toLowerCase() === "c" && !e.shiftKey && !e.altKey) {
+        const copyAndClearSelection = () => {
+          void copySelection();
+          terminal.clearSelection();
+          keyboardInputSelection = null;
+          selectedInputSnapshot = null;
+        };
+        const sendInterrupt = () => {
+          markAttentionInputHandled();
+          keyboardInputSelection = null;
+          selectedInputSnapshot = null;
+          invoke("pty_write", { sessionId, data: "\x03" }).catch((err) => reportPtyWriteError("interrupt", err));
+        };
+        const isMacCopy = isMacSelectAll && e.metaKey && !e.ctrlKey;
+        const isPlainCtrlC = e.ctrlKey && !e.metaKey;
+
+        if (isMacCopy && terminal.hasSelection()) {
+          e.preventDefault();
+          copyAndClearSelection();
+          return false;
+        }
+        if (isPlainCtrlC) {
+          e.preventDefault();
+          if (!isMacSelectAll && terminal.hasSelection()) {
+            copyAndClearSelection();
+          } else {
+            sendInterrupt();
+          }
+          return false;
+        }
       }
       if (e.type !== "keydown" || !e.ctrlKey || e.shiftKey || e.altKey || e.metaKey) return true;
       const key = e.key.toLowerCase();
       if (key === "f") {
         e.preventDefault();
-        setSearchOpen(true);
-        window.requestAnimationFrame(() => {
-          searchInputRef.current?.focus();
-          searchInputRef.current?.select();
-        });
-        return false;
-      }
-      if (key === "c" && terminal.hasSelection()) {
-        e.preventDefault();
-        void copySelection();
-        terminal.clearSelection();
-        keyboardInputSelection = null;
-        selectedInputSnapshot = null;
+        openSearch();
         return false;
       }
       if (key === "v") {
@@ -3335,7 +3192,8 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
       scheduleTerminalContainerScrollReset();
       scheduleHelperTextareaAnchorPin();
     });
-    const renderDisposable = terminal.onRender(() => {
+    const renderDisposable = terminal.onRender((range) => {
+      handleVisibilityRestoreRender(terminal, range);
       scheduleTuiComposerBackgroundNormalization(terminal);
       if (!isComposingRef.current) {
         updateSuggestionGhostPosition(suggestionRef.current);
@@ -3557,6 +3415,8 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
       }
       pendingChunks = [];
       clearHiddenWebglDisposeTimer();
+      clearVisibilityRestoreRevealSchedule();
+      visibilityRestorePendingRef.current = false;
       activeWriteQueueRef.current = [];
       activeWriteQueueSizeRef.current = 0;
       inactiveReplayStickToBottomRef.current = false;
@@ -3580,7 +3440,6 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
     };
   }, [sessionId]);
 
-  const backgroundColor = getTerminalBackground(terminalThemeName, resolvedTheme, lightThemePalette, darkThemePalette);
   const backgroundOverlayColor = getTerminalBackgroundOverlayColor(terminalTheme);
   const showBackgroundImage = isTransparent && assetUrl !== null;
   terminalColorRepliesRef.current = {
@@ -3590,8 +3449,6 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
   const searchForeground = normalizeHexColor(terminalTheme.foreground, "#d8dee9");
   const searchBackground = normalizeHexColor(terminalTheme.background, backgroundColor);
   const searchAccent = normalizeHexColor(terminalTheme.cursor, searchForeground);
-  const searchMatchBackground = normalizeHexColor(terminalTheme.yellow, "#e0af68");
-  const searchActiveBackground = normalizeHexColor(terminalTheme.blue, "#7aa2f7");
   const searchResultLabel = !searchTerm
     ? ""
     : searchResult.resultCount > 0 && searchResult.resultIndex >= 0
@@ -3621,50 +3478,6 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
     borderColor: hexToRgba(searchForeground, 0.16, "rgba(255, 255, 255, 0.16)"),
     color: searchForeground,
   };
-
-  const createSearchOptions = (incremental = false): ISearchOptions => ({
-    incremental,
-    decorations: {
-      matchBackground: searchMatchBackground,
-      matchBorder: searchMatchBackground,
-      matchOverviewRuler: searchMatchBackground,
-      activeMatchBackground: searchActiveBackground,
-      activeMatchBorder: searchAccent,
-      activeMatchColorOverviewRuler: searchAccent,
-    },
-  });
-
-  const clearTerminalSearch = () => {
-    searchAddonRef.current?.clearDecorations();
-    setSearchMatched(null);
-    setSearchResult(EMPTY_SEARCH_RESULT);
-  };
-
-  const runTerminalSearch = (term: string, direction: "next" | "previous", incremental = false) => {
-    const searchAddon = searchAddonRef.current;
-    if (!term || !searchAddon) {
-      clearTerminalSearch();
-      return;
-    }
-    const matched = direction === "previous"
-      ? searchAddon.findPrevious(term, createSearchOptions(false))
-      : searchAddon.findNext(term, createSearchOptions(incremental));
-    setSearchMatched(matched);
-  };
-
-  const handleSearchTermChange = (value: string) => {
-    setSearchTerm(value);
-    runTerminalSearch(value, "next", true);
-  };
-
-  const closeTerminalSearch = () => {
-    setSearchOpen(false);
-    setSearchTerm("");
-    clearTerminalSearch();
-    window.requestAnimationFrame(() => terminalRef.current?.focus());
-  };
-
-  const closeContextMenu = () => setMenuState(null);
 
   const handleMenuCopy = () => {
     const terminal = terminalRef.current;
@@ -3730,28 +3543,6 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
     onNewTab || onCloseSession || onCloseOthers || onCloseToLeft || onCloseToRight || onSplitRight || onSplitDown
   );
 
-  useEffect(() => {
-    if (!menuState) return;
-    const close = () => setMenuState(null);
-    const onPointerDown = (e: MouseEvent) => {
-      if (menuRef.current?.contains(e.target as Node)) return;
-      setMenuState(null);
-    };
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setMenuState(null);
-    };
-    document.addEventListener("mousedown", onPointerDown);
-    document.addEventListener("scroll", close, true);
-    window.addEventListener("blur", close);
-    window.addEventListener("keydown", onKeyDown);
-    return () => {
-      document.removeEventListener("mousedown", onPointerDown);
-      document.removeEventListener("scroll", close, true);
-      window.removeEventListener("blur", close);
-      window.removeEventListener("keydown", onKeyDown);
-    };
-  }, [menuState]);
-
   // When the background image is active, an opaque wrapper background would
   // cover the pseudo-element image layer and break the transparency model.
   const wrapperStyle: CSSProperties = showBackgroundImage
@@ -3764,7 +3555,8 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
         "--terminal-bg-overlay-color": backgroundOverlayColor,
       } as CSSProperties)
     : ({ "--terminal-font-family": effectiveFontFamily, backgroundColor } as CSSProperties);
-  const terminalContainerStyle: CSSProperties | undefined = inactiveReplayPending
+  const visibilityRestoreStarting = isVisible && !isVisibleRef.current;
+  const terminalContainerStyle: CSSProperties | undefined = inactiveReplayPending || visibilityRestorePending || visibilityRestoreStarting
     ? { visibility: "hidden" }
     : undefined;
 
