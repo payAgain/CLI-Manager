@@ -1048,3 +1048,36 @@ Added a Hook setting to suppress OS notifications while CLI-Manager is focused, 
 ### Next Steps
 
 - None - task complete
+
+
+## Session 32: 同步三方 Hook 通知配置
+
+**Date**: 2026-07-16
+**Task**: 同步三方 Hook 通知配置
+**Branch**: `master`
+
+### Summary
+
+WebDAV 与本地 zip 同步完整三方 Hook 通知配置；恢复支持独立数据域、旧快照保留、目标清洗与失败回滚，并补充中英文明文凭证警告。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `2fc9bcd` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
