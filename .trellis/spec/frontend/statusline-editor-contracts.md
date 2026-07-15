@@ -25,6 +25,7 @@
 - Claude preview consumes backend ANSI output; Codex preview consumes ordered official placeholder values.
 - Claude install/uninstall calls pass `ccSwitchDbPath: settings.ccSwitchDbPath ?? undefined`. A returned `invalidDb`, `unavailable` or `syncFailed` state shows a localized warning while keeping the successful local install/uninstall result.
 - Preview preserves Powerline private-use glyphs, uses the normalized terminal font family, and parses ANSI16, ANSI256 and TrueColor sequences without substituting plain triangle characters. Powerline Select dropdown options and selected input values must both use a compatible symbol font; selected inputs need a targeted `!important` override because the global UI font rule also targets `input` elements.
+- Application-internal Powerline rendering must load the bundled `SymbolsNerdFontMono-Regular.ttf` through CSS `@font-face`. System font installation and registry detection only serve external terminals and must not be treated as proof that WebView2 can resolve the font family.
 - Preview values include localized status names. Claude live output uses Chinese short labels from the shared Rust renderer; Codex native labels remain non-configurable and are not changed by the preview.
 - Codex preview is rendered directly below the Codex native statusline title/path header and before the selected/available item editors.
 - Color selectors show a swatch plus persistent Chinese and English names. Powerline settings expose font status/install, enablement, alignment, theme continuation, separator, caps and theme selection.
@@ -60,6 +61,7 @@
 - Verify Codex drag ordering and Claude cross-line ordering.
 - Smoke-test dark, light, warm and high-contrast application palettes plus light/dark terminal preview themes.
 - Verify keyboard controls, focus rings and localized aria labels.
+- Verify the bundled Powerline font resource resolves from the production CSS path and renders `E0B0/E0B2/E0B4/E0B6/E0B8/E0BA/E0BC/E0BE` without requiring a system-installed font.
 
 ## 7. Wrong vs Correct
 
