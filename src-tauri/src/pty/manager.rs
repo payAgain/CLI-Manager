@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 
 use crate::pty::boundary::safe_emit_boundary;
 use crate::shell_resolver::{resolve_git_bash_exe, GIT_BASH_NOT_FOUND_MESSAGE};
+use crate::ssh_launch::SshLaunchPlan;
 
 /// PTY 输出/状态事件出口（Issue #123 Phase 2 解耦点）：
 /// 主进程实现为 Tauri 事件转发（`pty-output-{id}`/`pty-status-{id}`），
@@ -554,6 +555,18 @@ PS0='\e]133;C\a${PS0:0:$((__cli_manager_ran=1,0))}'
         shell: Option<&str>,
         sink: Arc<dyn PtyEventSink>,
     ) -> Result<(), String> {
+        self.create_with_launch(session_id, cwd, env_vars, shell, None, sink)
+    }
+
+    pub fn create_with_launch(
+        &self,
+        session_id: &str,
+        cwd: Option<&str>,
+        env_vars: Option<HashMap<String, String>>,
+        shell: Option<&str>,
+        ssh_launch: Option<&SshLaunchPlan>,
+        sink: Arc<dyn PtyEventSink>,
+    ) -> Result<(), String> {
         let env_count = env_vars.as_ref().map(|vars| vars.len()).unwrap_or(0);
         info!(
             "pty session create: id={}, shell={:?}, cwd={:?}, env_vars={}",
@@ -594,15 +607,36 @@ PS0='\e]133;C\a${PS0:0:$((__cli_manager_ran=1,0))}'
                 .entry("CHERE_INVOKING".to_string())
                 .or_insert_with(|| "1".to_string());
         }
-        let (exe, args) = Self::build_shell_args(shell_key, env_vars.as_ref()).map_err(|e| {
-            error!(
-                "pty resolve shell failed: id={}, shell={}, error={}",
-                session_id, shell_key, e
-            );
-            e
-        })?;
+        let (exe, args) = if let Some(ssh_launch) = ssh_launch {
+            let launch = ssh_launch.build_process_launch().map_err(|e| {
+                error!(
+                    "pty resolve ssh launch failed: id={}, error={}",
+                    session_id, e
+                );
+                e
+            })?;
+            (launch.executable, launch.args)
+        } else {
+            Self::build_shell_args(shell_key, env_vars.as_ref()).map_err(|e| {
+                error!(
+                    "pty resolve shell failed: id={}, shell={}, error={}",
+                    session_id, shell_key, e
+                );
+                e
+            })?
+        };
+        let launch_shell_key = if ssh_launch.is_some() {
+            "ssh"
+        } else {
+            shell_key
+        };
+        let log_args = if ssh_launch.is_some() {
+            vec!["<ssh-launch-redacted>".to_string()]
+        } else {
+            args.clone()
+        };
         let launch_context =
-            Self::build_shell_launch_log_context(shell, shell_key, &exe, &args, cwd);
+            Self::build_shell_launch_log_context(shell, launch_shell_key, &exe, &log_args, cwd);
         debug!(
             "pty shell launch: id={}, requested_shell={:?}, shell_key={}, exe={}, args={:?}, login_shell={}, cwd={:?}",
             session_id,
@@ -618,8 +652,10 @@ PS0='\e]133;C\a${PS0:0:$((__cli_manager_ran=1,0))}'
             cmd.arg(arg);
         }
 
-        if let Some(dir) = cwd {
-            cmd.cwd(dir);
+        if ssh_launch.is_none() {
+            if let Some(dir) = cwd {
+                cmd.cwd(dir);
+            }
         }
         if let Some(ref vars) = env_vars {
             for (k, v) in vars {
@@ -668,7 +704,7 @@ PS0='\e]133;C\a${PS0:0:$((__cli_manager_ran=1,0))}'
         let child = Arc::new(Mutex::new(child));
         let diagnostics = Arc::new(Mutex::new(PtySessionDiagnostics {
             session_id: session_id.to_string(),
-            shell: shell.unwrap_or(default_shell_key).to_string(),
+            shell: launch_shell_key.to_string(),
             exe: exe.to_string(),
             cwd: cwd.map(str::to_string),
             last_resize_cols: None,
@@ -678,7 +714,7 @@ PS0='\e]133;C\a${PS0:0:$((__cli_manager_ran=1,0))}'
         let child_for_thread = child.clone();
         let diagnostics_for_thread = diagnostics.clone();
         let session_id_owned = session_id.to_string();
-        let defer_initial_output = cfg!(target_os = "windows") && shell_key == "gitbash";
+        let defer_initial_output = cfg!(target_os = "windows") && launch_shell_key == "gitbash";
 
         self.statuses.lock().unwrap().insert(
             session_id.to_string(),

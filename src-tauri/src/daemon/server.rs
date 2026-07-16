@@ -11,6 +11,7 @@ use super::protocol::{
 };
 use crate::claude_hook::{spawn_hook_listener, HookPayloadSink};
 use crate::pty::manager::{PtyEventSink, PtyManager, PtyProcessStatus};
+use crate::ssh_launch::SshLaunchPlan;
 use crate::third_party_notification::DispatcherHandle;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
@@ -517,7 +518,8 @@ impl DaemonServer {
                 cwd,
                 env_vars,
                 shell,
-            } => self.handle_create(id, session_id, cwd, env_vars, shell),
+                ssh_launch,
+            } => self.handle_create(id, session_id, cwd, env_vars, shell, ssh_launch),
             ClientFrame::Write {
                 id,
                 session_id,
@@ -654,6 +656,7 @@ impl DaemonServer {
         cwd: Option<String>,
         env_vars: Option<HashMap<String, String>>,
         shell: Option<String>,
+        ssh_launch: Option<SshLaunchPlan>,
     ) -> DaemonFrame {
         if !is_valid_session_id(&session_id) {
             return err_frame(id, "invalid session id");
@@ -681,6 +684,9 @@ impl DaemonServer {
                         session_id: session_id.clone(),
                         cwd: cwd.clone(),
                         shell: shell.clone(),
+                        environment_type: ssh_launch.as_ref().map(|_| "ssh".to_string()),
+                        ssh_host_id: ssh_launch.as_ref().map(|plan| plan.host_id.clone()),
+                        remote_path: ssh_launch.as_ref().map(|plan| plan.remote_path.clone()),
                         alive: true,
                         task_status: None,
                         task_updated_at_ms: None,
@@ -690,11 +696,12 @@ impl DaemonServer {
                 },
             );
         }
-        match self.host.pty.create(
+        match self.host.pty.create_with_launch(
             &session_id,
             cwd.as_deref(),
             env_vars,
             shell.as_deref(),
+            ssh_launch.as_ref(),
             sink,
         ) {
             Ok(()) => DaemonFrame::Ok { id },
@@ -809,6 +816,9 @@ mod tests {
                     session_id: session_id.to_string(),
                     cwd: None,
                     shell: None,
+                    environment_type: None,
+                    ssh_host_id: None,
+                    remote_path: None,
                     alive: true,
                     task_status: None,
                     task_updated_at_ms: None,
@@ -842,7 +852,10 @@ mod tests {
 
         match reply {
             DaemonFrame::Attached { replay_base64, .. } => {
-                assert_eq!(STANDARD.decode(replay_base64).unwrap(), b"replay-before-attach");
+                assert_eq!(
+                    STANDARD.decode(replay_base64).unwrap(),
+                    b"replay-before-attach"
+                );
             }
             other => panic!("unexpected attach reply: {other:?}"),
         }

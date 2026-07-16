@@ -16,6 +16,7 @@ mod linux_graphics;
 mod log_rotation;
 pub mod pty;
 mod shell_resolver;
+pub mod ssh_launch;
 pub mod statusline;
 pub mod statusline_profiles;
 mod sync;

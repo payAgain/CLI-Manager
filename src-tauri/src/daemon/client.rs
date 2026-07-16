@@ -12,6 +12,7 @@ use super::protocol::{
     MAX_FRAME_BYTES,
 };
 use crate::pty::manager::PtyProcessStatus;
+use crate::ssh_launch::SshLaunchPlan;
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpStream};
@@ -251,6 +252,7 @@ impl DaemonClient {
         cwd: Option<String>,
         env_vars: Option<HashMap<String, String>>,
         shell: Option<String>,
+        ssh_launch: Option<SshLaunchPlan>,
     ) -> Result<(), String> {
         let id = self.next_request_id();
         self.expect_ok(
@@ -260,6 +262,7 @@ impl DaemonClient {
                 cwd,
                 env_vars,
                 shell,
+                ssh_launch,
             },
             id,
         )

@@ -7,6 +7,7 @@ use crate::daemon::client::DaemonBridge;
 use crate::daemon::protocol::SessionMeta;
 use crate::pty::manager::{PtyManager, PtyOrphanCleanupSummary, PtyProcessStatus};
 use crate::pty::tauri_sink::TauriPtyEventSink;
+use crate::ssh_launch::SshLaunchPlan;
 use log::{debug, error, info, warn};
 use serde::Serialize;
 use std::collections::HashMap;
@@ -26,6 +27,7 @@ pub async fn pty_create(
     hook_env_enabled: Option<bool>,
     claude_provider: Option<ClaudeProviderLaunchConfig>,
     codex_provider: Option<CodexProviderLaunchConfig>,
+    ssh_launch: Option<SshLaunchPlan>,
 ) -> Result<String, String> {
     let session_id = Uuid::new_v4().to_string();
     let mut env_vars = env_vars.unwrap_or_default();
@@ -36,7 +38,18 @@ pub async fn pty_create(
 
     // daemon 模式：hook 上报指向 daemon 的稳定端口（app 重启不失效，契约★）；
     // 进程内模式：沿用 app 自身 hook bridge。
-    let daemon_client = daemon_bridge.get();
+    let daemon_client = daemon_bridge.get().and_then(|client| {
+        if ssh_launch.is_some() && client.info().version != env!("CARGO_PKG_VERSION") {
+            warn!(
+                "SSH launch requires current daemon protocol; falling back in-process: daemon_version={}, app_version={}",
+                client.info().version,
+                env!("CARGO_PKG_VERSION")
+            );
+            None
+        } else {
+            Some(client)
+        }
+    });
     if hook_env_enabled.unwrap_or(false) {
         match daemon_client.as_ref() {
             Some(client) => {
@@ -65,7 +78,13 @@ pub async fn pty_create(
 
     if let Some(client) = daemon_client {
         client
-            .create(&session_id, cwd.clone(), Some(env_vars), shell.clone())
+            .create(
+                &session_id,
+                cwd.clone(),
+                Some(env_vars),
+                shell.clone(),
+                ssh_launch.clone(),
+            )
             .map_err(|err| {
                 error!(
                     "pty_create (daemon) failed: session_id={}, error={}",
@@ -85,11 +104,12 @@ pub async fn pty_create(
     }
 
     pty_manager
-        .create(
+        .create_with_launch(
             &session_id,
             cwd.as_deref(),
             Some(env_vars),
             shell.as_deref(),
+            ssh_launch.as_ref(),
             Arc::new(TauriPtyEventSink::new(app_handle)),
         )
         .map_err(|err| {

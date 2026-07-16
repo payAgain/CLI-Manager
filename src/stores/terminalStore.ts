@@ -13,6 +13,8 @@ import { useSessionStore } from "./sessionStore";
 import { defaultShellForOs, getOsPlatform, normalizeShellForOs, normalizeShellKey, type OsPlatform, type ShellKey } from "../lib/shell";
 import { getClaudeProviderOverride, getCodexProviderOverride, getProviderSwitchAppType, isExactCodexProject, parseProjectEnvVars } from "../lib/providerSwitching";
 import { useProjectStore } from "./projectStore";
+import { useSshHostStore } from "./sshHostStore";
+import { buildSshConnectionSpec, type SshConnectionSpecPayload } from "../lib/ssh";
 import { appendSyncedHistoryContextArg } from "../lib/syncedHistoryContext";
 import { translateCurrent } from "../lib/i18n";
 import { findProjectByPath, findWorktreeByPath } from "../lib/terminalProject";
@@ -948,6 +950,29 @@ export interface DetachedPtyLaunchResult {
   startupCmd?: string;
 }
 
+interface SshLaunchPayload extends SshConnectionSpecPayload {
+  hostId: string;
+  remotePath: string;
+  environmentOverrides: Record<string, string>;
+  initializationCommand: string | null;
+  startupCommand: string | null;
+}
+
+interface ResolvedPtyLaunch {
+  shell: string | null;
+  startupCmd?: string;
+  startupHandledByLaunch: boolean;
+  invokeArgs: {
+    cwd: string | null;
+    envVars: Record<string, string> | null;
+    shell: string | null;
+    hookEnvEnabled: boolean;
+    claudeProvider: ReturnType<typeof getClaudeProviderLaunchConfig>;
+    codexProvider: ReturnType<typeof getCodexProviderLaunchConfig>;
+    sshLaunch: SshLaunchPayload | null;
+  };
+}
+
 // hook running 超时回退：Stop/StopFailure 丢失（hook 脚本失败、bridge 不可达）
 // 时 Tab 会永久停留 running，超时后回退为 none（未知）。阈值取宽（Claude 长任务
 // 可合法运行很久），只兜底明显异常的滞留。
@@ -1037,23 +1062,70 @@ function getClaudeProviderLaunchConfig(projectId?: string) {
   };
 }
 
+async function resolvePtyLaunch(options: DetachedPtyLaunchOptions, os: OsPlatform): Promise<ResolvedPtyLaunch> {
+  const project = options.projectId
+    ? useProjectStore.getState().projects.find((item) => item.id === options.projectId)
+    : undefined;
+
+  if (project?.environment_type === "ssh") {
+    const sshHostId = project.ssh_host_id?.trim();
+    const remotePath = project.remote_path.trim();
+    if (!sshHostId || !remotePath) throw new Error("ssh_project_configuration_invalid");
+
+    const sshStore = useSshHostStore.getState();
+    if (!sshStore.loaded) await sshStore.fetchHosts();
+    const hosts = useSshHostStore.getState().hosts;
+    const host = hosts.find((candidate) => candidate.id === sshHostId);
+    if (!host) throw new Error("ssh_host_not_found");
+
+    return {
+      shell: null,
+      startupHandledByLaunch: true,
+      invokeArgs: {
+        cwd: null,
+        envVars: null,
+        shell: null,
+        hookEnvEnabled: false,
+        claudeProvider: null,
+        codexProvider: null,
+        sshLaunch: {
+          ...buildSshConnectionSpec(host, hosts),
+          hostId: host.id,
+          remotePath,
+          environmentOverrides: options.envVars ?? {},
+          initializationCommand: host.startup_script.trim() || null,
+          startupCommand: options.startupCmd?.trim() || null,
+        },
+      },
+    };
+  }
+
+  const resolvedShell = resolveShellForPty(options.shell, !!options.projectId, os);
+  return {
+    shell: resolvedShell,
+    startupCmd: prepareStartupCommandForPty(options.startupCmd ?? undefined, normalizeShellKey(resolvedShell) ?? null),
+    startupHandledByLaunch: false,
+    invokeArgs: {
+      cwd: options.cwd ?? null,
+      envVars: buildPtyEnvVars(options.envVars ?? null, resolvedShell),
+      shell: resolvedShell,
+      hookEnvEnabled: await shouldEnableHookEnv(),
+      claudeProvider: getClaudeProviderLaunchConfig(options.projectId),
+      codexProvider: getCodexProviderLaunchConfig(options.projectId, options.startupCmd),
+      sshLaunch: null,
+    },
+  };
+}
+
 export async function createDetachedPtyProcess(options: DetachedPtyLaunchOptions): Promise<DetachedPtyLaunchResult> {
   const os = await getOsPlatform();
-  const resolvedShell = resolveShellForPty(options.shell, !!options.projectId, os);
-  const launchStartupCmd = prepareStartupCommandForPty(options.startupCmd ?? undefined, normalizeShellKey(resolvedShell) ?? null);
-  const sessionId = await invoke<string>("pty_create", {
-    cwd: options.cwd ?? null,
-    envVars: buildPtyEnvVars(options.envVars ?? null, resolvedShell),
-    shell: resolvedShell,
-    hookEnvEnabled: await shouldEnableHookEnv(),
-    claudeProvider: getClaudeProviderLaunchConfig(options.projectId),
-    codexProvider: getCodexProviderLaunchConfig(options.projectId, options.startupCmd),
-  });
+  const launch = await resolvePtyLaunch(options, os);
+  const sessionId = await invoke<string>("pty_create", launch.invokeArgs);
 
   return {
     sessionId,
-    shell: resolvedShell,
-    startupCmd: launchStartupCmd,
+    shell: launch.shell,
+    startupCmd: launch.startupCmd,
   };
 }
 
@@ -1099,30 +1171,24 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
 
   createSession: async (projectId, cwd, title, startupCmd, envVars, shell, paneId, worktreeId) => {
     const os = await getOsPlatform();
-    const resolvedShell = resolveShellForPty(shell, !!projectId, os);
-    const launchStartupCmd = prepareStartupCommandForPty(startupCmd, normalizeShellKey(resolvedShell) ?? null);
-
+    let launch: ResolvedPtyLaunch;
     let sessionId: string;
     try {
-      sessionId = await invoke<string>("pty_create", {
-        cwd: cwd ?? null,
-        envVars: buildPtyEnvVars(envVars ?? null, resolvedShell),
-        shell: resolvedShell,
-        hookEnvEnabled: await shouldEnableHookEnv(),
-        claudeProvider: getClaudeProviderLaunchConfig(projectId),
-        codexProvider: getCodexProviderLaunchConfig(projectId, startupCmd),
-      });
+      launch = await resolvePtyLaunch({ projectId, cwd, startupCmd, envVars, shell }, os);
+      sessionId = await invoke<string>("pty_create", launch.invokeArgs);
     } catch (err) {
       const description = formatTerminalCreateError(err);
       toast.error(translateCurrent("terminal.toast.createFailed"), { description });
       logError("pty_create invoke failed", {
         projectId: projectId ?? null,
         cwd: cwd ?? null,
-        shell: resolvedShell,
+        shell: shell ?? null,
         err,
       });
       throw err;
     }
+    const resolvedShell = launch.shell;
+    const launchStartupCmd = launch.startupCmd;
     const session: TerminalSession = {
       id: sessionId,
       projectId,
@@ -1530,30 +1596,30 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     if (!targetPane || !owner?.paneTree) return null;
 
     const os = await getOsPlatform();
-    const resolvedShell = resolveShellForPty(options?.shell, !!options?.projectId, os);
-    const launchStartupCmd = prepareStartupCommandForPty(options?.startupCmd, normalizeShellKey(resolvedShell) ?? null);
-
+    let launch: ResolvedPtyLaunch;
     let splitSessionId: string;
     try {
-      splitSessionId = await invoke<string>("pty_create", {
-        cwd: options?.cwd ?? null,
-        envVars: buildPtyEnvVars(options?.envVars ?? null, resolvedShell),
-        shell: resolvedShell,
-        hookEnvEnabled: await shouldEnableHookEnv(),
-        claudeProvider: getClaudeProviderLaunchConfig(options?.projectId),
-        codexProvider: getCodexProviderLaunchConfig(options?.projectId, options?.startupCmd),
-      });
+      launch = await resolvePtyLaunch({
+        projectId: options?.projectId,
+        cwd: options?.cwd,
+        startupCmd: options?.startupCmd,
+        envVars: options?.envVars,
+        shell: options?.shell,
+      }, os);
+      splitSessionId = await invoke<string>("pty_create", launch.invokeArgs);
     } catch (err) {
       const description = formatTerminalCreateError(err);
       toast.error(translateCurrent("terminal.toast.splitCreateFailed"), { description });
       logError("pty_create invoke failed for split terminal", {
         sessionId,
         cwd: options?.cwd ?? null,
-        shell: resolvedShell,
+        shell: options?.shell ?? null,
         err,
       });
       throw err;
     }
+    const resolvedShell = launch.shell;
+    const launchStartupCmd = launch.startupCmd;
 
     const splitSession: TerminalSession = {
       id: splitSessionId,
@@ -1993,18 +2059,30 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
       }
 
       // 重建 PTY
-      const resolvedShell = resolveShellForPty(ps.shell, !!ps.projectId, os);
+      const restoreProject = ps.projectId ? projectMap.get(ps.projectId) : undefined;
+      const cliKind = detectCliResumeKind(ps.startupCmd, restoreProject);
+      const restoredStartupCmd = cliKind
+        ? buildCliResumeStartupCommand(cliKind, ps.cliSessionId, restoreProject)
+        : normalizeDirectCodexStartupCommand(ps.startupCmd);
+      let launch: ResolvedPtyLaunch;
+      try {
+        launch = await resolvePtyLaunch({
+          projectId: ps.projectId,
+          cwd: ps.cwd,
+          startupCmd: restoredStartupCmd,
+          envVars: ps.envVars,
+          shell: ps.shell,
+        }, os);
+      } catch (err) {
+        logError("Failed to resolve restored session launch", { session: ps, err });
+        skippedSessions.push(ps.title ?? `Session ${i + 1}`);
+        continue;
+      }
+      const resolvedShell = launch.shell;
 
       let newSessionId: string;
       try {
-        newSessionId = await invoke<string>("pty_create", {
-          cwd: ps.cwd ?? null,
-          envVars: buildPtyEnvVars(ps.envVars ?? null, resolvedShell),
-          shell: resolvedShell,
-          hookEnvEnabled: await shouldEnableHookEnv(),
-          claudeProvider: getClaudeProviderLaunchConfig(ps.projectId),
-          codexProvider: getCodexProviderLaunchConfig(ps.projectId, ps.startupCmd),
-        });
+        newSessionId = await invoke<string>("pty_create", launch.invokeArgs);
       } catch (err) {
         logError("Failed to restore session", { session: ps, err });
         skippedSessions.push(ps.title ?? `会话 ${i + 1}`);
@@ -2015,9 +2093,6 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
 
       const shellKey = normalizeShellKey(resolvedShell) ?? null;
       // 恢复按会话类型分流：CLI 会话（codex/claude）走原生 resume，普通 shell 会话静态贴回 scrollback。
-      const restoreProject = ps.projectId ? projectMap.get(ps.projectId) : undefined;
-      const cliKind = detectCliResumeKind(ps.startupCmd, restoreProject);
-
       let launchStartupCmd: string | undefined;
       let initialTerminalOutput: string | undefined;
       let deferStartupUntilInitialOutput = false;
@@ -2025,13 +2100,13 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
       if (cliKind) {
         // CLI 会话：不贴 initialTerminalOutput（TUI 绝对定位重绘会盖掉它，见
         // research/tui-startup-clear-sequences.md），改用 resume 让 CLI 自己重画上次对话并可继续。
-        const resumeCmd = buildCliResumeStartupCommand(cliKind, ps.cliSessionId, restoreProject);
-        launchStartupCmd = prepareStartupCommandForPty(resumeCmd, shellKey);
+        launchStartupCmd = launch.startupCmd;
       } else {
         // 普通 shell 会话：静态贴回历史滚动内容（shell 不清屏，历史可见），startupCmd 保持首轮行为。
-        const restoredStartupCmd = normalizeDirectCodexStartupCommand(ps.startupCmd);
-        launchStartupCmd = prepareStartupCommandForPty(restoredStartupCmd, shellKey);
-        initialTerminalOutput = ps.initialTerminalOutput;
+        launchStartupCmd = launch.startupCmd;
+        initialTerminalOutput = restoredStartupCmd && launch.startupHandledByLaunch
+          ? undefined
+          : ps.initialTerminalOutput;
         // 有历史画面时：先静态贴回 initialTerminalOutput，再由 XTermTerminal 在贴回完成后重放 startupCmd，
         // 避免"setTimeout 写入"与"贴回大段文本"竞态导致启动命令淹没在历史输出里。
         deferStartupUntilInitialOutput = !!ps.initialTerminalOutput && !!launchStartupCmd;
@@ -2046,7 +2121,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
         cwd: ps.cwd,
         shell: resolvedShell,
         envVars: ps.envVars,
-        startupCmd: launchStartupCmd,
+        startupCmd: launch.startupHandledByLaunch ? restoredStartupCmd : launchStartupCmd,
         // 保留 cliSessionId：hook 上报会用它绑定实时统计；下次落盘也需要它继续 resume。
         cliSessionId: ps.cliSessionId,
         initialTerminalOutput,

@@ -14,6 +14,17 @@ export interface SshConnectionSpecPayload {
   serverAliveCountMax: number;
 }
 
+function buildJumpTarget(host: SshHost | null | undefined): string {
+  if (!host) return "";
+  if (host.config_alias.trim()) return host.config_alias.trim();
+  const address = host.host.trim();
+  if (!address) return "";
+  const normalizedAddress = address.includes(":") && !address.startsWith("[") ? `[${address}]` : address;
+  const userPrefix = host.username.trim() ? `${host.username.trim()}@` : "";
+  const portSuffix = host.port && host.port !== 22 ? `:${host.port}` : "";
+  return `${userPrefix}${normalizedAddress}${portSuffix}`;
+}
+
 export function buildSshConnectionSpec(
   host: SshHost,
   allHosts: SshHost[]
@@ -28,7 +39,7 @@ export function buildSshConnectionSpec(
     configAlias: host.config_alias,
     authMode: host.auth_mode,
     identityFile: host.identity_file,
-    jumpTarget: jumpHost?.config_alias || jumpHost?.host || "",
+    jumpTarget: buildJumpTarget(jumpHost),
     proxyCommand: host.proxy_command,
     connectTimeoutSec: host.connect_timeout_sec,
     serverAliveIntervalSec: host.server_alive_interval_sec,
