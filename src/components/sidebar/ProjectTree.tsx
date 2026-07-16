@@ -76,7 +76,7 @@ function preventSecondaryPointerFocus(event: ReactPointerEvent<HTMLElement>) {
 
 function matchesProjectQuery(project: Extract<TNode, { type: "project" }>["project"], normalizedQuery: string): boolean {
   if (!normalizedQuery) return true;
-  const keywords = [project.name, project.path, project.cli_tool]
+  const keywords = [project.name, project.path, project.remote_path, project.cli_tool]
     .map((value) => value.trim().toLowerCase())
     .filter(Boolean);
   return keywords.some((value) => value.includes(normalizedQuery));

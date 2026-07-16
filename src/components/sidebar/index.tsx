@@ -28,6 +28,7 @@ import { getProviderSwitchAppType, parseProjectEnvVars } from "../../lib/provide
 import { isSameProjectFileContext, projectWithWorktreePath, projectWithWorktreeProviderOverrides } from "../../lib/terminalProject";
 import { ALL_TERMINALS_SCOPE, collectProjectIdsForGroup, sessionMatchesTerminalScope } from "../../lib/terminalScope";
 import { appendSyncedHistoryContextArg } from "../../lib/syncedHistoryContext";
+import { projectSupportsCapability, type ProjectCapability } from "../../lib/projectCapabilities";
 import { TreeContext, worktreeListCollapseId, type TreeActions } from "./TreeContext";
 import { Portal } from "../ui/Portal";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogTitle } from "../ui/dialog";
@@ -181,6 +182,13 @@ export function Sidebar({
   onTerminalScopeChange,
 }: SidebarProps) {
   const { t } = useI18n();
+  const rejectUnsupportedCapability = useCallback((project: Project, capability: ProjectCapability) => {
+    if (projectSupportsCapability(project, capability)) return false;
+    toast.info(t("remoteCapabilities.unsupportedTitle"), {
+      description: t("remoteCapabilities.unsupportedDescription"),
+    });
+    return true;
+  }, [t]);
   const { confirm, confirmDialog: appConfirmDialog } = useAppConfirm();
   const {
     tree,
@@ -902,6 +910,11 @@ export function Sidebar({
 
   const openProjectExternally = useCallback(async (items: Project[]) => {
     if (items.length === 0) return;
+    const unsupported = items.find((project) => !projectSupportsCapability(project, "externalTerminal"));
+    if (unsupported) {
+      rejectUnsupportedCapability(unsupported, "externalTerminal");
+      return;
+    }
     const launchItems = await Promise.all(items.map(async (project) => {
       const source = getProviderSwitchAppType(project) ?? undefined;
       const startupCmd = await appendSyncedHistoryContextArg(
@@ -921,7 +934,7 @@ export function Sidebar({
       launchItems
     );
     closeHistory();
-  }, [closeHistory]);
+  }, [closeHistory, rejectUnsupportedCapability]);
 
   const openProjectDirect = async (project: Project, targetPaneId?: string) => {
     const options = await buildSyncedAwareProjectSplitOptions(project);
@@ -1072,6 +1085,7 @@ export function Sidebar({
   const handleNewProjectTerminal = useCallback(
     async (project: Project) => {
       if (compactMode || useExternalTerminal) {
+        if (rejectUnsupportedCapability(project, "externalTerminal")) return;
         await openWindowsTerminal([{ title: project.name, cwd: project.path }]);
       } else {
         await createSession(project.id, project.path, project.name, undefined, undefined, project.shell || undefined);
@@ -1081,7 +1095,7 @@ export function Sidebar({
       }
       closeHistory();
     },
-    [closeHistory, compactMode, createSession, onTerminalScopeChange, projectScopedTerminalViewEnabled, useExternalTerminal]
+    [closeHistory, compactMode, createSession, onTerminalScopeChange, projectScopedTerminalViewEnabled, rejectUnsupportedCapability, useExternalTerminal]
   );
 
   const handleNewWorktreeTerminal = useCallback(
@@ -1151,13 +1165,14 @@ export function Sidebar({
   }, []);
 
   const handleOpenProjectDirectory = useCallback(async (project: Project) => {
+    if (rejectUnsupportedCapability(project, "files")) return;
     try {
       await invoke("open_folder_in_explorer", { path: project.path });
     } catch (err) {
       logError("Failed to open project directory", err);
       toast.error(t("sidebar.toast.openDirectoryFailed"), { description: String(err) });
     }
-  }, [t]);
+  }, [rejectUnsupportedCapability, t]);
 
   const handleOpenWorktreeDirectory = useCallback(async (worktree: WorktreeRecord) => {
     if (rejectMissingWorktree(worktree)) return;
@@ -1251,6 +1266,7 @@ export function Sidebar({
   }, []);
 
   const handleOpenProjectFiles = useCallback(async (project: Project) => {
+    if (rejectUnsupportedCapability(project, "files")) return;
     try {
       if (!isSameProjectFileContext(fileProject, project) && isProjectFileDirty()) {
         const confirmed = await confirm({
@@ -1266,7 +1282,7 @@ export function Sidebar({
       logError("Failed to open project file browser", err);
       toast.error(t("sidebar.toast.openProjectFilesFailed"), { description: String(err) });
     }
-  }, [closeHistory, confirm, fileProject, openFileProject, t]);
+  }, [closeHistory, confirm, fileProject, openFileProject, rejectUnsupportedCapability, t]);
 
   const handleOpenWorktreeFiles = useCallback(async (project: Project, worktree: WorktreeRecord) => {
     if (rejectMissingWorktree(worktree)) return;
@@ -1279,6 +1295,7 @@ export function Sidebar({
 
   const handleOpenProjectHistory = useCallback(
     (project: Project) => {
+      if (rejectUnsupportedCapability(project, "history")) return;
       void openHistory({
         sourceFilter: resolveHistorySourceFilter(project.cli_tool),
         projectPath: project.path,
@@ -1288,7 +1305,7 @@ export function Sidebar({
         toast.error("打开会话历史失败", { description: String(err) });
       });
     },
-    [openHistory, triggerGlobalSearchFocus]
+    [openHistory, rejectUnsupportedCapability, triggerGlobalSearchFocus]
   );
   const handleOpenWorktreeHistory = useCallback(
     (project: Project, worktree: WorktreeRecord) => {
@@ -2090,7 +2107,7 @@ export function Sidebar({
                   <ListClockIcon size={14} />
                   {t("sidebar.menu.sessionHistory")}
                 </button>
-                {getProviderSwitchAppType(contextMenu.project) && (
+                {getProviderSwitchAppType(contextMenu.project) && projectSupportsCapability(contextMenu.project, "providerSwitch") && (
                   <button
                     className="context-menu-item"
                     role="menuitem"
@@ -2235,7 +2252,7 @@ export function Sidebar({
                   <FileCode size={14} strokeWidth={1.5} />
                   {t("sidebar.menu.browseFiles")}
                 </button>
-                {getProviderSwitchAppType(contextMenu.project) && (
+                {getProviderSwitchAppType(contextMenu.project) && projectSupportsCapability(contextMenu.project, "providerSwitch") && (
                   <button
                     className="context-menu-item"
                     role="menuitem"

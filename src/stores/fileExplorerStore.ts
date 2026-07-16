@@ -14,6 +14,7 @@ import type {
 import { logError } from "../lib/logger";
 import { translateCurrent } from "../lib/i18n";
 import { isSameProjectFileContext } from "../lib/terminalProject";
+import { projectSupportsCapability } from "../lib/projectCapabilities";
 
 type ClipboardMode = "copy" | "move";
 type FileEntryKind = "file" | "directory";
@@ -579,6 +580,9 @@ export const useFileExplorerStore = create<FileExplorerStore>((set, get) => ({
   clipboard: null,
 
   openProject: async (project) => {
+    if (!projectSupportsCapability(project, "files")) {
+      throw new Error("remote_project_capability_unsupported:files");
+    }
     const current = get().project;
     const keepCurrentProject = isSameProjectFileContext(current, project);
     set({

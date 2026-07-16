@@ -6,6 +6,7 @@ import { useSettingsStore } from "./settingsStore";
 import { logWarn } from "../lib/logger";
 import { getClaudeProviderOverride, getCodexProviderOverride, getProviderSwitchAppType } from "../lib/providerSwitching";
 import { defaultShellForOs, getOsPlatform, normalizeShellForOs, normalizeShellKey } from "../lib/shell";
+import { projectSupportsCapability } from "../lib/projectCapabilities";
 import type {
   Project, CreateProjectInput, UpdateProjectInput,
   Group, CreateGroupInput, TreeNode, WorktreeRecord,
@@ -258,9 +259,10 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
   refreshProviderBadges: async () => {
     const refreshSeq = ++providerBadgeRefreshSeq;
     const projects = get().projects;
+    const providerProjects = projects.filter((project) => projectSupportsCapability(project, "providerSwitch"));
     const worktrees = get().worktrees;
-    const claudeProjects = projects.filter((p) => getProviderSwitchAppType(p) === "claude");
-    const codexProjects = projects.filter((p) => getProviderSwitchAppType(p) === "codex");
+    const claudeProjects = providerProjects.filter((p) => getProviderSwitchAppType(p) === "claude");
+    const codexProjects = providerProjects.filter((p) => getProviderSwitchAppType(p) === "codex");
     const projectsById = new Map(projects.map((project) => [project.id, project]));
     const providerBadges: Record<string, ProviderBadge> = {};
 
