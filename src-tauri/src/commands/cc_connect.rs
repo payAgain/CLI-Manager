@@ -9,7 +9,7 @@ use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tauri::{AppHandle, Manager, State};
@@ -25,6 +25,14 @@ const VERSION_PROBE_TIMEOUT: Duration = Duration::from_secs(6);
 const CONFIG_FORMAT_TIMEOUT: Duration = Duration::from_secs(8);
 const LOCAL_PROXY_CONNECT_TIMEOUT: Duration = Duration::from_millis(250);
 const LOCAL_PROXY_PORTS: [u16; 2] = [7890, 10808];
+const PROXY_ENV_KEYS: [&str; 6] = [
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "all_proxy",
+];
 const TELEGRAM_TOKEN_ACCOUNT: &str = "cc-connect-telegram-token";
 const FEISHU_APP_ID_ACCOUNT: &str = "cc-connect-feishu-app-id";
 const FEISHU_APP_SECRET_ACCOUNT: &str = "cc-connect-feishu-app-secret";
@@ -89,8 +97,16 @@ pub struct CcConnectProfile {
     pub agent: CcConnectAgent,
     pub platform: CcConnectPlatform,
     pub allow_from: String,
+    #[serde(default = "default_true")]
+    pub proxy_enabled: bool,
     pub proxy_url: Option<String>,
+    #[serde(default)]
+    pub logging_enabled: bool,
     pub language: CcConnectLanguage,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, Deserialize)]
@@ -258,6 +274,13 @@ impl CcConnectManager {
     }
 
     fn append_system_log(&self, message: impl Into<String>) {
+        if !load_profile()
+            .ok()
+            .flatten()
+            .is_some_and(|profile| profile.logging_enabled)
+        {
+            return;
+        }
         let _ = self.ensure_log_writer();
         push_log_line(&self.logs, &self.log_writer, "system", &message.into(), &[]);
     }
@@ -323,6 +346,13 @@ impl CcConnectManager {
         limit: Option<usize>,
     ) -> Result<CcConnectLogPage, String> {
         let after_seq = after_seq.unwrap_or(0);
+        if !load_profile()?.is_some_and(|profile| profile.logging_enabled) {
+            return Ok(CcConnectLogPage {
+                lines: Vec::new(),
+                next_seq: after_seq,
+                log_path: path_string(&log_path()?),
+            });
+        }
         let limit = limit
             .unwrap_or(DEFAULT_LOG_PAGE_SIZE)
             .clamp(1, MAX_LOG_PAGE_SIZE);
@@ -874,7 +904,9 @@ fn normalize_profile(
     );
     validate_registered_project(&profile)?;
     profile.allow_from = normalize_allow_from(profile.platform, &profile.allow_from)?;
-    profile.proxy_url = normalize_proxy_url(profile.proxy_url.as_deref())?;
+    if profile.proxy_enabled {
+        profile.proxy_url = normalize_proxy_url(profile.proxy_url.as_deref())?;
+    }
     profile.executable_path = profile
         .executable_path
         .as_deref()
@@ -952,7 +984,7 @@ fn profile_issue_codes(profile: &CcConnectProfile) -> Vec<String> {
     if normalize_allow_from(profile.platform, &profile.allow_from).is_err() {
         issues.push("allowlist_invalid".to_string());
     }
-    if normalize_proxy_url(profile.proxy_url.as_deref()).is_err() {
+    if profile.proxy_enabled && normalize_proxy_url(profile.proxy_url.as_deref()).is_err() {
         issues.push("proxy_invalid".to_string());
     }
     issues
@@ -1141,6 +1173,17 @@ fn resolve_proxy_url(
     )
 }
 
+fn resolve_proxy_url_if_enabled(
+    enabled: bool,
+    configured: Option<&str>,
+    local_ports: &[u16],
+) -> Result<Option<ResolvedProxy>, String> {
+    if !enabled {
+        return Ok(None);
+    }
+    resolve_proxy_url(configured, local_ports)
+}
+
 fn detect_local_proxy_on_ports(ports: &[u16]) -> Option<String> {
     ports.iter().find_map(|port| {
         let address = SocketAddr::from(([127, 0, 0, 1], *port));
@@ -1151,27 +1194,39 @@ fn detect_local_proxy_on_ports(ports: &[u16]) -> Option<String> {
 }
 
 fn proxy_environment(proxy_url: &str) -> Vec<(String, String)> {
-    [
-        "HTTP_PROXY",
-        "HTTPS_PROXY",
-        "ALL_PROXY",
-        "http_proxy",
-        "https_proxy",
-        "all_proxy",
-    ]
-    .into_iter()
-    .map(|key| (key.to_string(), proxy_url.to_string()))
-    .chain([
-        (
-            "NO_PROXY".to_string(),
-            "localhost,127.0.0.1,[::1]".to_string(),
-        ),
-        (
-            "no_proxy".to_string(),
-            "localhost,127.0.0.1,[::1]".to_string(),
-        ),
-    ])
-    .collect()
+    PROXY_ENV_KEYS
+        .into_iter()
+        .map(|key| (key.to_string(), proxy_url.to_string()))
+        .chain([
+            (
+                "NO_PROXY".to_string(),
+                "localhost,127.0.0.1,[::1]".to_string(),
+            ),
+            (
+                "no_proxy".to_string(),
+                "localhost,127.0.0.1,[::1]".to_string(),
+            ),
+        ])
+        .collect()
+}
+
+fn apply_proxy_environment(
+    command: &mut Command,
+    proxy_enabled: bool,
+    proxy: Option<&ResolvedProxy>,
+) {
+    if !proxy_enabled {
+        for key in PROXY_ENV_KEYS {
+            command.env_remove(key);
+        }
+        command.env("NO_PROXY", "*").env("no_proxy", "*");
+        return;
+    }
+    if let Some(proxy) = proxy {
+        for (key, value) in proxy_environment(&proxy.url) {
+            command.env(key, value);
+        }
+    }
 }
 
 struct CredentialSnapshot {
@@ -1528,22 +1583,26 @@ impl CcConnectManager {
         }
         let config_path = write_managed_config(&profile)?;
         format_and_check_config_syntax(&binary.path, &config_path)?;
-        let (mut environment, secrets) = credential_environment(profile.platform)?;
-        let proxy = resolve_proxy_url(profile.proxy_url.as_deref(), &LOCAL_PROXY_PORTS)?;
-        if let Some(proxy) = proxy.as_ref() {
-            environment.extend(proxy_environment(&proxy.url));
-        }
-        self.ensure_log_writer()?;
-        match proxy.as_ref() {
-            Some(proxy) if proxy.source == ProxySource::Configured => self
-                .append_system_log(format!("cc-connect proxy: using configured {}", proxy.url)),
-            Some(proxy) => self.append_system_log(format!(
-                "cc-connect proxy: auto-detected local proxy {}",
-                proxy.url
-            )),
-            None => self.append_system_log(
-                "cc-connect proxy: no configured local proxy detected; preserving inherited proxy environment",
-            ),
+        let (environment, secrets) = credential_environment(profile.platform)?;
+        let proxy = resolve_proxy_url_if_enabled(
+            profile.proxy_enabled,
+            profile.proxy_url.as_deref(),
+            &LOCAL_PROXY_PORTS,
+        )?;
+        if profile.logging_enabled {
+            self.ensure_log_writer()?;
+            match proxy.as_ref() {
+                Some(proxy) if proxy.source == ProxySource::Configured => self
+                    .append_system_log(format!("cc-connect proxy: using configured {}", proxy.url)),
+                Some(proxy) => self.append_system_log(format!(
+                    "cc-connect proxy: auto-detected local proxy {}",
+                    proxy.url
+                )),
+                None if profile.proxy_enabled => self.append_system_log(
+                    "cc-connect proxy: no configured local proxy detected; preserving inherited proxy environment",
+                ),
+                None => self.append_system_log("cc-connect proxy: disabled"),
+            }
         }
         let mut command = silent_command(&path_string(&binary.path));
         command
@@ -1554,12 +1613,16 @@ impl CcConnectManager {
                     .parent()
                     .ok_or_else(|| "cc-connect config parent is missing".to_string())?,
             )
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+            .stdin(Stdio::null());
+        if profile.logging_enabled {
+            command.stdout(Stdio::piped()).stderr(Stdio::piped());
+        } else {
+            command.stdout(Stdio::null()).stderr(Stdio::null());
+        }
         for (key, value) in environment {
             command.env(key, value);
         }
+        apply_proxy_environment(&mut command, profile.proxy_enabled, proxy.as_ref());
         let mut child = command
             .spawn()
             .map_err(|err| format!("spawn cc-connect failed: {err}"))?;
@@ -1572,26 +1635,28 @@ impl CcConnectManager {
                 return Err(err);
             }
         };
-        let stdout = child.stdout.take();
-        let stderr = child.stderr.take();
-        let secrets = Arc::new(secrets);
-        if let Some(stdout) = stdout {
-            spawn_log_reader(
-                stdout,
-                "stdout",
-                self.logs.clone(),
-                self.log_writer.clone(),
-                secrets.clone(),
-            );
-        }
-        if let Some(stderr) = stderr {
-            spawn_log_reader(
-                stderr,
-                "stderr",
-                self.logs.clone(),
-                self.log_writer.clone(),
-                secrets,
-            );
+        if profile.logging_enabled {
+            let stdout = child.stdout.take();
+            let stderr = child.stderr.take();
+            let secrets = Arc::new(secrets);
+            if let Some(stdout) = stdout {
+                spawn_log_reader(
+                    stdout,
+                    "stdout",
+                    self.logs.clone(),
+                    self.log_writer.clone(),
+                    secrets.clone(),
+                );
+            }
+            if let Some(stderr) = stderr {
+                spawn_log_reader(
+                    stderr,
+                    "stderr",
+                    self.logs.clone(),
+                    self.log_writer.clone(),
+                    secrets,
+                );
+            }
         }
         std::thread::sleep(Duration::from_millis(350));
         if let Some(status) = child
@@ -1985,7 +2050,9 @@ mod tests {
             agent: CcConnectAgent::Claude,
             platform: CcConnectPlatform::Telegram,
             allow_from: "123456789".to_string(),
+            proxy_enabled: true,
             proxy_url: None,
+            logging_enabled: false,
             language: CcConnectLanguage::Zh,
         }
     }
@@ -2073,12 +2140,17 @@ mod tests {
         );
     }
     #[test]
-    fn legacy_profile_without_proxy_field_remains_compatible() {
+    fn legacy_profile_without_switch_fields_remains_compatible() {
         let project_dir = tempfile::tempdir().unwrap();
         let mut value = serde_json::to_value(sample_profile(project_dir.path())).unwrap();
-        value.as_object_mut().unwrap().remove("proxyUrl");
+        let object = value.as_object_mut().unwrap();
+        object.remove("proxyEnabled");
+        object.remove("proxyUrl");
+        object.remove("loggingEnabled");
         let profile: CcConnectProfile = serde_json::from_value(value).unwrap();
+        assert!(profile.proxy_enabled);
         assert_eq!(profile.proxy_url, None);
+        assert!(!profile.logging_enabled);
     }
     #[test]
     fn proxy_environment_covers_common_case_variants() {
@@ -2102,6 +2174,51 @@ mod tests {
             environment.get("NO_PROXY").map(String::as_str),
             Some("localhost,127.0.0.1,[::1]")
         );
+    }
+    #[test]
+    fn disabled_proxy_ignores_manual_and_local_proxy_and_scrubs_inherited_environment() {
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let local_port = listener.local_addr().unwrap().port();
+        let proxy = resolve_proxy_url_if_enabled(
+            false,
+            Some("http://proxy.example.com:8080"),
+            &[local_port],
+        )
+        .unwrap();
+        assert_eq!(proxy, None);
+
+        let mut command = Command::new("cc-connect");
+        for key in PROXY_ENV_KEYS {
+            command.env(key, "http://inherited.example.com:3128");
+        }
+        apply_proxy_environment(&mut command, false, proxy.as_ref());
+        let environment = command
+            .get_envs()
+            .map(|(key, value)| {
+                (
+                    key.to_string_lossy().to_ascii_lowercase(),
+                    value.map(|value| value.to_string_lossy().into_owned()),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        for key in ["http_proxy", "https_proxy", "all_proxy"] {
+            assert!(environment.get(key).and_then(Option::as_ref).is_none());
+        }
+        assert_eq!(environment.get("no_proxy"), Some(&Some("*".to_string())));
+    }
+    #[test]
+    fn disabled_proxy_does_not_validate_a_stored_manual_url() {
+        let project = tempfile::tempdir().unwrap();
+        let mut profile = sample_profile(project.path());
+        profile.proxy_enabled = false;
+        profile.proxy_url = Some("not a URL".to_string());
+        assert!(!profile_issue_codes(&profile)
+            .iter()
+            .any(|code| code == "proxy_invalid"));
+        profile.proxy_enabled = true;
+        assert!(profile_issue_codes(&profile)
+            .iter()
+            .any(|code| code == "proxy_invalid"));
     }
     #[cfg(target_os = "windows")]
     #[test]

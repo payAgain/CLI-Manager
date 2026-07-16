@@ -16,7 +16,6 @@ import {
 } from "@mantine/core";
 import {
   AlertTriangle,
-  CheckCircle2,
   Copy,
   ExternalLink,
   FolderSearch,
@@ -24,7 +23,6 @@ import {
   RefreshCw,
   RotateCw,
   Save,
-  ShieldCheck,
   Square,
   Trash2,
   Wifi,
@@ -47,7 +45,9 @@ interface CcConnectProfile {
   agent: AgentKind;
   platform: PlatformKind;
   allowFrom: string;
+  proxyEnabled: boolean;
   proxyUrl: string | null;
+  loggingEnabled: boolean;
   language: ReplyLanguage;
 }
 
@@ -97,7 +97,9 @@ const EMPTY_PROFILE: CcConnectProfile = {
   agent: "claude",
   platform: "telegram",
   allowFrom: "",
+  proxyEnabled: true,
   proxyUrl: null,
+  loggingEnabled: false,
   language: "zh",
 };
 
@@ -215,14 +217,22 @@ export function CcConnectSettingsPage() {
 
   useEffect(() => {
     void refreshStatus(true, true);
-    void loadLogs();
     const statusTimer = window.setInterval(() => void refreshStatus(false, false, true), 2_000);
-    const logTimer = window.setInterval(() => void loadLogs(), 1_500);
     return () => {
       window.clearInterval(statusTimer);
-      window.clearInterval(logTimer);
     };
-  }, [loadLogs, refreshStatus]);
+  }, [refreshStatus]);
+
+  useEffect(() => {
+    if (!profile.loggingEnabled) {
+      logCursorRef.current = 0;
+      setLogs([]);
+      return;
+    }
+    void loadLogs();
+    const logTimer = window.setInterval(() => void loadLogs(), 1_500);
+    return () => window.clearInterval(logTimer);
+  }, [loadLogs, profile.loggingEnabled]);
 
   useEffect(() => {
     if (profile.projectId || projects.length === 0 || status?.profile) return;
@@ -332,7 +342,7 @@ export function CcConnectSettingsPage() {
       const next = await invoke<CcConnectStatus>(command);
       setStatus(next);
       toast.success(t(successKey));
-      void loadLogs();
+      if (next.profile?.loggingEnabled) void loadLogs();
     } catch (error) {
       toast.error(t(failureKey), { description: errorMessage(error) });
     } finally {
@@ -477,13 +487,28 @@ export function CcConnectSettingsPage() {
           value={profile.allowFrom}
           onChange={(event) => updateProfile("allowFrom", event.currentTarget.value)}
         />
-        <TextInput
+        <Checkbox
           mt="sm"
+          checked={profile.proxyEnabled}
+          onChange={(event) => updateProfile("proxyEnabled", event.currentTarget.checked)}
+          label={t("settings.ccConnect.proxyEnabled")}
+          description={t("settings.ccConnect.proxyEnabledDescription")}
+        />
+        <TextInput
+          mt="xs"
           label={t("settings.ccConnect.proxyUrl")}
           placeholder={t("settings.ccConnect.proxyPlaceholder")}
           description={t("settings.ccConnect.proxyDescription")}
           value={profile.proxyUrl ?? ""}
           onChange={(event) => updateProfile("proxyUrl", event.currentTarget.value || null)}
+          disabled={!profile.proxyEnabled}
+        />
+        <Checkbox
+          mt="md"
+          checked={profile.loggingEnabled}
+          onChange={(event) => updateProfile("loggingEnabled", event.currentTarget.checked)}
+          label={t("settings.ccConnect.loggingEnabled")}
+          description={t("settings.ccConnect.loggingEnabledDescription")}
         />
         <Checkbox
           mt="md"
@@ -544,55 +569,30 @@ export function CcConnectSettingsPage() {
         </Card>
       ) : null}
 
-      <SimpleGrid cols={{ base: 1, md: 2 }} spacing="md">
-        <Card className="border border-border bg-surface-container-low" p="md" radius="lg">
-          <Group justify="space-between">
-            <Text fw={700}>{t("settings.ccConnect.process.title")}</Text>
-            <Badge color={status?.running ? "green" : status?.starting ? "yellow" : "gray"}>{processLabel}</Badge>
-          </Group>
-          <Stack gap={6} mt="sm">
-            <Text size="xs">{t("settings.ccConnect.pid")}: {status?.pid ?? "—"}</Text>
-            <Text size="xs">{t("settings.ccConnect.startedAt")}: {formatTimestamp(status?.startedAtMs ?? null, language)}</Text>
-            <Text size="xs">{t("settings.ccConnect.lastExit")}: {status?.lastExitCode ?? "—"}</Text>
-          </Stack>
-          <Group mt="md" gap="xs">
-            <Button size="xs" color="cliPrimary" leftSection={<Play size={14} />} disabled={busy || !status?.ready || !!status?.running || dirty || !projectRegistrationCurrent} loading={working === "start"} onClick={() => void runAction("cc_connect_start", "start", "settings.ccConnect.toast.startSuccess", "settings.ccConnect.toast.startFailed")}>
-              {t("settings.ccConnect.start")}
-            </Button>
-            <Button size="xs" variant="light" color="red" leftSection={<Square size={13} />} disabled={busy || !status?.running} loading={working === "stop"} onClick={() => void runAction("cc_connect_stop", "stop", "settings.ccConnect.toast.stopSuccess", "settings.ccConnect.toast.stopFailed")}>
-              {t("settings.ccConnect.stop")}
-            </Button>
-            <Button size="xs" variant="default" leftSection={<RotateCw size={14} />} disabled={busy || !status?.running || dirty || !projectRegistrationCurrent} loading={working === "restart"} onClick={() => void runAction("cc_connect_restart", "restart", "settings.ccConnect.toast.restartSuccess", "settings.ccConnect.toast.restartFailed")}>
-              {t("settings.ccConnect.restart")}
-            </Button>
-          </Group>
-        </Card>
-
-        <Card className="border border-border bg-surface-container-low" p="md" radius="lg">
-          <Group gap="xs"><ShieldCheck size={17} /><Text fw={700}>{t("settings.ccConnect.security.title")}</Text></Group>
-          <Stack gap={7} mt="sm">
-            {[
-              "settings.ccConnect.security.controlPlanes",
-              "settings.ccConnect.security.binary",
-              "settings.ccConnect.security.allowlist",
-              "settings.ccConnect.security.commands",
-              "settings.ccConnect.security.customExtensions",
-              "settings.ccConnect.security.privateChat",
-              "settings.ccConnect.security.credentialBoundary",
-              "settings.ccConnect.security.permissions",
-            ].map((key) => (
-              <Text key={key} size="xs">• {t(key as TranslationKey)}</Text>
-            ))}
-          </Stack>
-        </Card>
-      </SimpleGrid>
-
-      <Card className="border border-primary/25 bg-primary/5" p="md" radius="lg">
-        <Group gap="xs"><CheckCircle2 size={17} /><Text fw={700}>{t("settings.ccConnect.v1.title")}</Text></Group>
-        <Text mt={8} size="xs" lh={1.65}>{t("settings.ccConnect.v1.description")}</Text>
+      <Card className="border border-border bg-surface-container-low" p="md" radius="lg">
+        <Group justify="space-between">
+          <Text fw={700}>{t("settings.ccConnect.process.title")}</Text>
+          <Badge color={status?.running ? "green" : status?.starting ? "yellow" : "gray"}>{processLabel}</Badge>
+        </Group>
+        <Stack gap={6} mt="sm">
+          <Text size="xs">{t("settings.ccConnect.pid")}: {status?.pid ?? "—"}</Text>
+          <Text size="xs">{t("settings.ccConnect.startedAt")}: {formatTimestamp(status?.startedAtMs ?? null, language)}</Text>
+          <Text size="xs">{t("settings.ccConnect.lastExit")}: {status?.lastExitCode ?? "—"}</Text>
+        </Stack>
+        <Group mt="md" gap="xs">
+          <Button size="xs" color="cliPrimary" leftSection={<Play size={14} />} disabled={busy || !status?.ready || !!status?.running || dirty || !projectRegistrationCurrent} loading={working === "start"} onClick={() => void runAction("cc_connect_start", "start", "settings.ccConnect.toast.startSuccess", "settings.ccConnect.toast.startFailed")}>
+            {t("settings.ccConnect.start")}
+          </Button>
+          <Button size="xs" variant="light" color="red" leftSection={<Square size={13} />} disabled={busy || !status?.running} loading={working === "stop"} onClick={() => void runAction("cc_connect_stop", "stop", "settings.ccConnect.toast.stopSuccess", "settings.ccConnect.toast.stopFailed")}>
+            {t("settings.ccConnect.stop")}
+          </Button>
+          <Button size="xs" variant="default" leftSection={<RotateCw size={14} />} disabled={busy || !status?.running || dirty || !projectRegistrationCurrent} loading={working === "restart"} onClick={() => void runAction("cc_connect_restart", "restart", "settings.ccConnect.toast.restartSuccess", "settings.ccConnect.toast.restartFailed")}>
+            {t("settings.ccConnect.restart")}
+          </Button>
+        </Group>
       </Card>
 
-      <Card className="border border-border bg-surface-container-low" p="md" radius="lg">
+      {profile.loggingEnabled && <Card className="border border-border bg-surface-container-low" p="md" radius="lg">
         <Group justify="space-between">
           <Text fw={700}>{t("settings.ccConnect.logs.title")}</Text>
           <Group gap="xs">
@@ -608,7 +608,7 @@ export function CcConnectSettingsPage() {
             ? t("settings.ccConnect.logs.empty")
             : logs.map((line) => `[${formatTimestamp(line.timestampMs, language)}] [${line.source}] ${line.message}`).join("\n")}
         </pre>
-      </Card>
+      </Card>}
       <ConfirmDialog
         open={clearConfirmOpen}
         title={t("settings.ccConnect.clearConfirmTitle")}
