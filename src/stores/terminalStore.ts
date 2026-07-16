@@ -129,6 +129,12 @@ function formatTerminalCreateError(error: unknown): string {
   if (message.trim().startsWith("provider_not_found")) {
     return translateCurrent("terminal.toast.providerNotFound");
   }
+  if (message.includes("ssh_project_configuration_invalid") || message.includes("ssh_host_not_found")) {
+    return translateCurrent("terminal.ssh.rebindRequired");
+  }
+  if (message.includes("ssh_client_unavailable") || message.includes("executable not found")) {
+    return translateCurrent("terminal.ssh.clientUnavailable");
+  }
   return message;
 }
 

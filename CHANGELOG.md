@@ -2,6 +2,9 @@
 
 ## [TEMP]
 
+### 新增
+- **SSH 远程项目与远程终端（Issue #145）**：设置页新增 SSH 主机管理，支持 SSH Config、Agent、私钥、密码/交互认证、跳板机、ProxyCommand、连接诊断和远程目录浏览；“新增终端”可在本地项目与 SSH 远程项目间切换。远程项目通过结构化 Launch Plan 交由 Rust 安全生成 OpenSSH 参数，可在远程目录启动 CLI、使用分屏与 Workspan、由 daemon 托管并恢复连接状态。文件、Git、Worktree、本地历史、Hook、统计和供应商切换在 SSH MVP 中统一禁用并明确提示，系统资源面板继续标注为本机资源；同步与导入保留远程项目路径但不携带主机凭据或私钥路径，目标设备需重新绑定 SSH 主机。
+
 ### 修复
 - **Claude 状态栏 Powerline 符号修复**：WebView 直接加载应用内置符号字体，不再依赖 Windows 用户字体缓存，修复实时预览、Powerline 选项和应用内终端中的分隔符与端帽显示为方框的问题。
 - **后台终端恢复输出与图标修复**：daemon attach 将回放快照与实时订阅注册收口为同一临界区，前端在 PTY 输出监听就绪后再恢复并按顺序写入回放与实时帧；恢复后的 Claude/Codex Tab 保留 CLI 启动元数据用于图标识别，但不会重跑启动命令。

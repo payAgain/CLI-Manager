@@ -329,6 +329,15 @@ function TreeNodeItemImpl({
                 SSH
               </span>
             )}
+            {p.environment_type === "ssh" && !p.ssh_host_id && (
+              <span
+                className="ui-tree-warning-chip inline-flex shrink-0 items-center justify-center rounded-full"
+                title={t("terminal.ssh.rebindRequired")}
+                aria-label={t("terminal.ssh.rebindRequired")}
+              >
+                <AlertTriangle size={12} strokeWidth={1.5} />
+              </span>
+            )}
             {providerBadge && <ProviderBadgeChip badge={providerBadge} />}
             {terminalCount > 0 && (
               <span

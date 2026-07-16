@@ -134,7 +134,7 @@ const SYNC_DATA_DOMAINS: readonly SyncDataDomain[] = [
 const HTTP_NOT_FOUND_PATTERN = /HTTP error:\s*(404|409)\b/i;
 const REMOTE_SYNC_UNAVAILABLE_MESSAGE = "无法从云端同步";
 const PROJECT_SYNC_SELECT =
-  "SELECT id, name, path, group_id, sort_order, cli_tool, cli_args, startup_cmd, env_vars, shell, provider_overrides, worktree_strategy, worktree_root, worktree_deps_prompt_enabled FROM projects ORDER BY sort_order";
+  "SELECT id, name, path, group_id, sort_order, cli_tool, cli_args, startup_cmd, env_vars, shell, provider_overrides, worktree_strategy, worktree_root, worktree_deps_prompt_enabled, environment_type, remote_path FROM projects ORDER BY sort_order";
 const GROUP_SYNC_SELECT = "SELECT id, name, parent_id, sort_order FROM groups ORDER BY sort_order";
 const TEMPLATE_SYNC_SELECT = "SELECT id, project_id, name, command, description, sort_order FROM command_templates ORDER BY sort_order";
 const WORKTREE_SYNC_SELECT =
@@ -748,6 +748,9 @@ async function applySyncData(
         "worktree_strategy",
         "worktree_root",
         "worktree_deps_prompt_enabled",
+        "environment_type",
+        "ssh_host_id",
+        "remote_path",
         "created_at",
         "updated_at",
       ],
@@ -755,13 +758,16 @@ async function applySyncData(
       (project) => {
         const groupId = typeof project.group_id === "string" && validGroupIds.has(project.group_id) ? project.group_id : null;
         const rawShell = typeof project.shell === "string" ? project.shell.trim() : "";
-        const shell =
-          normalizeShellForOs(rawShell, os) ??
-          (rawShell && !(os !== "windows" && isWindowsOnlyShellKey(rawShell)) ? rawShell : platformDefaultShell);
+        const environmentType = project.environment_type === "ssh" ? "ssh" : project.environment_type === "wsl" ? "wsl" : "local";
+        const isSshProject = environmentType === "ssh";
+        const shell = isSshProject
+          ? ""
+          : normalizeShellForOs(rawShell, os) ??
+            (rawShell && !(os !== "windows" && isWindowsOnlyShellKey(rawShell)) ? rawShell : platformDefaultShell);
         return [
           project.id as string,
           project.name as string,
-          project.path as string,
+          isSshProject ? "" : project.path as string,
           groupId,
           project.sort_order as number,
           (project.cli_tool as string) ?? "",
@@ -769,10 +775,13 @@ async function applySyncData(
           (project.startup_cmd as string) ?? "",
           (project.env_vars as string) ?? "{}",
           shell,
-          (project.provider_overrides as string) ?? "{}",
-          normalizeWorktreeStrategy(project.worktree_strategy),
-          (project.worktree_root as string) ?? "",
-          toInteger(project.worktree_deps_prompt_enabled, 0),
+          isSshProject ? "{}" : (project.provider_overrides as string) ?? "{}",
+          isSshProject ? "disabled" : normalizeWorktreeStrategy(project.worktree_strategy),
+          isSshProject ? "" : (project.worktree_root as string) ?? "",
+          isSshProject ? 0 : toInteger(project.worktree_deps_prompt_enabled, 0),
+          environmentType,
+          null,
+          isSshProject && typeof project.remote_path === "string" ? project.remote_path : "",
           (project.created_at as string) ?? nowStr,
           (project.updated_at as string) ?? nowStr,
         ];
