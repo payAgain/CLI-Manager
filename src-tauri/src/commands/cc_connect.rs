@@ -26,6 +26,7 @@ const MAX_LOG_PAGE_SIZE: usize = 500;
 const MAX_CAPTURED_LOG_LINE_BYTES: usize = 8 * 1024;
 const VERSION_PROBE_TIMEOUT: Duration = Duration::from_secs(6);
 const CONFIG_FORMAT_TIMEOUT: Duration = Duration::from_secs(8);
+const CODEX_APP_SERVER_PROBE_TIMEOUT: Duration = Duration::from_secs(6);
 const LOCAL_PROXY_CONNECT_TIMEOUT: Duration = Duration::from_millis(250);
 const LOCAL_PROXY_PORTS: [u16; 2] = [7890, 10808];
 const REMOTE_SWITCH_ARG_PREFIX: &str = "--cc-connect-switch=";
@@ -75,6 +76,24 @@ impl CcConnectAgent {
             Self::Codex => "suggest",
         }
     }
+
+    fn configured_mode(self, yolo_enabled: bool) -> &'static str {
+        if !yolo_enabled {
+            return self.safe_mode();
+        }
+        match self {
+            Self::Claude => "bypassPermissions",
+            Self::Codex => "yolo",
+        }
+    }
+
+    fn backend(self) -> Option<&'static str> {
+        matches!(self, Self::Codex).then_some("app_server")
+    }
+
+    fn app_server_url(self) -> Option<&'static str> {
+        matches!(self, Self::Codex).then_some("stdio://")
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -102,6 +121,8 @@ pub struct CcConnectProfile {
     pub agent: CcConnectAgent,
     pub platform: CcConnectPlatform,
     pub allow_from: String,
+    #[serde(default)]
+    pub yolo_enabled: bool,
     #[serde(default = "default_true")]
     pub proxy_enabled: bool,
     pub proxy_url: Option<String>,
@@ -242,6 +263,7 @@ pub struct CcConnectManager {
     logs: Arc<Mutex<CcConnectLogBuffer>>,
     log_writer: SharedLogWriter,
     detection: Arc<Mutex<Option<DetectionCache>>>,
+    codex_app_server_check: Arc<Mutex<Option<Result<(), String>>>>,
 }
 
 impl Default for CcConnectManager {
@@ -252,6 +274,7 @@ impl Default for CcConnectManager {
             logs: Arc::new(Mutex::new(CcConnectLogBuffer::default())),
             log_writer: Arc::new(Mutex::new(None)),
             detection: Arc::new(Mutex::new(None)),
+            codex_app_server_check: Arc::new(Mutex::new(None)),
         }
     }
 }
@@ -310,6 +333,21 @@ impl CcConnectManager {
                 requested_path: requested_key,
                 result: result.clone(),
             });
+        }
+        result
+    }
+
+    fn check_codex_app_server(&self, refresh: bool) -> Result<(), String> {
+        if !refresh {
+            if let Ok(cache) = self.codex_app_server_check.lock() {
+                if let Some(result) = cache.as_ref() {
+                    return result.clone();
+                }
+            }
+        }
+        let result = probe_codex_app_server();
+        if let Ok(mut cache) = self.codex_app_server_check.lock() {
+            *cache = Some(result.clone());
         }
         result
     }
@@ -557,6 +595,41 @@ fn output_text(stdout: &[u8], stderr: &[u8]) -> String {
     }
 }
 
+fn codex_app_server_help_supported(output: &str) -> bool {
+    let normalized = output.to_ascii_lowercase();
+    normalized.contains("codex app-server")
+        && normalized.contains("--listen")
+        && normalized.contains("stdio://")
+}
+
+fn probe_codex_app_server() -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    let command = {
+        let mut command = silent_command("cmd.exe");
+        command.args(["/d", "/s", "/c", "codex app-server --help"]);
+        command
+    };
+    #[cfg(not(target_os = "windows"))]
+    let command = {
+        let mut command = silent_command("codex");
+        command.args(["app-server", "--help"]);
+        command
+    };
+    let output = output_with_timeout(command, CODEX_APP_SERVER_PROBE_TIMEOUT)
+        .map_err(|err| format!("Codex app-server probe failed: {err}"))?;
+    let help = output_text(&output.stdout, &output.stderr);
+    if !output.status.success() {
+        return Err(format!(
+            "Codex app-server probe exited with {}: {}",
+            output.status, help
+        ));
+    }
+    if !codex_app_server_help_supported(&help) {
+        return Err("installed Codex CLI does not support app-server stdio transport".to_string());
+    }
+    Ok(())
+}
+
 fn parse_version(output: &str) -> Option<(String, bool)> {
     let token = output.split_whitespace().find(|token| {
         token
@@ -643,6 +716,10 @@ struct ManagedAgent {
 struct ManagedAgentOptions {
     work_dir: String,
     mode: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    backend: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    app_server_url: Option<String>,
     env: BTreeMap<String, String>,
 }
 #[derive(Serialize)]
@@ -819,7 +896,12 @@ fn build_managed_config(
                 kind: profile.agent.config_type().to_string(),
                 options: ManagedAgentOptions {
                     work_dir: config_path_value(Path::new(&profile.project_path)),
-                    mode: profile.agent.safe_mode().to_string(),
+                    mode: profile
+                        .agent
+                        .configured_mode(profile.yolo_enabled)
+                        .to_string(),
+                    backend: profile.agent.backend().map(str::to_string),
+                    app_server_url: profile.agent.app_server_url().map(str::to_string),
                     // cc-connect resolves platform placeholders in its own process,
                     // then MergeEnv lets these empty values override inheritance into
                     // Claude/Codex child processes.
@@ -2367,6 +2449,14 @@ impl CcConnectManager {
         ];
         if let Some(profile) = profile.as_ref() {
             blockers.extend(profile_issue_codes(profile));
+            if profile.agent == CcConnectAgent::Codex
+                && self.check_codex_app_server(refresh_detection).is_err()
+            {
+                blockers.push("codex_app_server_unavailable".to_string());
+            }
+            if profile.yolo_enabled {
+                warnings.push("yolo_enabled".to_string());
+            }
         } else {
             blockers.push("profile_missing".to_string());
         }
@@ -2515,6 +2605,11 @@ impl CcConnectManager {
             ));
         }
         validate_registered_project(&profile)?;
+        if profile.agent == CcConnectAgent::Codex {
+            self.check_codex_app_server(true).map_err(|err| {
+                format!("Codex interactive approval backend is unavailable: {err}")
+            })?;
+        }
         let binary = self.detect(profile.executable_path.as_deref(), true)?;
         if !binary.compatible {
             return Err(format!(
@@ -3059,6 +3154,7 @@ mod tests {
             agent: CcConnectAgent::Claude,
             platform: CcConnectPlatform::Telegram,
             allow_from: "123456789".to_string(),
+            yolo_enabled: false,
             proxy_enabled: true,
             proxy_url: None,
             logging_enabled: false,
@@ -3150,6 +3246,25 @@ mod tests {
             normalize_allow_from(CcConnectPlatform::Feishu, "ou_owner").unwrap(),
             "ou_owner"
         );
+    }
+
+    #[test]
+    fn profile_without_yolo_field_defaults_to_safe_mode() {
+        let project = tempfile::tempdir().unwrap();
+        let mut value = serde_json::to_value(sample_profile(project.path())).unwrap();
+        value.as_object_mut().unwrap().remove("yoloEnabled");
+        let profile: CcConnectProfile = serde_json::from_value(value).unwrap();
+        assert!(!profile.yolo_enabled);
+    }
+
+    #[test]
+    fn codex_app_server_help_requires_stdio_transport() {
+        assert!(codex_app_server_help_supported(
+            "Usage: codex app-server [OPTIONS]\n--listen <URL>\n[default: stdio://]"
+        ));
+        assert!(!codex_app_server_help_supported(
+            "Usage: codex app-server [OPTIONS]\n--listen <URL>"
+        ));
     }
     #[test]
     fn proxy_url_is_normalized_and_rejects_unsafe_values() {
@@ -3320,6 +3435,9 @@ mod tests {
             value["projects"][0]["agent"]["options"]["mode"].as_str(),
             Some("default")
         );
+        let agent_options = value["projects"][0]["agent"]["options"].as_table().unwrap();
+        assert!(!agent_options.contains_key("backend"));
+        assert!(!agent_options.contains_key("app_server_url"));
         assert_eq!(
             value["projects"][0]["agent"]["options"]["env"][TELEGRAM_TOKEN_ENV].as_str(),
             Some("")
@@ -3351,6 +3469,47 @@ mod tests {
         assert!(switch_exec.contains("$raw=@'\n{{args:}}\n'@"));
         assert!(switch_exec.contains("ToBase64String"));
         assert!(!switch_exec.contains(&path_string(project.path())));
+    }
+
+    #[test]
+    fn codex_uses_app_server_approvals_and_yolo_is_explicit() {
+        let project = tempfile::tempdir().unwrap();
+        let render = |profile: &CcConnectProfile| {
+            let raw = toml::to_string(
+                &build_managed_config(
+                    profile,
+                    Path::new(r"C:\Users\test\AppData\Local\CLI-Manager\cli-manager-projects.txt"),
+                    Path::new(r"C:\Users\test\AppData\Local\CLI-Manager\cli-manager-switch.ps1"),
+                )
+                .unwrap(),
+            )
+            .unwrap();
+            toml::from_str::<toml::Value>(&raw).unwrap()
+        };
+
+        let mut profile = sample_profile(project.path());
+        profile.agent = CcConnectAgent::Codex;
+        let safe = render(&profile);
+        let safe_options = safe["projects"][0]["agent"]["options"].as_table().unwrap();
+        assert_eq!(safe_options["mode"].as_str(), Some("suggest"));
+        assert_eq!(safe_options["backend"].as_str(), Some("app_server"));
+        assert_eq!(safe_options["app_server_url"].as_str(), Some("stdio://"));
+
+        profile.yolo_enabled = true;
+        let codex_yolo = render(&profile);
+        assert_eq!(
+            codex_yolo["projects"][0]["agent"]["options"]["mode"].as_str(),
+            Some("yolo")
+        );
+
+        profile.agent = CcConnectAgent::Claude;
+        let claude_yolo = render(&profile);
+        let claude_options = claude_yolo["projects"][0]["agent"]["options"]
+            .as_table()
+            .unwrap();
+        assert_eq!(claude_options["mode"].as_str(), Some("bypassPermissions"));
+        assert!(!claude_options.contains_key("backend"));
+        assert!(!claude_options.contains_key("app_server_url"));
     }
     #[test]
     fn project_list_and_switch_tokens_are_stable_and_safe() {
@@ -3595,7 +3754,8 @@ mod tests {
             return;
         };
         let project = tempfile::tempdir().unwrap();
-        let profile = sample_profile(project.path());
+        let mut profile = sample_profile(project.path());
+        profile.agent = CcConnectAgent::Codex;
         let config = build_managed_config(
             &profile,
             Path::new(r"C:\Users\test\AppData\Local\CLI-Manager\cli-manager-projects.txt"),

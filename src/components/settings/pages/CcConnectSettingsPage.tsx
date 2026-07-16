@@ -11,6 +11,7 @@ import {
   Select,
   SimpleGrid,
   Stack,
+  Switch,
   Text,
   TextInput,
 } from "@mantine/core";
@@ -45,6 +46,7 @@ interface CcConnectProfile {
   agent: AgentKind;
   platform: PlatformKind;
   allowFrom: string;
+  yoloEnabled: boolean;
   proxyEnabled: boolean;
   proxyUrl: string | null;
   loggingEnabled: boolean;
@@ -97,6 +99,7 @@ const EMPTY_PROFILE: CcConnectProfile = {
   agent: "claude",
   platform: "telegram",
   allowFrom: "",
+  yoloEnabled: false,
   proxyEnabled: true,
   proxyUrl: null,
   loggingEnabled: false,
@@ -114,12 +117,14 @@ const BLOCKER_KEYS: Record<string, TranslationKey> = {
   config_missing: "settings.ccConnect.blocker.configMissing",
   binary_missing: "settings.ccConnect.blocker.binaryMissing",
   binary_incompatible: "settings.ccConnect.blocker.binaryIncompatible",
+  codex_app_server_unavailable: "settings.ccConnect.blocker.codexAppServerUnavailable",
 };
 
 const WARNING_KEYS: Record<string, TranslationKey> = {
   independent_sessions: "settings.ccConnect.warning.independentSessions",
   current_user_permissions: "settings.ccConnect.warning.currentUserPermissions",
   credential_store_unavailable: "settings.ccConnect.warning.credentialStoreUnavailable",
+  yolo_enabled: "settings.ccConnect.warning.yoloEnabled",
 };
 
 function errorMessage(error: unknown) {
@@ -157,6 +162,7 @@ export function CcConnectSettingsPage() {
   const [dirty, setDirty] = useState(false);
   const [executableDirty, setExecutableDirty] = useState(false);
   const [clearConfirmOpen, setClearConfirmOpen] = useState(false);
+  const [yoloConfirmOpen, setYoloConfirmOpen] = useState(false);
   const logCursorRef = useRef(0);
   const statusRequestRef = useRef(0);
   const statusInFlightRef = useRef(false);
@@ -255,6 +261,14 @@ export function CcConnectSettingsPage() {
     setProfile((current) => ({ ...current, [key]: value }));
     formTouchedRef.current = true;
     setDirty(true);
+  };
+
+  const requestYoloChange = (enabled: boolean) => {
+    if (!enabled) {
+      updateProfile("yoloEnabled", false);
+      return;
+    }
+    if (!profile.yoloEnabled) setYoloConfirmOpen(true);
   };
 
   const selectProject = (projectId: string | null) => {
@@ -487,6 +501,15 @@ export function CcConnectSettingsPage() {
           value={profile.allowFrom}
           onChange={(event) => updateProfile("allowFrom", event.currentTarget.value)}
         />
+        <Switch
+          mt="md"
+          color="red"
+          checked={profile.yoloEnabled}
+          onChange={(event) => requestYoloChange(event.currentTarget.checked)}
+          label={t("settings.ccConnect.yoloEnabled")}
+          description={t("settings.ccConnect.yoloEnabledDescription")}
+          aria-label={t("settings.ccConnect.yoloEnabled")}
+        />
         <Checkbox
           mt="sm"
           checked={profile.proxyEnabled}
@@ -609,6 +632,20 @@ export function CcConnectSettingsPage() {
             : logs.map((line) => `[${formatTimestamp(line.timestampMs, language)}] [${line.source}] ${line.message}`).join("\n")}
         </pre>
       </Card>}
+      <ConfirmDialog
+        open={yoloConfirmOpen}
+        title={t("settings.ccConnect.yoloConfirmTitle")}
+        message={t("settings.ccConnect.yoloConfirmMessage")}
+        confirmText={t("settings.ccConnect.yoloConfirmAction")}
+        cancelText={t("common.cancel")}
+        danger
+        zIndex={80}
+        onClose={() => setYoloConfirmOpen(false)}
+        onConfirm={() => {
+          setYoloConfirmOpen(false);
+          updateProfile("yoloEnabled", true);
+        }}
+      />
       <ConfirmDialog
         open={clearConfirmOpen}
         title={t("settings.ccConnect.clearConfirmTitle")}
