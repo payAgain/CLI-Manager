@@ -16,11 +16,11 @@ use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::{BufRead, BufReader, Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::net::{Shutdown, TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// 无会话且无客户端持续该时长后自灭（契约：10 分钟）。
@@ -35,6 +35,12 @@ pub const TOTAL_BUFFER_MAX_BYTES: usize = 128 * 1024 * 1024;
 pub const MAX_SESSIONS: usize = 64;
 /// 无客户端时缓存的 hook 上报条数上限（契约：200，attach 后补发）。
 pub const HOOK_CACHE_MAX: usize = 200;
+/// 单客户端实时输出积压上限。满后仅阻塞对应 PTY reader，不阻塞命令应答。
+const CLIENT_OUTPUT_QUEUE_MAX_BYTES: usize = 4 * 1024 * 1024;
+/// 控制帧（命令应答、状态、hook）优先于实时输出，数量异常时断开客户端。
+const CLIENT_CONTROL_QUEUE_MAX_FRAMES: usize = 256;
+/// 慢客户端不能无限占住 daemon 写线程；ring buffer 保留输出供后续 attach。
+const CLIENT_WRITE_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// 按整帧存储的回放缓冲：每帧都是 PTY reader 切好的 ANSI 安全块，
 /// 超限时从头丢弃整帧，天然保持边界安全（契约）。
@@ -72,8 +78,141 @@ impl SessionBuffer {
 }
 
 struct ClientHandle {
-    writer: Arc<Mutex<TcpStream>>,
+    writer: Arc<ClientWriter>,
     attached: HashSet<String>,
+}
+
+struct ClientWriterState {
+    control: VecDeque<Vec<u8>>,
+    output: VecDeque<Vec<u8>>,
+    output_bytes: usize,
+    closed: bool,
+}
+
+impl ClientWriterState {
+    fn new() -> Self {
+        Self {
+            control: VecDeque::new(),
+            output: VecDeque::new(),
+            output_bytes: 0,
+            closed: false,
+        }
+    }
+
+    fn pop_next(&mut self) -> Option<Vec<u8>> {
+        if let Some(frame) = self.control.pop_front() {
+            return Some(frame);
+        }
+        let frame = self.output.pop_front()?;
+        self.output_bytes = self.output_bytes.saturating_sub(frame.len());
+        Some(frame)
+    }
+}
+
+/// 每个客户端只有一个 socket writer。控制帧优先，PTY 输出走有界队列，
+/// 避免慢 WebView 把 create/write/close/reconcile 的应答一起堵死。
+struct ClientWriter {
+    shared: Arc<(Mutex<ClientWriterState>, Condvar)>,
+}
+
+impl ClientWriter {
+    fn start(mut stream: TcpStream, peer: String) -> Arc<Self> {
+        let shared = Arc::new((Mutex::new(ClientWriterState::new()), Condvar::new()));
+        let writer = Arc::new(Self {
+            shared: Arc::clone(&shared),
+        });
+        std::thread::spawn(move || {
+            let _ = stream.set_nodelay(true);
+            let _ = stream.set_write_timeout(Some(CLIENT_WRITE_TIMEOUT));
+            loop {
+                let frame = {
+                    let (lock, ready) = &*shared;
+                    let Ok(mut state) = lock.lock() else {
+                        break;
+                    };
+                    while !state.closed && state.control.is_empty() && state.output.is_empty() {
+                        let Ok(next) = ready.wait(state) else {
+                            return;
+                        };
+                        state = next;
+                    }
+                    if state.closed {
+                        break;
+                    }
+                    let frame = state.pop_next();
+                    ready.notify_all();
+                    frame
+                };
+                let Some(frame) = frame else {
+                    continue;
+                };
+                if let Err(err) = stream.write_all(&frame) {
+                    log::warn!("daemon client writer failed ({peer}): {err}");
+                    break;
+                }
+            }
+            if let Ok(mut state) = shared.0.lock() {
+                state.closed = true;
+                shared.1.notify_all();
+            }
+            let _ = stream.shutdown(Shutdown::Both);
+        });
+        writer
+    }
+
+    fn send_control(&self, frame: &DaemonFrame) -> bool {
+        let encoded = encode_frame(frame).into_bytes();
+        let (lock, ready) = &*self.shared;
+        let Ok(mut state) = lock.lock() else {
+            return false;
+        };
+        if state.closed || state.control.len() >= CLIENT_CONTROL_QUEUE_MAX_FRAMES {
+            state.closed = true;
+            ready.notify_all();
+            return false;
+        }
+        state.control.push_back(encoded);
+        ready.notify_one();
+        true
+    }
+
+    fn send_output(&self, encoded: Vec<u8>) -> bool {
+        let frame_len = encoded.len();
+        let (lock, ready) = &*self.shared;
+        let Ok(mut state) = lock.lock() else {
+            return false;
+        };
+        while !state.closed
+            && !state.output.is_empty()
+            && state.output_bytes.saturating_add(frame_len) > CLIENT_OUTPUT_QUEUE_MAX_BYTES
+        {
+            let Ok(next) = ready.wait(state) else {
+                return false;
+            };
+            state = next;
+        }
+        if state.closed {
+            return false;
+        }
+        state.output_bytes = state.output_bytes.saturating_add(frame_len);
+        state.output.push_back(encoded);
+        ready.notify_one();
+        true
+    }
+
+    fn close(&self) {
+        let (lock, ready) = &*self.shared;
+        if let Ok(mut state) = lock.lock() {
+            state.closed = true;
+            ready.notify_all();
+        }
+    }
+}
+
+impl Drop for ClientWriter {
+    fn drop(&mut self) {
+        self.close();
+    }
 }
 
 struct SessionEntry {
@@ -107,7 +246,6 @@ impl DaemonHost {
         let frame = DaemonFrame::HookReport {
             payload: payload.clone(),
         };
-        let encoded = encode_frame(&frame);
         let Ok(clients) = self.clients.lock() else {
             return;
         };
@@ -121,9 +259,14 @@ impl DaemonHost {
             }
             return;
         }
-        for client in clients.values() {
-            if let Ok(mut writer) = client.writer.lock() {
-                let _ = writer.write_all(encoded.as_bytes());
+        let writers: Vec<Arc<ClientWriter>> = clients
+            .values()
+            .map(|client| Arc::clone(&client.writer))
+            .collect();
+        drop(clients);
+        for writer in writers {
+            if !writer.send_control(&frame) {
+                log::warn!("daemon hook push skipped: client writer unavailable");
             }
         }
     }
@@ -158,13 +301,15 @@ impl DaemonHost {
     }
 
     /// 新客户端连上后补发缓存的 hook 上报。
-    fn flush_hook_cache_to(&self, writer: &Arc<Mutex<TcpStream>>) {
+    fn flush_hook_cache_to(&self, writer: &Arc<ClientWriter>) {
         let cached: Vec<serde_json::Value> = match self.hook_cache.lock() {
             Ok(mut cache) => cache.drain(..).collect(),
             Err(_) => return,
         };
         for payload in cached {
-            let _ = write_frame(writer, &DaemonFrame::HookReport { payload });
+            if !writer.send_control(&DaemonFrame::HookReport { payload }) {
+                break;
+            }
         }
     }
 
@@ -206,16 +351,33 @@ impl DaemonHost {
 
     /// 向所有 attach 了该会话的客户端推送一帧；写失败的客户端跳过（由其读线程负责回收）。
     fn push_to_attached(&self, session_id: &str, frame: &DaemonFrame) {
-        let encoded = encode_frame(frame);
         let Ok(clients) = self.clients.lock() else {
             return;
         };
-        for client in clients.values() {
-            if !client.attached.contains(session_id) {
-                continue;
+        let writers: Vec<Arc<ClientWriter>> = clients
+            .values()
+            .filter(|client| client.attached.contains(session_id))
+            .map(|client| Arc::clone(&client.writer))
+            .collect();
+        drop(clients);
+        if matches!(frame, DaemonFrame::Output { .. }) {
+            let encoded = encode_frame(frame).into_bytes();
+            for writer in writers {
+                if !writer.send_output(encoded.clone()) {
+                    log::warn!(
+                        "daemon output push stopped: session_id={}, client writer unavailable",
+                        session_id
+                    );
+                }
             }
-            if let Ok(mut writer) = client.writer.lock() {
-                let _ = writer.write_all(encoded.as_bytes());
+        } else {
+            for writer in writers {
+                if !writer.send_control(frame) {
+                    log::warn!(
+                        "daemon control push stopped: session_id={}, client writer unavailable",
+                        session_id
+                    );
+                }
             }
         }
     }
@@ -407,8 +569,8 @@ impl DaemonServer {
             .peer_addr()
             .map(|addr| addr.to_string())
             .unwrap_or_else(|_| "unknown".to_string());
-        let writer = match stream.try_clone() {
-            Ok(writer) => Arc::new(Mutex::new(writer)),
+        let mut writer = match stream.try_clone() {
+            Ok(writer) => writer,
             Err(err) => {
                 log::warn!("daemon stream clone failed ({peer}): {err}");
                 return;
@@ -421,7 +583,7 @@ impl DaemonServer {
             Some(line) => match decode_client_frame(&line) {
                 Ok(ClientFrame::Auth { token, .. }) if token == self.token => {
                     let _ = write_frame(
-                        &writer,
+                        &mut writer,
                         &DaemonFrame::AuthOk {
                             daemon_version: self.version.clone(),
                             pid: std::process::id(),
@@ -431,7 +593,7 @@ impl DaemonServer {
                 _ => {
                     log::warn!("daemon auth rejected ({peer})");
                     let _ = write_frame(
-                        &writer,
+                        &mut writer,
                         &DaemonFrame::AuthErr {
                             reason: "auth_failed".to_string(),
                         },
@@ -442,6 +604,7 @@ impl DaemonServer {
             None => return,
         }
 
+        let writer = ClientWriter::start(writer, peer.clone());
         let client_id = self.next_client_id.fetch_add(1, Ordering::SeqCst);
         if let Ok(mut clients) = self.host.clients.lock() {
             clients.insert(
@@ -463,13 +626,12 @@ impl DaemonServer {
                 }
                 Err(ProtocolError::UnknownType(kind)) => {
                     // 前向兼容：未知 type 回错误帧但保持连接。
-                    let _ = write_frame(
-                        &writer,
-                        &DaemonFrame::Err {
-                            id: 0,
-                            message: format!("unknown frame type: {kind}"),
-                        },
-                    );
+                    if !writer.send_control(&DaemonFrame::Err {
+                        id: 0,
+                        message: format!("unknown frame type: {kind}"),
+                    }) {
+                        break;
+                    }
                 }
                 Err(ProtocolError::Malformed(reason)) => {
                     log::warn!("daemon malformed frame ({peer}): {reason}");
@@ -479,20 +641,22 @@ impl DaemonServer {
         }
 
         if let Ok(mut clients) = self.host.clients.lock() {
-            clients.remove(&client_id);
+            if let Some(client) = clients.remove(&client_id) {
+                client.writer.close();
+            }
         }
         log::info!("daemon client disconnected ({peer}, id={client_id})");
     }
 
     /// 返回 false 表示应结束该连接。
-    fn dispatch(&self, client_id: u64, frame: ClientFrame, writer: &Arc<Mutex<TcpStream>>) -> bool {
+    fn dispatch(&self, client_id: u64, frame: ClientFrame, writer: &Arc<ClientWriter>) -> bool {
         // 积压 hook 上报在首次 List 时补发（而非连接瞬间）：此时前端 webview
         // 的事件监听器已就绪（恢复流程先查会话列表），避免 re-emit 被丢。
         if matches!(frame, ClientFrame::List { .. }) {
             self.host.flush_hook_cache_to(writer);
         }
         let reply = self.handle_frame(client_id, frame);
-        write_frame(writer, &reply).is_ok()
+        writer.send_control(&reply)
     }
 
     fn handle_frame(&self, client_id: u64, frame: ClientFrame) -> DaemonFrame {
@@ -715,10 +879,7 @@ fn err_frame(id: u64, message: &str) -> DaemonFrame {
     }
 }
 
-fn write_frame(writer: &Arc<Mutex<TcpStream>>, frame: &DaemonFrame) -> std::io::Result<()> {
-    let mut writer = writer
-        .lock()
-        .map_err(|_| std::io::Error::other("writer poisoned"))?;
+fn write_frame(writer: &mut TcpStream, frame: &DaemonFrame) -> std::io::Result<()> {
     writer.write_all(encode_frame(frame).as_bytes())
 }
 
@@ -820,7 +981,7 @@ mod tests {
         host.clients.lock().expect("lock clients").insert(
             client_id,
             ClientHandle {
-                writer: Arc::new(Mutex::new(server_stream)),
+                writer: ClientWriter::start(server_stream, "test-client".to_string()),
                 attached: HashSet::new(),
             },
         );
@@ -855,6 +1016,37 @@ mod tests {
             .attached
             .contains(session_id));
         drop(peer);
+    }
+
+    #[test]
+    fn client_writer_prioritizes_control_frames() {
+        let mut state = ClientWriterState::new();
+        state.output.push_back(b"output\n".to_vec());
+        state.output_bytes = 7;
+        state.control.push_back(b"reply\n".to_vec());
+
+        assert_eq!(state.pop_next().unwrap(), b"reply\n");
+        assert_eq!(state.pop_next().unwrap(), b"output\n");
+        assert_eq!(state.output_bytes, 0);
+    }
+
+    #[test]
+    fn client_writer_control_queue_is_independent_from_output_backlog() {
+        let writer = ClientWriter {
+            shared: Arc::new((Mutex::new(ClientWriterState::new()), Condvar::new())),
+        };
+        {
+            let mut state = writer.shared.0.lock().unwrap();
+            state
+                .output
+                .push_back(vec![b'x'; CLIENT_OUTPUT_QUEUE_MAX_BYTES]);
+            state.output_bytes = CLIENT_OUTPUT_QUEUE_MAX_BYTES;
+        }
+
+        assert!(writer.send_control(&DaemonFrame::Pong { id: 7 }));
+        let state = writer.shared.0.lock().unwrap();
+        assert_eq!(state.control.len(), 1);
+        assert_eq!(state.output_bytes, CLIENT_OUTPUT_QUEUE_MAX_BYTES);
     }
 
     #[test]
