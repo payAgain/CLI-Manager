@@ -30,7 +30,7 @@ import { useTerminalInput, type TerminalSuggestionGhostState } from "../hooks/us
 import { getTerminalCellWidth } from "../lib/terminalCellWidth";
 import { normalizeTerminalTuiComposerBackground } from "../lib/terminalTuiDisplay";
 import { hexToRgba, normalizeHexColor } from "../lib/terminalColor";
-import { terminalShortcutMatches, wrapTerminalPasteTextForCtrlShiftV } from "../lib/terminalKeyboard";
+import { wrapTerminalPasteTextForCtrlShiftV } from "../lib/terminalKeyboard";
 import {
   didRenderFullTerminalViewport,
   planTerminalVisibilityRestore,
@@ -67,7 +67,6 @@ import { registerTerminalSnapshotSource } from "../lib/sessionSnapshotPersistenc
 
 const CODEX_COMMAND_PATTERN = /(?:^|\s)codex(?:\.(?:cmd|exe|ps1))?(?:\s|$)/i;
 const CLAUDE_COMMAND_PATTERN = /(?:^|\s)claude(?:\.(?:cmd|exe|ps1))?(?:\s|$)/i;
-const AI_TUI_FILE_PASTE_SHORTCUT_DATA = "\x1bv";
 const CODEX_IME_DEBUG_WINDOW_MS = 250;
 const CODEX_IME_DUPLICATE_WINDOW_MS = 120;
 type TerminalSubsystemDisposable = IDisposable;
@@ -1070,16 +1069,6 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
       ) {
         if (acceptSuggestion()) {
           e.preventDefault();
-          return false;
-        }
-      }
-      if (e.type === "keydown" && isClaudeOrCodexSession()) {
-        const shortcut = useSettingsStore.getState().keyboardShortcuts.pasteFileToAiTui;
-        if (terminalShortcutMatches(e, shortcut)) {
-          e.preventDefault();
-          markAttentionInputHandled();
-          invoke("pty_write", { sessionId, data: AI_TUI_FILE_PASTE_SHORTCUT_DATA })
-            .catch((err) => reportPtyWriteError("ai_file_paste_shortcut", err));
           return false;
         }
       }

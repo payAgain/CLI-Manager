@@ -141,7 +141,6 @@ export type ShortcutAction =
   | "commandPalette"
   | "sessionHistory"
   | "copyAi"
-  | "pasteFileToAiTui"
   | "toggleTerminalFullscreen";
 export type TabSwitchShortcutModifier = "Alt" | "Ctrl" | "Shift";
 export type KeyboardShortcutMap = Record<ShortcutAction, string>;
@@ -167,7 +166,6 @@ const SHORTCUT_ACTIONS: readonly ShortcutAction[] = [
   "commandPalette",
   "sessionHistory",
   "copyAi",
-  "pasteFileToAiTui",
   "toggleTerminalFullscreen",
 ];
 
@@ -222,7 +220,6 @@ export const DEFAULT_KEYBOARD_SHORTCUTS: KeyboardShortcutMap = {
   commandPalette: "Ctrl+P",
   sessionHistory: "Ctrl+K",
   copyAi: "Alt+P",
-  pasteFileToAiTui: "Alt+V",
   toggleTerminalFullscreen: "F11",
 };
 

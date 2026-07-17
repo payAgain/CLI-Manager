@@ -19,7 +19,6 @@ const SHORTCUT_LABELS: Record<ShortcutAction, TranslationKey> = {
   commandPalette: "settings.shortcuts.action.commandPalette",
   sessionHistory: "settings.shortcuts.action.sessionHistory",
   copyAi: "settings.shortcuts.action.copyAi",
-  pasteFileToAiTui: "settings.shortcuts.action.pasteFileToAiTui",
   toggleTerminalFullscreen: "settings.shortcuts.action.toggleTerminalFullscreen",
 };
 

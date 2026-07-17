@@ -15,7 +15,7 @@ import { getClaudeProviderOverride, getCodexProviderOverride, getProviderSwitchA
 import { useProjectStore } from "./projectStore";
 import { appendSyncedHistoryContextArg } from "../lib/syncedHistoryContext";
 import { translateCurrent } from "../lib/i18n";
-import { findProjectByPath, findWorktreeByPath } from "../lib/terminalProject";
+import { findProjectByPath, findWorktreeByPath, resolveProjectForProviderLaunch } from "../lib/terminalProject";
 import {
   addSessionToPaneTree,
   findPaneLeaf,
@@ -936,6 +936,7 @@ export function formatManualDirectCodexInputForPty(command: string, shell?: Shel
 
 export interface DetachedPtyLaunchOptions {
   projectId?: string;
+  worktreeId?: string;
   cwd?: string | null;
   startupCmd?: string | null;
   envVars?: Record<string, string> | null;
@@ -1007,9 +1008,15 @@ function buildPtyEnvVars(
   return Object.keys(next).length > 0 ? next : null;
 }
 
-function getCodexProviderLaunchConfig(projectId?: string, startupCmd?: string | null) {
+function getProviderLaunchProject(projectId?: string, worktreeId?: string) {
   if (!projectId) return null;
-  const project = useProjectStore.getState().projects.find((item) => item.id === projectId);
+  const projectState = useProjectStore.getState();
+  const project = projectState.projects.find((item) => item.id === projectId);
+  return project ? resolveProjectForProviderLaunch(project, projectState.worktrees, worktreeId) : null;
+}
+
+function getCodexProviderLaunchConfig(projectId?: string, startupCmd?: string | null, worktreeId?: string) {
+  const project = getProviderLaunchProject(projectId, worktreeId);
   if (!project || !isExactCodexProject(project) || project.startup_cmd.trim() || !startupCmd?.trim()) {
     return null;
   }
@@ -1023,9 +1030,8 @@ function getCodexProviderLaunchConfig(projectId?: string, startupCmd?: string | 
   };
 }
 
-function getClaudeProviderLaunchConfig(projectId?: string) {
-  if (!projectId) return null;
-  const project = useProjectStore.getState().projects.find((item) => item.id === projectId);
+function getClaudeProviderLaunchConfig(projectId?: string, worktreeId?: string) {
+  const project = getProviderLaunchProject(projectId, worktreeId);
   if (!project || getProviderSwitchAppType(project) !== "claude") return null;
   const override = getClaudeProviderOverride(project);
   if (!override) return null;
@@ -1046,8 +1052,8 @@ export async function createDetachedPtyProcess(options: DetachedPtyLaunchOptions
     envVars: buildPtyEnvVars(options.envVars ?? null, resolvedShell),
     shell: resolvedShell,
     hookEnvEnabled: await shouldEnableHookEnv(),
-    claudeProvider: getClaudeProviderLaunchConfig(options.projectId),
-    codexProvider: getCodexProviderLaunchConfig(options.projectId, options.startupCmd),
+    claudeProvider: getClaudeProviderLaunchConfig(options.projectId, options.worktreeId),
+    codexProvider: getCodexProviderLaunchConfig(options.projectId, options.startupCmd, options.worktreeId),
   });
 
   return {
@@ -1109,8 +1115,8 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
         envVars: buildPtyEnvVars(envVars ?? null, resolvedShell),
         shell: resolvedShell,
         hookEnvEnabled: await shouldEnableHookEnv(),
-        claudeProvider: getClaudeProviderLaunchConfig(projectId),
-        codexProvider: getCodexProviderLaunchConfig(projectId, startupCmd),
+        claudeProvider: getClaudeProviderLaunchConfig(projectId, worktreeId),
+        codexProvider: getCodexProviderLaunchConfig(projectId, startupCmd, worktreeId),
       });
     } catch (err) {
       const description = formatTerminalCreateError(err);
@@ -1540,8 +1546,8 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
         envVars: buildPtyEnvVars(options?.envVars ?? null, resolvedShell),
         shell: resolvedShell,
         hookEnvEnabled: await shouldEnableHookEnv(),
-        claudeProvider: getClaudeProviderLaunchConfig(options?.projectId),
-        codexProvider: getCodexProviderLaunchConfig(options?.projectId, options?.startupCmd),
+        claudeProvider: getClaudeProviderLaunchConfig(options?.projectId, options?.worktreeId),
+        codexProvider: getCodexProviderLaunchConfig(options?.projectId, options?.startupCmd, options?.worktreeId),
       });
     } catch (err) {
       const description = formatTerminalCreateError(err);
@@ -2002,8 +2008,8 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
           envVars: buildPtyEnvVars(ps.envVars ?? null, resolvedShell),
           shell: resolvedShell,
           hookEnvEnabled: await shouldEnableHookEnv(),
-          claudeProvider: getClaudeProviderLaunchConfig(ps.projectId),
-          codexProvider: getCodexProviderLaunchConfig(ps.projectId, ps.startupCmd),
+          claudeProvider: getClaudeProviderLaunchConfig(ps.projectId, ps.worktreeId),
+          codexProvider: getCodexProviderLaunchConfig(ps.projectId, ps.startupCmd, ps.worktreeId),
         });
       } catch (err) {
         logError("Failed to restore session", { session: ps, err });
