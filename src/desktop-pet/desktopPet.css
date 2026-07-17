@@ -109,13 +109,15 @@
 
 .desktop-pet-menu {
   position: absolute;
-  right: 8px;
-  bottom: 10px;
+  inset: 6px;
   z-index: 5;
   display: flex;
-  width: 145px;
+  min-width: 0;
+  min-height: 0;
+  box-sizing: border-box;
   flex-direction: column;
-  gap: 3px;
+  gap: 5px;
+  overflow: hidden;
   border: 1px solid rgb(148 163 184 / 32%);
   border-radius: 12px;
   background: rgb(7 16 24 / 96%);
@@ -124,7 +126,43 @@
   cursor: default;
 }
 
+.desktop-pet-menu-title {
+  flex: 0 0 auto;
+  padding: 2px 5px 0;
+  color: #9fb1a8;
+  font-weight: 700;
+  font-size: 10px;
+  letter-spacing: .04em;
+}
+
+.desktop-pet-target-list {
+  display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 3px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding-right: 2px;
+  scrollbar-color: rgb(61 214 140 / 42%) transparent;
+  scrollbar-width: thin;
+}
+
+.desktop-pet-menu-actions {
+  display: grid;
+  flex: 0 0 auto;
+  grid-template-columns: 1fr 1fr;
+  gap: 3px;
+  border-top: 1px solid rgb(148 163 184 / 20%);
+  padding-top: 5px;
+}
+
+.desktop-pet-menu-actions button:first-child {
+  grid-column: 1 / -1;
+}
+
 .desktop-pet-menu button {
+  min-width: 0;
   border: 0;
   border-radius: 8px;
   color: #e5f9ef;
@@ -137,6 +175,95 @@
 }
 .desktop-pet-menu button:hover,
 .desktop-pet-menu button:focus-visible { outline: none; background: rgb(61 214 140 / 16%); }
+
+.desktop-pet-menu .desktop-pet-target {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 6px;
+  padding: 6px;
+}
+
+.desktop-pet-target[data-active="true"] {
+  background: rgb(61 214 140 / 10%);
+}
+
+.desktop-pet-target-indicator {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: #64748b;
+  box-shadow: 0 0 0 2px rgb(100 116 139 / 15%);
+}
+
+.desktop-pet-target[data-status="running"] .desktop-pet-target-indicator {
+  background: #3dd68c;
+  box-shadow: 0 0 0 2px rgb(61 214 140 / 18%);
+}
+
+.desktop-pet-target[data-status="attention"] .desktop-pet-target-indicator {
+  background: #facc15;
+  box-shadow: 0 0 0 2px rgb(250 204 21 / 18%);
+}
+
+.desktop-pet-target[data-status="done"] .desktop-pet-target-indicator {
+  background: #5ac8e0;
+  box-shadow: 0 0 0 2px rgb(90 200 224 / 18%);
+}
+
+.desktop-pet-target[data-status="failed"] .desktop-pet-target-indicator {
+  background: #fb7185;
+  box-shadow: 0 0 0 2px rgb(251 113 133 / 18%);
+}
+
+.desktop-pet-target-copy {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.desktop-pet-target-copy strong,
+.desktop-pet-target-copy small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.desktop-pet-target-copy strong {
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.desktop-pet-target-copy small {
+  color: #9fb1a8;
+  font-size: 9px;
+}
+
+.desktop-pet-target-current {
+  flex: 0 0 auto;
+  border-radius: 999px;
+  color: #72e6ac;
+  background: rgb(61 214 140 / 12%);
+  padding: 2px 4px;
+  font-size: 8px;
+}
+
+.desktop-pet-target-list::-webkit-scrollbar { width: 5px; }
+.desktop-pet-target-list::-webkit-scrollbar-button { display: none; width: 0; height: 0; }
+.desktop-pet-target-list::-webkit-scrollbar-thumb { border-radius: 999px; background: rgb(61 214 140 / 34%); }
+.desktop-pet-target-list::-webkit-scrollbar-track { background: transparent; }
+
+.desktop-pet-target-empty {
+  display: grid;
+  min-height: 44px;
+  place-items: center;
+  color: #9fb1a8;
+  font-size: 10px;
+  text-align: center;
+}
 
 @keyframes desktop-pet-breathe { 0%, 100% { transform: translateY(0) scaleY(1); } 50% { transform: translateY(-2px) scaleY(1.02); } }
 @keyframes desktop-pet-tail { 0%, 100% { transform: rotate(0deg); } 50% { transform: rotate(-12deg); } }

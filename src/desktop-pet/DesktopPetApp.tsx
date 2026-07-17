@@ -14,6 +14,7 @@ import {
   type DesktopPetConfigPayload,
   type DesktopPetMood,
   type DesktopPetSnapshot,
+  type DesktopPetTarget,
   type InstalledPet,
 } from "../lib/desktopPet";
 import { translate } from "../lib/i18n";
@@ -44,6 +45,9 @@ const DEFAULT_CONFIG: DesktopPetConfigPayload = {
     error: translate("zh-CN", "desktopPet.mood.error"),
     sleeping: translate("zh-CN", "desktopPet.mood.sleeping"),
     runningCount: translate("zh-CN", "desktopPet.mood.runningCount"),
+    taskList: translate("zh-CN", "desktopPet.actions.taskList"),
+    currentTask: translate("zh-CN", "desktopPet.actions.currentTask"),
+    unnamedTask: translate("zh-CN", "desktopPet.actions.unnamedTask"),
   },
 };
 
@@ -56,6 +60,7 @@ const DEFAULT_SNAPSHOT: DesktopPetSnapshot = {
   runningCount: 0,
   attentionCount: 0,
   updatedAt: Date.now(),
+  targets: [],
 };
 
 function moodLabel(config: DesktopPetConfigPayload, mood: DesktopPetMood): string {
@@ -64,6 +69,20 @@ function moodLabel(config: DesktopPetConfigPayload, mood: DesktopPetMood): strin
 
 function localPetName(pet: InstalledPet, language: DesktopPetConfigPayload["language"]): string {
   return language === "en-US" ? pet.manifest.name["en-US"] : pet.manifest.name["zh-CN"];
+}
+
+function targetStatusLabel(config: DesktopPetConfigPayload, target: DesktopPetTarget): string {
+  const mood: DesktopPetMood =
+    target.status === "running"
+      ? "working"
+      : target.status === "attention"
+        ? "waiting"
+        : target.status === "done"
+          ? "success"
+          : target.status === "failed"
+            ? "error"
+            : "idle";
+  return moodLabel(config, mood);
 }
 
 export default function DesktopPetApp() {
@@ -168,10 +187,11 @@ export default function DesktopPetApp() {
     });
   };
 
-  const openTarget = () => {
+  const openTarget = (target?: DesktopPetTarget) => {
+    setMenuOpen(false);
     void emitTo("main", DESKTOP_PET_OPEN_TARGET_EVENT, {
-      sessionId: snapshot.sessionId,
-      daemonOnly: snapshot.daemonOnly,
+      sessionId: target?.sessionId ?? snapshot.sessionId,
+      daemonOnly: target?.daemonOnly ?? snapshot.daemonOnly,
     });
   };
 
@@ -180,7 +200,7 @@ export default function DesktopPetApp() {
       className="desktop-pet-root"
       data-mood={displayMood}
       onPointerDown={handlePointerDown}
-      onDoubleClick={openTarget}
+      onDoubleClick={() => openTarget()}
       onContextMenu={(event) => {
         event.preventDefault();
         setMenuOpen((open) => !open);
@@ -214,25 +234,71 @@ export default function DesktopPetApp() {
       </div>
 
       {menuOpen ? (
-        <div className="desktop-pet-menu" role="menu">
-          <button type="button" role="menuitem" onClick={openTarget}>{config.labels.openMain}</button>
-          <button
-            type="button"
-            role="menuitem"
-            onClick={() => void emitTo("main", DESKTOP_PET_OPEN_SETTINGS_EVENT)}
-          >
-            {config.labels.openSettings}
-          </button>
-          <button
-            type="button"
-            role="menuitem"
-            onClick={() => {
-              setMenuOpen(false);
-              void invoke("desktop_pet_window_hide");
-            }}
-          >
-            {config.labels.hide}
-          </button>
+        <div className="desktop-pet-menu" role="menu" aria-label={config.labels.taskList}>
+          <div className="desktop-pet-menu-title">{config.labels.taskList}</div>
+          <div className="desktop-pet-target-list">
+            {snapshot.targets.map((target, index) => {
+              const primary =
+                target.projectName ||
+                target.sessionTitle ||
+                `${config.labels.unnamedTask} ${index + 1}`;
+              const secondary = target.projectName && target.sessionTitle ? target.sessionTitle : null;
+              const status = targetStatusLabel(config, target);
+              return (
+                <button
+                  key={target.sessionId}
+                  type="button"
+                  role="menuitem"
+                  className="desktop-pet-target"
+                  data-status={target.status}
+                  data-active={target.active || undefined}
+                  aria-current={target.active ? "true" : undefined}
+                  onClick={() => openTarget(target)}
+                  title={[target.projectName, target.sessionTitle, status].filter(Boolean).join(" · ")}
+                >
+                  <span className="desktop-pet-target-indicator" aria-hidden="true" />
+                  <span className="desktop-pet-target-copy">
+                    <strong>{primary}</strong>
+                    <small>
+                      {secondary ? `${secondary} · ` : ""}
+                      {status}
+                    </small>
+                  </span>
+                  {target.active ? (
+                    <span className="desktop-pet-target-current">{config.labels.currentTask}</span>
+                  ) : null}
+                </button>
+              );
+            })}
+            {snapshot.targets.length === 0 ? (
+              <div className="desktop-pet-target-empty">{config.labels.sleeping}</div>
+            ) : null}
+          </div>
+          <div className="desktop-pet-menu-actions">
+            <button type="button" role="menuitem" onClick={() => openTarget()}>
+              {config.labels.openMain}
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                setMenuOpen(false);
+                void emitTo("main", DESKTOP_PET_OPEN_SETTINGS_EVENT);
+              }}
+            >
+              {config.labels.openSettings}
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                setMenuOpen(false);
+                void invoke("desktop_pet_window_hide");
+              }}
+            >
+              {config.labels.hide}
+            </button>
+          </div>
         </div>
       ) : null}
     </main>

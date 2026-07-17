@@ -75,6 +75,16 @@ export interface BackgroundPetTask {
   createdAtMs: number;
 }
 
+export interface DesktopPetTarget {
+  sessionId: string;
+  daemonOnly: boolean;
+  sessionTitle: string | null;
+  projectName: string | null;
+  status: TabNotificationState;
+  active: boolean;
+  updatedAt: number;
+}
+
 export interface DesktopPetSnapshot {
   mood: DesktopPetMood;
   sessionId: string | null;
@@ -84,6 +94,7 @@ export interface DesktopPetSnapshot {
   runningCount: number;
   attentionCount: number;
   updatedAt: number;
+  targets: DesktopPetTarget[];
 }
 
 export interface DesktopPetConfigPayload {
@@ -100,6 +111,9 @@ export interface DesktopPetConfigPayload {
     error: string;
     sleeping: string;
     runningCount: string;
+    taskList: string;
+    currentTask: string;
+    unnamedTask: string;
   };
 }
 
@@ -136,15 +150,38 @@ function timestampFromDetails(details: TabStatusDetails | undefined): number {
 }
 
 function daemonTaskStatus(task: BackgroundPetTask): TabNotificationState {
+  const explicitStatus = explicitDaemonTaskStatus(task);
+  if (explicitStatus) return explicitStatus;
+  return task.alive ? "running" : "done";
+}
+
+function explicitDaemonTaskStatus(task: BackgroundPetTask | undefined): TabNotificationState | null {
   if (
-    task.taskStatus === "running" ||
-    task.taskStatus === "attention" ||
-    task.taskStatus === "done" ||
-    task.taskStatus === "failed"
+    task?.taskStatus === "running" ||
+    task?.taskStatus === "attention" ||
+    task?.taskStatus === "done" ||
+    task?.taskStatus === "failed"
   ) {
     return task.taskStatus;
   }
-  return task.alive ? "running" : "done";
+  return null;
+}
+
+function resolveOpenSessionStatus(
+  sessionId: string,
+  tabNotifications: Record<string, TabNotificationState>,
+  tabStatusDetails: Record<string, TabStatusDetails>,
+  daemonTask: BackgroundPetTask | undefined
+): { status: TabNotificationState; updatedAt: number } {
+  const frontendStatus = tabNotifications[sessionId] ?? "none";
+  const frontendUpdatedAt = timestampFromDetails(tabStatusDetails[sessionId]);
+  const daemonStatus = explicitDaemonTaskStatus(daemonTask);
+  const daemonUpdatedAt = daemonTask?.taskUpdatedAtMs ?? daemonTask?.createdAtMs ?? 0;
+
+  if (daemonStatus && (frontendUpdatedAt === 0 || daemonUpdatedAt >= frontendUpdatedAt)) {
+    return { status: daemonStatus, updatedAt: daemonUpdatedAt };
+  }
+  return { status: frontendStatus, updatedAt: frontendUpdatedAt };
 }
 
 interface DeriveDesktopPetSnapshotInput {
@@ -162,14 +199,20 @@ export function deriveDesktopPetSnapshot(input: DeriveDesktopPetSnapshotInput): 
   const openIds = new Set(openPtySessions.map((session) => session.id));
   const projectById = new Map(input.projects.map((project) => [project.id, project]));
   const persistedById = new Map(input.persistedSessions.map((session) => [session.id, session]));
-  const candidates = openPtySessions.map((session) => {
-    const status = input.tabNotifications[session.id] ?? "none";
+  const backgroundById = new Map(input.backgroundTasks.map((task) => [task.sessionId, task]));
+  const candidates: DesktopPetTarget[] = openPtySessions.map((session) => {
+    const { status, updatedAt } = resolveOpenSessionStatus(
+      session.id,
+      input.tabNotifications,
+      input.tabStatusDetails,
+      backgroundById.get(session.id)
+    );
     const project = session.projectId ? projectById.get(session.projectId) : undefined;
     return {
       sessionId: session.id,
       daemonOnly: false,
       status,
-      updatedAt: timestampFromDetails(input.tabStatusDetails[session.id]),
+      updatedAt,
       sessionTitle: session.title || null,
       projectName: project?.name ?? null,
       active: session.id === input.activeSessionId,
@@ -200,6 +243,7 @@ export function deriveDesktopPetSnapshot(input: DeriveDesktopPetSnapshotInput): 
       runningCount: 0,
       attentionCount: 0,
       updatedAt: Date.now(),
+      targets: [],
     };
   }
 
@@ -219,6 +263,7 @@ export function deriveDesktopPetSnapshot(input: DeriveDesktopPetSnapshotInput): 
     runningCount: candidates.filter((candidate) => candidate.status === "running").length,
     attentionCount: candidates.filter((candidate) => candidate.status === "attention").length,
     updatedAt: selected.updatedAt || Date.now(),
+    targets: candidates,
   };
 }
 

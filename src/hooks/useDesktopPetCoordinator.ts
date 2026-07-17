@@ -81,6 +81,9 @@ export function useDesktopPetCoordinator({
       error: t("desktopPet.mood.error"),
       sleeping: t("desktopPet.mood.sleeping"),
       runningCount: t("desktopPet.mood.runningCount"),
+      taskList: t("desktopPet.actions.taskList"),
+      currentTask: t("desktopPet.actions.currentTask"),
+      unnamedTask: t("desktopPet.actions.unnamedTask"),
     },
   }), [desktopPet, language, t]);
 
