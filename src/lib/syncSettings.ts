@@ -26,6 +26,7 @@ export const SETTING_BACKUP_POLICY = {
   terminalThemeMode: "preferences",
   terminalThemeName: "preferences",
   sidebarDensity: "preferences",
+  sidebarProjectFilterVisible: "preferences",
   viewMode: "preferences",
   closeBehavior: "preferences",
   exitWithRunningTasksBehavior: "preferences",

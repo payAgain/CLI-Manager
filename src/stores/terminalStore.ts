@@ -5,7 +5,7 @@ import { toast } from "sonner";
 import type { SubagentTranscriptSource, TerminalSession, Project } from "../lib/types";
 import { debugConsoleWarn } from "../lib/debugConsole";
 import { sourceTool, type SyncedHistoryGroup } from "../lib/externalSessionGrouping";
-import { logError, logInfo, logWarn } from "../lib/logger";
+import { logError, logInfo, logWarn, recordCrashActivity } from "../lib/logger";
 import { appendResumeCliArgs, isDirectCodexStartupCommand, normalizeDirectCodexStartupCommand, withCodexLightTuiTheme } from "../lib/projectStartupCommand";
 import { getTerminalTheme } from "../lib/terminalThemes";
 import { useSettingsStore } from "./settingsStore";
@@ -753,6 +753,17 @@ function summarizeStartupCmd(startupCmd?: string): string | null {
 
 function logTerminalExitStatus(session: TerminalSession, payload: PtyStatusPayload) {
   if (payload.status !== "exited" && payload.status !== "error") return;
+  recordCrashActivity("terminal.process_exit", {
+    sessionId: session.id,
+    title: session.title,
+    projectId: session.projectId ?? null,
+    worktreeId: session.worktreeId ?? null,
+    cwd: session.cwd ?? null,
+    shell: session.shell ?? null,
+    startupCmdSummary: summarizeStartupCmd(session.startupCmd),
+    status: payload.status,
+    exitCode: payload.exit_code,
+  });
   logInfo("pty status received", {
     sessionId: session.id,
     title: session.title,
@@ -1129,6 +1140,14 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     const os = await getOsPlatform();
     const resolvedShell = resolveShellForPty(shell, !!projectId, os);
     const launchStartupCmd = prepareStartupCommandForPty(startupCmd, normalizeShellKey(resolvedShell) ?? null);
+    recordCrashActivity("terminal.session_create", {
+      projectId: projectId ?? null,
+      worktreeId: worktreeId ?? null,
+      cwd: cwd ?? null,
+      shell: resolvedShell,
+      paneId: paneId ?? null,
+      startupCmdSummary: summarizeStartupCmd(launchStartupCmd),
+    });
 
     let sessionId: string;
     try {
@@ -1563,6 +1582,15 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     const os = await getOsPlatform();
     const resolvedShell = resolveShellForPty(options?.shell, !!options?.projectId, os);
     const launchStartupCmd = prepareStartupCommandForPty(options?.startupCmd, normalizeShellKey(resolvedShell) ?? null);
+    recordCrashActivity("terminal.split_create", {
+      sourceSessionId: sessionId,
+      direction,
+      projectId: options?.projectId ?? null,
+      worktreeId: options?.worktreeId ?? null,
+      cwd: options?.cwd ?? null,
+      shell: resolvedShell,
+      startupCmdSummary: summarizeStartupCmd(launchStartupCmd),
+    });
 
     let splitSessionId: string;
     try {
