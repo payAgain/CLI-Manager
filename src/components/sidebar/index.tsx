@@ -246,7 +246,7 @@ export function Sidebar({
   const [sidebarResizing, setSidebarResizing] = useState(false);
   const [isMacOs, setIsMacOs] = useState(isLikelyMacOs);
 
-  const liveSidebarWidthRef = useRef(initialSidebarWidth);
+  const sidebarElementRef = useRef<HTMLElement | null>(null);
   const isResizingRef = useRef(false);
   const resizeFrameRef = useRef<number | null>(null);
   const autoCollapsedByViewportRef = useRef(false);
@@ -507,7 +507,6 @@ export function Sidebar({
     const normalized = normalizePersistedSidebarWidth(persistedSidebarWidth);
     setSidebarWidth(normalized);
     setSidebarCollapsed(normalized <= SIDEBAR_COLLAPSED_WIDTH);
-    liveSidebarWidthRef.current = normalized;
     if (normalized > SIDEBAR_COLLAPSED_WIDTH) {
       lastExpandedWidthRef.current = normalized;
     }
@@ -536,18 +535,18 @@ export function Sidebar({
       ? SIDEBAR_COLLAPSED_WIDTH
       : clampExpandedSidebarWidth(clampedRaw);
 
-    setSidebarCollapsed(shouldCollapse);
-    setSidebarWidth(nextWidth);
-    liveSidebarWidthRef.current = nextWidth;
+    if (sidebarElementRef.current) {
+      sidebarElementRef.current.style.width = `${nextWidth}px`;
+    }
     if (!shouldCollapse) {
       lastExpandedWidthRef.current = nextWidth;
     }
+    return { nextWidth, shouldCollapse };
   }, []);
 
   const collapseSidebar = useCallback((persist = true) => {
     setSidebarCollapsed(true);
     setSidebarWidth(SIDEBAR_COLLAPSED_WIDTH);
-    liveSidebarWidthRef.current = SIDEBAR_COLLAPSED_WIDTH;
     if (persist) {
       persistSidebarWidth(SIDEBAR_COLLAPSED_WIDTH);
     }
@@ -558,7 +557,6 @@ export function Sidebar({
     const nextWidth = clampExpandedSidebarWidth(fallbackWidth);
     setSidebarCollapsed(false);
     setSidebarWidth(nextWidth);
-    liveSidebarWidthRef.current = nextWidth;
     lastExpandedWidthRef.current = nextWidth;
     if (persist) {
       persistSidebarWidth(nextWidth);
@@ -629,14 +627,16 @@ export function Sidebar({
           cancelAnimationFrame(resizeFrameRef.current);
           resizeFrameRef.current = null;
         }
-        previewSidebarWidth(latestX);
+        const { nextWidth, shouldCollapse } = previewSidebarWidth(latestX);
+        setSidebarCollapsed(shouldCollapse);
+        setSidebarWidth(nextWidth);
         isResizingRef.current = false;
         setSidebarResizing(false);
         document.removeEventListener("mousemove", onMove);
         document.removeEventListener("mouseup", onUp);
         document.body.style.cursor = "";
         document.body.style.userSelect = "";
-        persistSidebarWidth(liveSidebarWidthRef.current);
+        persistSidebarWidth(nextWidth);
       };
 
       document.addEventListener("mousemove", onMove);
@@ -1874,6 +1874,7 @@ export function Sidebar({
 
   return (
     <aside
+      ref={sidebarElementRef}
       className={`ui-sidebar-shell relative flex select-none flex-col overflow-hidden ${
         compactMode ? "min-w-0 flex-1" : "shrink-0"
       } ${sidebarResizing ? "transition-none" : "transition-[width] duration-150"}`}

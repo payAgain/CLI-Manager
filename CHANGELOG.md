@@ -5,12 +5,17 @@
 ### 修复
 - **WSL Hook 与 cc-switch 数据库环境兼容**：Claude/Codex Hook 配置目录与 cc-switch 数据库位置不再强制同环境；Windows 版可为 WSL CLI 配置同步 Windows 数据库，也可通过对应 WSL 发行版内的 SQLite 安全读取和事务更新 WSL 数据库，避免 UNC 直写造成锁与 WAL 风险。
 - **历史会话缺失项目恢复修复**：恢复会话未找到匹配项目时不再直接报错，改为展示全部项目和“使用新窗口”；使用新窗口会先进入历史会话工作目录，再执行 Claude/Codex 恢复命令。
+- **终端缩放滚动位置修复**：横向尺寸变化触发 xterm 历史行 reflow 时，使用临时 marker 跟踪用户正在查看的首行，并在 xterm 完成异步视口同步后恢复位置，避免侧栏、分屏或窗口缩放把滚动条推到顶部；位于实时底部和 alternate buffer 的终端保持原有行为。
+- **Tauri 开发 WebView2 启动修复**：Windows 下 `npm run tauri dev` 为子进程注入独立的 WebView2 用户数据目录，避免已安装生产版仍运行旧 WebView2 时，dev 因运行时环境冲突而创建窗口失败，同时继续共享项目、设置和 SQLite 数据。
+- **VS Code 终端替换正确性加固**：补齐 Attach replay/attached/live 写入屏障，未提交输出由 `TerminalProcessManager` 持有并可在 Pane 卸载重挂后继续写入；初始与断线重连 Replay 均按历史尺寸串行写入，完成当前容器 fit 后才释放 live 输出，历史 resize 不再误发给 live PTY。关闭失败会以 tombstone 阻止重连复活，并取消最后会话关闭后的待执行重连，避免残留空闲 WebSocket/心跳。WebSocket 增加鉴权、请求和心跳超时；daemon 改为独立 writer queue、原子 create、递增 resize sequence 与磁盘 spool，慢客户端不再持全局锁阻塞其他会话，后台会话也不会被 UI active list 对账误杀。
 - **WSL Codex 子 Agent 分屏输出修复**：Codex rollout discovery 透传 WSL 发行版与父 transcript 路径，优先沿父会话定位真实 sessions 根，否则在 Linux `$HOME/.codex/sessions` 内通过 `wsl.exe` 查找子会话；兼容 Linux、`\\wsl.localhost`、`\\wsl$` 与 Windows 配置目录转换，修复不同 WSL 用户及并行子任务分屏长期停留在 PENDING 的问题。
 - **Claude 状态栏 Powerline 符号修复**：WebView 直接加载应用内置符号字体，不再依赖 Windows 用户字体缓存，修复实时预览、Powerline 选项和应用内终端中的分隔符与端帽显示为方框的问题。
 - **后台终端恢复输出与图标修复**：daemon attach 将回放快照与实时订阅注册收口为同一临界区，前端在 PTY 输出监听就绪后再恢复并按顺序写入回放与实时帧；恢复后的 Claude/Codex Tab 保留 CLI 启动元数据用于图标识别，但不会重跑启动命令。
 - **终端标签切换焦点修复**：终端仅在 Tab 同时激活且可见后的下一动画帧获取焦点，修复普通 Tab、Workspan 与分屏切换后需要再次点击才能输入的问题，同时避免可见但未激活的分屏抢焦点。
+- **终端分屏拖拽与重绘性能修复**：拖动顶层 Workspan Tab 悬停其他 Workspan 500ms 后自动激活目标，恢复继续拖到 Pane 边缘高亮并分屏的路径；Tab 拖拽预览改为脱离终端布局的半透明 Portal 图层，直接跟随 dnd-kit 活动状态，减少启动延迟和拖尾，并将 Pane 边缘预选范围扩大到外侧约三分之一，无需贴到边框才识别；隐藏 Tab 切回时先等待 xterm 自然恢复完整 viewport，仅在两帧内没有完整渲染时强制刷新，避免大片空白、等待后续输出或每次切换都从上到下整屏重绘；侧边栏拖动改为 DOM 宽度实时预览、松手后一次提交状态和持久化，同时移除 Pane 几何动画，保留大缓冲区纵向 resize 立即、横向 reflow 100ms 防抖策略。
 
 ### 终端
+- **VS Code 终端架构替换**：终端统一经 `TerminalProcessManager` 管理，WebView 使用鉴权二进制 WebSocket 直连 PtyHost daemon；输出采用 5ms 合并、序列号与 100000/5000 字符 ACK 背压，attach 使用尺寸化 Replay 保证回放与实时输出有序交接。隐藏终端持续解析输出，仅按需释放 WebGL；横向 resize 在大缓冲区下按 100ms 防抖。Windows 底层改为直接 ConPTY API，macOS/Linux 改为 `openpty` 与进程组，移除 `portable-pty` 和 Tauri Base64 输出事件生产路径，同时保留分屏、全屏、Workspan、后台续跑、快照、CLI resume、IME、输入提示、主题、图片和搜索等现有能力。
 - **终端回滚行数自定义开关**：设置页新增默认关闭的“自定义回滚行数”开关；关闭时统一使用 9000 行，开启后可在 1000–50000 行之间调整，并继续支持已有终端热更新而不重启 PTY。
 - **调整终端命令历史入口**：删除终端右侧工具栏中的“历史命令”入口及其设置开关，终端输入不再新增应用命令历史；“设置 -> 命令提示”页面、历史统计/清理、历史建议、模板、内置 AI CLI 命令、路径补全与可选 AI 提示保持不变。
 
