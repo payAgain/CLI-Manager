@@ -50,6 +50,7 @@ import { getOsPlatform } from "./lib/shell";
 import { normalizeFontFamilyStack } from "./lib/systemFonts";
 import { ALL_TERMINALS_SCOPE } from "./lib/terminalScope";
 import { shouldIncludeDaemonExitTask } from "./lib/terminalExitTask";
+import { requestSidebarToggle } from "./lib/sidebarCommands";
 import { getTerminalTheme, isLightTerminalTheme } from "./lib/terminalThemes";
 import { resolveProjectForSession } from "./lib/terminalProject";
 import { terminalProcessManager } from "./terminal/core/TerminalProcessManager";
@@ -404,16 +405,8 @@ function runDeferredStartupTasks(openSettings?: (tab?: SettingsTab) => void): vo
         logWarn("Failed to refresh deferred project diagnostics", err);
       });
 
-      const result = await useSyncStore.getState().runAutoSync("startup");
-      if (result === "conflict") {
-        toast.warning(translateCurrent("notifications.autoSync.startConflict"), {
-          description: translateCurrent("notifications.autoSync.conflictDescription"),
-        });
-      } else if (result === "error") {
-        toast.error(translateCurrent("notifications.autoSync.startFailed"), {
-          description: translateCurrent("notifications.autoSync.failedDescription"),
-        });
-      }
+      await useSyncStore.getState().load();
+      await useSyncStore.getState().retryOutbox();
     })();
 
     if (!startupUpdateChecked) {
@@ -586,8 +579,7 @@ function App() {
     return () => window.removeEventListener("keydown", handleF12, true);
   }, [debugMode]);
 
-  // 关闭期自动同步：8s 封顶避免网络慢时退出无限等待；conflict/error 不再 toast
-  // （窗口即将销毁看不到），改为退出遮罩上短暂提示后继续退出，并记录日志。
+  // 关闭期自动备份：先落本地 outbox，再在 8s 内尝试上传；超时后下次启动重试。
   const runCloseAutoSync = useCallback(async () => {
     const showExitNotice = async (message: string) => {
       setExitNotice(message);
@@ -599,15 +591,16 @@ function App() {
       timeoutId = setTimeout(() => resolve("timeout"), CLOSE_SYNC_TIMEOUT_MS);
     });
     try {
-      const result = await Promise.race([useSyncStore.getState().runAutoSync("close"), timeoutPromise]);
+      await useSyncStore.getState().load();
+      const result = await Promise.race([useSyncStore.getState().runCloseAutoBackup(), timeoutPromise]);
       if (result === "timeout") {
         logWarn("Close auto sync timed out, continuing exit", { timeoutMs: CLOSE_SYNC_TIMEOUT_MS });
         await showExitNotice(t("app.exitProgress.syncTimeout"));
         return;
       }
-      if (result === "conflict" || result === "error") {
-        logWarn(`Close auto sync ended with ${result}, continuing exit`);
-        await showExitNotice(result === "conflict" ? t("app.exitProgress.syncConflict") : t("app.exitProgress.syncFailed"));
+      if (result === "error") {
+        logWarn("Close auto backup failed, continuing exit");
+        await showExitNotice(t("app.exitProgress.syncFailed"));
       }
     } catch (err) {
       logWarn("Close auto sync threw, continuing exit", err);
@@ -679,6 +672,14 @@ function App() {
     })();
   }, [terminalFullscreen, t]);
 
+  const handleToggleSidebarShortcut = useCallback(() => {
+    if (terminalFullscreen) {
+      handleToggleTerminalFullscreen();
+      return;
+    }
+    requestSidebarToggle();
+  }, [handleToggleTerminalFullscreen, terminalFullscreen]);
+
   const handleActivateHookNotificationTarget = useCallback(async (tabId: string) => {
     const terminalStore = useTerminalStore.getState();
     const targetSession = terminalStore.sessions.find((session) => session.id === tabId);
@@ -723,7 +724,10 @@ function App() {
     onActivateSession: handleActivateHookNotificationTarget,
   });
 
-  useKeyboardShortcuts({ onToggleTerminalFullscreen: handleToggleTerminalFullscreen });
+  useKeyboardShortcuts({
+    onToggleSidebar: handleToggleSidebarShortcut,
+    onToggleTerminalFullscreen: handleToggleTerminalFullscreen,
+  });
 
   useEffect(() => {
     if (!IN_TAURI) return;

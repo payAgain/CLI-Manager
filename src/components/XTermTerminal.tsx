@@ -23,9 +23,10 @@ import { translateCurrent, useI18n } from "../lib/i18n";
 import { normalizeTerminalFontFamily } from "../lib/terminalFontFamily";
 import { findTerminalFileLinks, resolveTerminalFileSystemPath } from "../lib/terminalFileLinks";
 import { findProjectByPath, findWorktreeByPath } from "../lib/terminalProject";
+import { projectSupportsCapability } from "../lib/projectCapabilities";
 import { useTerminalSearch } from "../hooks/useTerminalSearch";
 import { useTerminalContextMenu } from "../hooks/useTerminalContextMenu";
-import { useTerminalOsc } from "../hooks/useTerminalOsc";
+import { useTerminalOsc, type TerminalOutputNormalizationOptions } from "../hooks/useTerminalOsc";
 import { useTerminalDisplay } from "../hooks/useTerminalDisplay";
 import { useTerminalInput, type TerminalSuggestionGhostState } from "../hooks/useTerminalInput";
 import { getTerminalCellWidth } from "../lib/terminalCellWidth";
@@ -225,6 +226,12 @@ const openTerminalFilePath = async (sessionId: string, rawPath: string) => {
   const currentProject = session?.projectId
     ? projectState.projects.find((item) => item.id === session.projectId) ?? null
     : findProjectByPath(projectState.projects, session?.cwd);
+  if (!projectSupportsCapability(currentProject, "files")) {
+    toast.info(translateCurrent("remoteCapabilities.unsupportedTitle"), {
+      description: translateCurrent("remoteCapabilities.unsupportedDescription"),
+    });
+    return;
+  }
   const currentWorktree = session?.worktreeId
     ? projectState.worktrees.find((item) => item.id === session.worktreeId) ?? null
     : findWorktreeByPath(projectState.worktrees, session?.cwd);
@@ -297,7 +304,10 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
   const visibilityRestoreFallbackRafRef = useRef<number | null>(null);
   const cursorShowTimerRef = useRef<number | null>(null);
   const tuiComposerNormalizeRafRef = useRef<number | null>(null);
-  const displayNormalizeOutputRef = useRef<(text: string) => string>((text) => text);
+  const displayNormalizeOutputRef = useRef<(
+    text: string,
+    options?: TerminalOutputNormalizationOptions,
+  ) => string>((text) => text);
   const displayTransformOutputRef = useRef<(text: string) => string>((text) => text);
   const displayAfterWriteRef = useRef<((terminal: Terminal) => void) | null>(null);
   const cleanedAttachmentRootsRef = useRef<Set<string>>(new Set());
@@ -883,6 +893,11 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
     const webLinksAddon = new WebLinksAddon((_event, uri) => openHttpUrl(sessionId, uri));
     baseDisposables.push(terminal.registerLinkProvider({
       provideLinks: (bufferLineNumber, callback) => {
+        const activeSession = useTerminalStore.getState().sessions.find((item) => item.id === sessionId);
+        if (activeSession?.environmentType === "ssh") {
+          callback(undefined);
+          return;
+        }
         const line = terminal.buffer.active.getLine(bufferLineNumber - 1)?.translateToString(true) ?? "";
         const links: ILink[] = findTerminalFileLinks(line).map((match) => ({
           range: {

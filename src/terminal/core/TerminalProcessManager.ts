@@ -25,6 +25,7 @@ export interface TerminalCreateRequest extends Record<string, unknown> {
   hookEnvEnabled: boolean;
   claudeProvider: TerminalClaudeProviderLaunchConfig | null;
   codexProvider: TerminalCodexProviderLaunchConfig | null;
+  sshLaunch: unknown | null;
 }
 
 interface PreparedTerminalCreate {
@@ -32,6 +33,7 @@ interface PreparedTerminalCreate {
   cwd: string | null;
   envVars: Record<string, string>;
   shell: string | null;
+  sshLaunch: unknown | null;
 }
 
 export interface TerminalStatusEvent {
@@ -94,6 +96,7 @@ export class TerminalProcessManager {
           prepared.cwd,
           prepared.envVars,
           prepared.shell,
+          prepared.sshLaunch,
         );
         if (traits) this.processTraits.set(sessionId, traits);
       } catch (error) {

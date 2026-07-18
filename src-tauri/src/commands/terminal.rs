@@ -7,7 +7,8 @@ use crate::daemon::protocol::{
     ClientFrame, SessionMeta, FEATURE_WS_BINARY_OUTPUT,
 };
 use crate::pty::manager::{PtyOrphanCleanupSummary, PtyProcessStatus};
-use log::{debug, info};
+use crate::ssh_launch::SshLaunchPlan;
+use log::{debug, warn};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -40,6 +41,7 @@ pub async fn pty_prepare_create(
     hook_env_enabled: Option<bool>,
     claude_provider: Option<ClaudeProviderLaunchConfig>,
     codex_provider: Option<CodexProviderLaunchConfig>,
+    ssh_launch: Option<SshLaunchPlan>,
 ) -> Result<PreparedPtyCreate, String> {
     let session_id = Uuid::new_v4().to_string();
     let mut env_vars = env_vars.unwrap_or_default();
@@ -48,9 +50,18 @@ pub async fn pty_prepare_create(
         .await?;
     env_vars.insert("CLI_MANAGER_TAB_ID".to_string(), session_id.clone());
 
+    // Hook 上报指向 daemon 的稳定端口，确保 app 重启后仍然有效。
     let daemon_client = wait_for_daemon(&daemon_bridge)
         .await
         .ok_or_else(|| "PtyHost daemon unavailable".to_string())?;
+    if ssh_launch.is_some() && daemon_client.info().version != env!("CARGO_PKG_VERSION") {
+        warn!(
+            "SSH launch rejected for stale daemon: daemon_version={}, app_version={}",
+            daemon_client.info().version,
+            env!("CARGO_PKG_VERSION")
+        );
+        return Err("SSH launch requires the current PtyHost daemon".to_string());
+    }
     if hook_env_enabled.unwrap_or(false) {
         let info = daemon_client.info();
         if info.hook_port > 0 {
@@ -63,7 +74,7 @@ pub async fn pty_prepare_create(
     }
 
     let env_count = env_vars.len();
-    info!(
+    debug!(
         "pty_prepare_create requested: session_id={}, cwd={:?}, shell={:?}, env_vars={}, daemon={}",
         session_id, cwd, shell, env_count, true
     );
@@ -73,6 +84,7 @@ pub async fn pty_prepare_create(
         cwd,
         env_vars,
         shell,
+        ssh_launch,
     })
 }
 
@@ -83,6 +95,7 @@ pub struct PreparedPtyCreate {
     pub cwd: Option<String>,
     pub env_vars: HashMap<String, String>,
     pub shell: Option<String>,
+    pub ssh_launch: Option<SshLaunchPlan>,
 }
 
 #[tauri::command]
@@ -239,7 +252,7 @@ pub async fn pty_daemon_sessions(
         Some(client) => {
             let sessions = client.list()?;
             let alive_count = sessions.iter().filter(|session| session.alive).count();
-            info!(
+            debug!(
                 "pty_daemon_sessions requested: count={}, alive_count={}",
                 sessions.len(),
                 alive_count
@@ -247,7 +260,7 @@ pub async fn pty_daemon_sessions(
             Ok(sessions)
         }
         None => {
-            info!("pty_daemon_sessions requested: daemon unavailable");
+            debug!("pty_daemon_sessions requested: daemon unavailable");
             Ok(Vec::new())
         }
     }

@@ -19,8 +19,9 @@ type ScopeFilter = "all" | TemplateScope;
 
 function resolveCommand(command: string, project?: Project): string {
   if (!project) return command;
+  const projectPath = project.environment_type === "ssh" ? project.remote_path : project.path;
   return command
-    .replace(/\$\{projectPath\}/g, project.path)
+    .replace(/\$\{projectPath\}/g, projectPath)
     .replace(/\$\{projectName\}/g, project.name);
 }
 

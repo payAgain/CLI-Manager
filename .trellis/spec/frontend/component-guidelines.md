@@ -35,6 +35,29 @@ terminalProcessManager.subscribeOutput(sessionId, (delivery) => {
 
 **Tests**: Run `npx tsc --noEmit` and `node --test scripts/ptyHostSocket.test.mjs scripts/terminalProcessManager.test.mjs scripts/terminalReplay.test.mjs scripts/terminalResizeDebouncer.test.mjs scripts/terminalResizeRenderBarrier.test.mjs scripts/terminalReflowPolicy.test.mjs`; manually verify background output, reconnect replay, rapid split/fullscreen shrink, transparent terminal backgrounds, IME, WebGL fallback, and no duplicate output after daemon reconnect.
 
+### Convention: Replay normalization has no PTY input side effects
+
+**What**: OSC 10/11 color queries may be answered only while processing live PTY output. Replay must remove these queries from the display stream without writing a response to the current PTY. Multiple live color queries received in one output batch are combined into one ordered write.
+
+**Why**: Replay contains historical terminal output. Re-executing its terminal queries injects stale OSC responses into the current CLI input state; separate asynchronous replies also increase the chance that a short-lived terminal probe has already switched to its composer.
+
+**Correct**:
+
+```ts
+normalizeOutput(rawText, {
+  replyToColorQueries: frame.kind === "output",
+});
+```
+
+**Wrong**:
+
+```ts
+// Historical queries must not produce live input.
+normalizeOutput(replayText);
+```
+
+**Tests**: Run `node --test scripts/terminalOsc.test.mjs`; assert live OSC 10/11 queries produce one combined write and replay queries produce no write.
+
 > How components are built in this project.
 
 ---

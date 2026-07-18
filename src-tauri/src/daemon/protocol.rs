@@ -7,6 +7,8 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+use crate::ssh_launch::SshLaunchPlan;
+
 /// 单帧最大字节数（含换行前的 JSON 文本）。超限视为非法帧，断连。
 pub const MAX_FRAME_BYTES: usize = 8 * 1024 * 1024;
 pub const CONTROL_PROTOCOL_VERSION: u16 = 2;
@@ -59,6 +61,8 @@ pub enum ClientFrame {
         cwd: Option<String>,
         env_vars: Option<HashMap<String, String>>,
         shell: Option<String>,
+        #[serde(default)]
+        ssh_launch: Option<SshLaunchPlan>,
     },
     Write {
         id: u64,
@@ -181,6 +185,12 @@ pub struct SessionMeta {
     pub session_id: String,
     pub cwd: Option<String>,
     pub shell: Option<String>,
+    #[serde(default)]
+    pub environment_type: Option<String>,
+    #[serde(default)]
+    pub ssh_host_id: Option<String>,
+    #[serde(default)]
+    pub remote_path: Option<String>,
     /// 进程仍存活为 true；false 表示已退出仅剩回放 buffer。
     pub alive: bool,
     /// CLI 任务状态，不等同于 PTY/shell 存活状态。
@@ -494,6 +504,55 @@ mod tests {
         assert!(encoded.ends_with('\n'));
         let decoded = decode_client_frame(encoded.trim_end()).unwrap();
         assert_eq!(decoded, frame);
+    }
+
+    #[test]
+    fn ssh_create_frame_roundtrip_and_legacy_create_compatibility() {
+        let frame = ClientFrame::Create {
+            id: 9,
+            session_id: "session-1".into(),
+            cwd: None,
+            env_vars: None,
+            shell: None,
+            ssh_launch: Some(SshLaunchPlan {
+                host_id: "host-1".into(),
+                host: "example.com".into(),
+                port: 22,
+                username: "dev".into(),
+                config_alias: String::new(),
+                auth_mode: "agent".into(),
+                identity_file: String::new(),
+                credential_ref: String::new(),
+                jump_target: String::new(),
+                proxy_type: "none".into(),
+                proxy_host: String::new(),
+                proxy_port: 0,
+                proxy_command: String::new(),
+                connect_timeout_sec: 15,
+                server_alive_interval_sec: 30,
+                server_alive_count_max: 3,
+                remote_path: "/srv/app".into(),
+                environment_overrides: HashMap::new(),
+                initialization_command: None,
+                startup_command: Some("codex".into()),
+            }),
+        };
+        assert_eq!(
+            decode_client_frame(encode_frame(&frame).trim_end()).unwrap(),
+            frame
+        );
+
+        let legacy = decode_client_frame(
+            r#"{"type":"create","id":10,"session_id":"legacy","cwd":null,"env_vars":null,"shell":null}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            legacy,
+            ClientFrame::Create {
+                ssh_launch: None,
+                ..
+            }
+        ));
     }
 
     #[test]

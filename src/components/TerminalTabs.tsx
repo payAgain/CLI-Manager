@@ -23,6 +23,7 @@ import { useTerminalStore, type SplitTerminalOptions, type TabNotificationState 
 import { TERMINAL_PANEL_WIDTH_DEFAULTS, useSettingsStore } from "../stores/settingsStore";
 import { useWorktreeStore } from "../stores/worktreeStore";
 import { useProjectStore } from "../stores/projectStore";
+import { useSshHostStore } from "../stores/sshHostStore";
 import { isProjectFileDirty, useFileExplorerStore } from "../stores/fileExplorerStore";
 import { useI18n, type TranslationKey } from "../lib/i18n";
 import { logError } from "../lib/logger";
@@ -62,8 +63,9 @@ import { FileEditorPane } from "./files/FileEditorPane";
 import { FileExplorerSidebar } from "./files/FileExplorerSidebar";
 import { openWindowsTerminal } from "../lib/externalTerminal";
 import { normalizeDirectCodexStartupCommand, resolveProjectStartupCommand } from "../lib/projectStartupCommand";
+import { projectSupportsCapability, resolveProjectCapabilities, type ProjectCapability } from "../lib/projectCapabilities";
 import { parseProjectEnvVars } from "../lib/providerSwitching";
-import { Activity, Terminal, Plus, ListClockIcon, X, Copy, Maximize2, Minimize2, ChevronDown, ChevronRight, BarChart3, GitBranch, Folder, Check, Cpu } from "./icons";
+import { Activity, Terminal, Plus, ListClockIcon, X, Copy, Maximize2, Minimize2, ChevronDown, ChevronRight, BarChart3, GitBranch, Folder, Check, Cpu, Cloud } from "./icons";
 import { WorktreeIcon } from "./WorktreeIcon";
 import { VendorIcon, inferVendor, type VendorKey } from "./VendorIcon";
 import { EmptyState } from "./ui/EmptyState";
@@ -209,6 +211,13 @@ const TERMINAL_TAB_HOVER_DELAY_MS = 260;
 const TERMINAL_TAB_HOVER_CLOSE_DELAY_MS = 320;
 const TERMINAL_TAB_HOVER_CARD_WIDTH = 320;
 const TERMINAL_TAB_HOVER_CARD_ESTIMATED_HEIGHT = 190;
+const SSH_CONNECTION_STATE_COLORS: Record<NonNullable<TerminalSession["connectionState"]>, string> = {
+  connecting: "#60a5fa",
+  authenticating: "#f59e0b",
+  connected: "#22c55e",
+  disconnected: "#94a3b8",
+  failed: "#ef4444",
+};
 
 interface TerminalTabHoverInfo {
   name: string;
@@ -217,6 +226,9 @@ interface TerminalTabHoverInfo {
   project: string;
   path: string;
   sessionId: string;
+  sshHost?: string;
+  connectionState?: TerminalSession["connectionState"];
+  disconnectReason?: TerminalSession["disconnectReason"];
 }
 
 function isTerminalPaneDropEdge(value: string): value is TerminalPaneDropEdge {
@@ -308,13 +320,19 @@ function buildTerminalTabHoverInfo(session: TerminalSession, project?: Project):
       sessionId: session.syncedHistory?.key || session.id,
     };
   }
+  const sshHost = session.environmentType === "ssh"
+    ? useSshHostStore.getState().hosts.find((host) => host.id === session.sshHostId)
+    : undefined;
   return {
     name: session.title.trim() || "Terminal",
     cli: formatCliToolLabel(project?.cli_tool),
-    shell: formatShellLabel(session.shell ?? project?.shell),
+    shell: session.environmentType === "ssh" ? "SSH" : formatShellLabel(session.shell ?? project?.shell),
     project: project?.name.trim() || "\u672a\u7ed1\u5b9a\u9879\u76ee",
-    path: session.cwd?.trim() || project?.path.trim() || "-",
+    path: session.remotePath?.trim() || session.cwd?.trim() || project?.remote_path.trim() || project?.path.trim() || "-",
     sessionId: session.cliSessionId?.trim() || session.id,
+    sshHost: sshHost?.name || sshHost?.config_alias || sshHost?.host || session.sshHostId,
+    connectionState: session.connectionState,
+    disconnectReason: session.disconnectReason,
   };
 }
 
@@ -665,7 +683,18 @@ function SortableTab({
               aria-label={t("terminal.tab.rename")}
             />
           ) : (
-            <span className="ui-terminal-tab-title min-w-0 flex-1 truncate tracking-[0.01em]">{title}</span>
+            <>
+              {hoverInfo.connectionState && (
+                <Cloud
+                  size={12}
+                  strokeWidth={2}
+                  className="shrink-0"
+                  style={{ color: SSH_CONNECTION_STATE_COLORS[hoverInfo.connectionState] }}
+                  aria-label={t(`terminal.ssh.connection.${hoverInfo.connectionState}` as TranslationKey)}
+                />
+              )}
+              <span className="ui-terminal-tab-title min-w-0 flex-1 truncate tracking-[0.01em]">{title}</span>
+            </>
           )}
           <button
             onClick={(e) => { e.stopPropagation(); hideHoverCard(); onClose(e.currentTarget.getBoundingClientRect()); }}
@@ -710,6 +739,15 @@ function TerminalTabHoverCard({
     { label: "Shell", value: info.shell },
     { label: t("termStats.project"), value: info.project },
     { label: t("termStats.path"), value: info.path },
+    ...(info.sshHost ? [{ label: t("terminal.ssh.host"), value: info.sshHost }] : []),
+    ...(info.connectionState ? [{
+      label: t("terminal.ssh.connectionState"),
+      value: t(`terminal.ssh.connection.${info.connectionState}` as TranslationKey),
+    }] : []),
+    ...(info.disconnectReason ? [{
+      label: t("terminal.ssh.disconnectReason"),
+      value: t(`terminal.ssh.disconnect.${info.disconnectReason}` as TranslationKey),
+    }] : []),
   ];
   const sessionIdPreview = formatSessionIdPreview(info.sessionId);
 
@@ -2228,6 +2266,13 @@ export function TerminalTabs({
 
   const projectById = useMemo(() => new Map(projects.map((project) => [project.id, project])), [projects]);
   const worktreeById = useMemo(() => new Map(worktrees.map((worktree) => [worktree.id, worktree])), [worktrees]);
+  const rejectUnsupportedCapability = useCallback((project: Project | null | undefined, capability: ProjectCapability) => {
+    if (projectSupportsCapability(project, capability)) return false;
+    toast.info(t("remoteCapabilities.unsupportedTitle"), {
+      description: t("remoteCapabilities.unsupportedDescription"),
+    });
+    return true;
+  }, [t]);
   const terminalScopeValue = projectScopedTerminalViewEnabled ? terminalScope : ALL_TERMINALS_SCOPE;
   const scopedProjectId =
     terminalScopeValue.kind === "project" || terminalScopeValue.kind === "worktree"
@@ -2348,6 +2393,8 @@ export function TerminalTabs({
     return activeSession;
   }, [activeSession, sessions]);
   const panelSessionId = panelSession?.id ?? null;
+  const panelProject = panelSession?.projectId ? projectById.get(panelSession.projectId) ?? null : null;
+  const panelCapabilities = resolveProjectCapabilities(panelProject);
   const activeWorktree = useMemo(
     () => findWorktreeForSession(activeSession, sessions, worktrees),
     [activeSession, sessions, worktrees]
@@ -2553,10 +2600,13 @@ export function TerminalTabs({
   );
   const visibleSidePanelTabs = useMemo(
     () => TERMINAL_SIDE_PANEL_TAB_ORDER.filter((tab) => {
-      if (tab === "git") return terminalToolbarVisibility.gitChanges;
+      if (tab === "git") return terminalToolbarVisibility.gitChanges && panelCapabilities.git;
+      if (tab === "stats") return terminalToolbarVisibility.stats && panelCapabilities.statistics;
+      if (tab === "replay") return terminalToolbarVisibility.replay && panelCapabilities.history;
+      if (tab === "files") return terminalToolbarVisibility.files && panelCapabilities.files;
       return terminalToolbarVisibility[tab];
     }),
-    [terminalToolbarVisibility]
+    [panelCapabilities.files, panelCapabilities.git, panelCapabilities.history, panelCapabilities.statistics, terminalToolbarVisibility]
   );
   const historyActive = historyOpen && activeWorkspaceTab === "history";
   const statsPanelActive = sidePanelMerged ? sidePanelOpen && sidePanelTab === "stats" : statsOpen;
@@ -2650,16 +2700,22 @@ export function TerminalTabs({
         : activeSession?.kind === "file-editor"
           ? { cwd: activeSession.fileEditor?.projectPath, title: "Terminal" }
           : { cwd: activeSession?.cwd, title: activeSession?.title ?? "Terminal" };
+    const activeProject = activeSession?.projectId ? projectById.get(activeSession.projectId) : null;
     if (useExternalTerminal) {
+      if (rejectUnsupportedCapability(activeProject, "externalTerminal")) return;
       await openWindowsTerminal([{ title: newTerminalContext.title, cwd: newTerminalContext.cwd ?? undefined }]);
       closeHistory();
       setActiveWorkspaceTab("terminal");
       return;
     }
-    await createSession(undefined, newTerminalContext.cwd ?? undefined, newTerminalContext.title);
+    await createSession(
+      activeProject?.environment_type === "ssh" ? activeProject.id : undefined,
+      newTerminalContext.cwd ?? undefined,
+      newTerminalContext.title
+    );
     closeHistory();
     setActiveWorkspaceTab("terminal");
-  }, [activeSession, closeHistory, createSession, rejectMissingSessionWorktree, useExternalTerminal]);
+  }, [activeSession, closeHistory, createSession, projectById, rejectMissingSessionWorktree, rejectUnsupportedCapability, useExternalTerminal]);
 
   const handleOpenScopedTerminal = useCallback(async () => {
     if (!scopedProject || useExternalTerminal) return;
@@ -2911,6 +2967,8 @@ export function TerminalTabs({
       else setStatsOpen(false);
       return;
     }
+    const project = panelSession?.projectId ? projectById.get(panelSession.projectId) : null;
+    if (rejectUnsupportedCapability(project, "statistics")) return;
     const allowed = await ensureStatsPanelAllowed();
     if (!allowed) return;
     if (terminalSidePanelSingleOpen) {
@@ -2929,7 +2987,7 @@ export function TerminalTabs({
       }
       setStatsOpen(true);
     }
-  }, [closeHistory, ensureStatsPanelAllowed, sidePanelMerged, statsPanelActive, terminalSidePanelSingleOpen]);
+  }, [closeHistory, ensureStatsPanelAllowed, panelSession, projectById, rejectUnsupportedCapability, sidePanelMerged, statsPanelActive, terminalSidePanelSingleOpen]);
 
   const handleToggleSystemResourcesPanel = useCallback(() => {
     if (systemResourcesPanelActive) {
@@ -2961,6 +3019,8 @@ export function TerminalTabs({
       else setGitOpen(false);
       return;
     }
+    const project = panelSession?.projectId ? projectById.get(panelSession.projectId) : null;
+    if (rejectUnsupportedCapability(project, "git")) return;
     if (sidePanelMerged) {
       if (terminalSidePanelSingleOpen) {
         closeHistory();
@@ -2981,7 +3041,7 @@ export function TerminalTabs({
       }
       setGitOpen(true);
     }
-  }, [closeHistory, gitPanelActive, sidePanelMerged, terminalSidePanelSingleOpen]);
+  }, [closeHistory, gitPanelActive, panelSession, projectById, rejectUnsupportedCapability, sidePanelMerged, terminalSidePanelSingleOpen]);
 
   const handleToggleReplayPanel = useCallback(() => {
     if (replayPanelActive) {
@@ -2989,6 +3049,8 @@ export function TerminalTabs({
       else setReplayOpen(false);
       return;
     }
+    const project = panelSession?.projectId ? projectById.get(panelSession.projectId) : null;
+    if (rejectUnsupportedCapability(project, "history")) return;
     if (sidePanelMerged) {
       if (terminalSidePanelSingleOpen) {
         closeHistory();
@@ -3009,9 +3071,10 @@ export function TerminalTabs({
       }
       setReplayOpen(true);
     }
-  }, [closeHistory, replayPanelActive, sidePanelMerged, terminalSidePanelSingleOpen]);
+  }, [closeHistory, panelSession, projectById, rejectUnsupportedCapability, replayPanelActive, sidePanelMerged, terminalSidePanelSingleOpen]);
 
   const syncFilePanelProject = useCallback(async (project: Project) => {
+    if (rejectUnsupportedCapability(project, "files")) return false;
     try {
       const sameFileContext = isSameProjectFileContext(fileProject, project);
       if (!sameFileContext && isProjectFileDirty()) {
@@ -3029,7 +3092,7 @@ export function TerminalTabs({
       toast.error(t("sidebar.toast.openProjectFilesFailed"), { description: String(err) });
       return false;
     }
-  }, [confirm, fileProject, openFileProject, t]);
+  }, [confirm, fileProject, openFileProject, rejectUnsupportedCapability, t]);
 
   const closeFilesPanel = useCallback(() => {
     if (sidePanelMerged) {
@@ -3045,6 +3108,7 @@ export function TerminalTabs({
       return;
     }
     if (!filePanelProject) return;
+    if (rejectUnsupportedCapability(filePanelProject, "files")) return;
     const allowed = await syncFilePanelProject(filePanelProject);
     if (!allowed) return;
     if (terminalSidePanelSingleOpen) {
@@ -3063,10 +3127,12 @@ export function TerminalTabs({
       }
       setFilesOpen(true);
     }
-  }, [closeFilesPanel, closeHistory, filePanelProject, filesPanelActive, sidePanelMerged, syncFilePanelProject, terminalSidePanelSingleOpen]);
+  }, [closeFilesPanel, closeHistory, filePanelProject, filesPanelActive, rejectUnsupportedCapability, sidePanelMerged, syncFilePanelProject, terminalSidePanelSingleOpen]);
 
   const handleSidePanelTabChange = useCallback((tab: TerminalSidePanelTab) => {
+    const project = panelSession?.projectId ? projectById.get(panelSession.projectId) : null;
     if (tab === "stats") {
+      if (rejectUnsupportedCapability(project, "statistics")) return;
       void ensureStatsPanelAllowed().then((allowed) => {
         if (allowed) setSidePanelTab("stats");
       });
@@ -3074,13 +3140,16 @@ export function TerminalTabs({
     }
     if (tab === "files") {
       if (!filePanelProject) return;
+      if (rejectUnsupportedCapability(filePanelProject, "files")) return;
       void syncFilePanelProject(filePanelProject).then((allowed) => {
         if (allowed) setSidePanelTab("files");
       });
       return;
     }
+    if (tab === "git" && rejectUnsupportedCapability(project, "git")) return;
+    if (tab === "replay" && rejectUnsupportedCapability(project, "history")) return;
     setSidePanelTab(tab);
-  }, [ensureStatsPanelAllowed, filePanelProject, syncFilePanelProject]);
+  }, [ensureStatsPanelAllowed, filePanelProject, panelSession, projectById, rejectUnsupportedCapability, syncFilePanelProject]);
 
   // 响应式约束：非合并模式下两个面板各占固定宽度，窗口过窄时会挤压终端。
   // 窗口 < 1100px 时退化为单面板，并随窗口缩小持续生效。
@@ -3128,6 +3197,18 @@ export function TerminalTabs({
     void syncFilePanelProject(filePanelProject);
   }, [closeFilesPanel, filePanelProject?.id, filePanelProject?.path, filesPanelActive, syncFilePanelProject]);
 
+  useEffect(() => {
+    const project = panelSession?.projectId ? projectById.get(panelSession.projectId) : null;
+    if (!project || resolveProjectCapabilities(project).environment !== "ssh") return;
+    setStatsOpen(false);
+    setGitOpen(false);
+    setReplayOpen(false);
+    setFilesOpen(false);
+    if (sidePanelMerged && sidePanelOpen && sidePanelTab !== "systemResources") {
+      setSidePanelOpen(false);
+    }
+  }, [panelSession?.projectId, projectById, sidePanelMerged, sidePanelOpen, sidePanelTab]);
+
   const handleOpenHistoryTab = useCallback(() => {
     if (historyOpen) {
       closeHistory();
@@ -3143,13 +3224,14 @@ export function TerminalTabs({
       setSystemResourcesOpen(false);
     }
     const project = activeSession?.projectId ? projects.find((item) => item.id === activeSession.projectId) : undefined;
+    if (rejectUnsupportedCapability(project, "history")) return;
     setActiveWorkspaceTab("history");
     void openHistory({
       sourceFilter: resolveHistorySourceFilter(project?.cli_tool),
       projectPath: project?.path ?? activeSession?.cwd ?? null,
       scopedProjectPath: activeWorktree?.path ?? null,
     });
-  }, [activeSession, activeWorktree?.path, closeHistory, historyOpen, openHistory, projects, terminalSidePanelSingleOpen]);
+  }, [activeSession, activeWorktree?.path, closeHistory, historyOpen, openHistory, projects, rejectUnsupportedCapability, terminalSidePanelSingleOpen]);
 
   const handleOpenSplitPicker = useCallback((sessionId: string, direction: TerminalPaneSplitDirection, anchor?: SplitPickerAnchor) => {
     clearSplitPickerOpenSchedule();
@@ -4121,7 +4203,7 @@ export function TerminalTabs({
             />
           ) : (
             <>
-              {statsOpen && (
+              {statsOpen && panelCapabilities.statistics && (
                 <ResizableTerminalPanelFrame
                   widthKey="stats"
                   defaultWidth={TERMINAL_PANEL_WIDTH_DEFAULTS.stats}
@@ -4131,7 +4213,7 @@ export function TerminalTabs({
                   <TerminalStatsPanel activeSessionId={panelSessionId} open={statsOpen} embedded />
                 </ResizableTerminalPanelFrame>
               )}
-              {gitOpen && (
+              {gitOpen && panelCapabilities.git && (
                 <ResizableTerminalPanelFrame
                   widthKey="git"
                   defaultWidth={TERMINAL_PANEL_WIDTH_DEFAULTS.git}
@@ -4143,7 +4225,7 @@ export function TerminalTabs({
                   </Suspense>
                 </ResizableTerminalPanelFrame>
               )}
-              {replayOpen && (
+              {replayOpen && panelCapabilities.history && (
                 <ResizableTerminalPanelFrame
                   widthKey="replay"
                   defaultWidth={TERMINAL_PANEL_WIDTH_DEFAULTS.replay}
@@ -4153,7 +4235,7 @@ export function TerminalTabs({
                   <SessionReplayPanel activeSessionId={panelSessionId} open={replayOpen} />
                 </ResizableTerminalPanelFrame>
               )}
-              {filesOpen && (
+              {filesOpen && panelCapabilities.files && (
                 <ResizableTerminalPanelFrame
                   widthKey="files"
                   defaultWidth={TERMINAL_PANEL_WIDTH_DEFAULTS.files}

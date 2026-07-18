@@ -1,4 +1,4 @@
-use log::{debug, info, warn};
+use log::{debug, warn};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::{Read, Write};
@@ -294,7 +294,7 @@ fn log_hook_payload_diagnostic(payload: &ClaudeHookRequest) {
         return;
     }
 
-    info!(
+    debug!(
         "cli hook payload diagnostic: source={} event={} tabId={} sessionId={:?} agentId={:?} toolUseId={:?} toolName={:?} mcpServer={:?} skillName={:?} agentType={:?} hasAgentTranscriptPath={} hasTranscriptPath={} wslDistro={:?} cwd={:?}",
         normalize_source(payload.source.as_deref()),
         payload.event,
@@ -321,7 +321,7 @@ fn log_hook_payload_diagnostic(payload: &ClaudeHookRequest) {
     // AgentTool 事件详细诊断：记录完整 payload JSON 以定位 Claude Code 实际字段。
     if matches!(payload.event.as_str(), "AgentToolStart" | "AgentToolStop") {
         if let Ok(full_json) = serde_json::to_string_pretty(payload) {
-            info!(
+            debug!(
                 "[agent_tool_diagnostic] {} full payload:\n{}",
                 payload.event, full_json
             );

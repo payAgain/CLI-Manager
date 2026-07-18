@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 use crate::pty::boundary::safe_emit_boundary;
 use crate::pty::platform::{self, PlatformPtyChild, PlatformPtyController, PtyLaunchOptions};
 use crate::shell_resolver::{resolve_git_bash_exe, GIT_BASH_NOT_FOUND_MESSAGE};
+use crate::ssh_launch::SshLaunchPlan;
 
 /// PTY 输出/状态事件出口（Issue #123 Phase 2 解耦点）：
 /// daemon 实现为尺寸化 replay + WebSocket 二进制推送。
@@ -559,6 +560,18 @@ PS0='\e]133;C\a${PS0:0:$((__cli_manager_ran=1,0))}'
         shell: Option<&str>,
         sink: Arc<dyn PtyEventSink>,
     ) -> Result<PtyProcessTraits, String> {
+        self.create_with_launch(session_id, cwd, env_vars, shell, None, sink)
+    }
+
+    pub fn create_with_launch(
+        &self,
+        session_id: &str,
+        cwd: Option<&str>,
+        env_vars: Option<HashMap<String, String>>,
+        shell: Option<&str>,
+        ssh_launch: Option<&SshLaunchPlan>,
+        sink: Arc<dyn PtyEventSink>,
+    ) -> Result<PtyProcessTraits, String> {
         let env_count = env_vars.as_ref().map(|vars| vars.len()).unwrap_or(0);
         info!(
             "pty session create: id={}, shell={:?}, cwd={:?}, env_vars={}",
@@ -586,15 +599,38 @@ PS0='\e]133;C\a${PS0:0:$((__cli_manager_ran=1,0))}'
                 .entry("CHERE_INVOKING".to_string())
                 .or_insert_with(|| "1".to_string());
         }
-        let (exe, args) = Self::build_shell_args(shell_key, env_vars.as_ref()).map_err(|e| {
-            error!(
-                "pty resolve shell failed: id={}, shell={}, error={}",
-                session_id, shell_key, e
-            );
-            e
-        })?;
+        let mut ssh_env = HashMap::new();
+        let (exe, args) = if let Some(ssh_launch) = ssh_launch {
+            let launch = ssh_launch.build_process_launch().map_err(|e| {
+                error!(
+                    "pty resolve ssh launch failed: id={}, error={}",
+                    session_id, e
+                );
+                e
+            })?;
+            ssh_env = launch.env;
+            (launch.executable, launch.args)
+        } else {
+            Self::build_shell_args(shell_key, env_vars.as_ref()).map_err(|e| {
+                error!(
+                    "pty resolve shell failed: id={}, shell={}, error={}",
+                    session_id, shell_key, e
+                );
+                e
+            })?
+        };
+        let launch_shell_key = if ssh_launch.is_some() {
+            "ssh"
+        } else {
+            shell_key
+        };
+        let log_args = if ssh_launch.is_some() {
+            vec!["<ssh-launch-redacted>".to_string()]
+        } else {
+            args.clone()
+        };
         let launch_context =
-            Self::build_shell_launch_log_context(shell, shell_key, &exe, &args, cwd);
+            Self::build_shell_launch_log_context(shell, launch_shell_key, &exe, &log_args, cwd);
         debug!(
             "pty shell launch: id={}, requested_shell={:?}, shell_key={}, exe={}, args={:?}, login_shell={}, cwd={:?}",
             session_id,
@@ -605,7 +641,8 @@ PS0='\e]133;C\a${PS0:0:$((__cli_manager_ran=1,0))}'
             launch_context.login_shell,
             launch_context.cwd
         );
-        let mut launch_env = env_vars.unwrap_or_default();
+        let mut launch_env = ssh_env;
+        launch_env.extend(env_vars.unwrap_or_default());
         // 非 Windows：GUI 启动（Dock/Finder）时父进程没有 TERM，子进程继承空 TERM
         // 会导致 claude/codex/ls/git 等判定为非彩色终端而禁用 ANSI 颜色。
         // 显式注入 xterm-256color（xterm.js 完整支持）+ truecolor，让支持的工具走 24-bit。
@@ -622,7 +659,7 @@ PS0='\e]133;C\a${PS0:0:$((__cli_manager_ran=1,0))}'
         let spawned = platform::spawn(PtyLaunchOptions {
             exe: exe.clone(),
             args: args.clone(),
-            cwd: cwd.map(str::to_string),
+            cwd: if ssh_launch.is_some() { None } else { cwd.map(str::to_string) },
             env: launch_env,
             cols: 80,
             rows: 24,
@@ -643,7 +680,7 @@ PS0='\e]133;C\a${PS0:0:$((__cli_manager_ran=1,0))}'
         };
         let diagnostics = Arc::new(Mutex::new(PtySessionDiagnostics {
             session_id: session_id.to_string(),
-            shell: shell.unwrap_or(default_shell_key).to_string(),
+            shell: launch_shell_key.to_string(),
             exe: exe.to_string(),
             cwd: cwd.map(str::to_string),
             last_resize_cols: None,
@@ -653,7 +690,7 @@ PS0='\e]133;C\a${PS0:0:$((__cli_manager_ran=1,0))}'
         let child_for_thread = child.clone();
         let diagnostics_for_thread = diagnostics.clone();
         let session_id_owned = session_id.to_string();
-        let defer_initial_output = cfg!(target_os = "windows") && shell_key == "gitbash";
+        let defer_initial_output = cfg!(target_os = "windows") && launch_shell_key == "gitbash";
 
         self.statuses.lock().unwrap().insert(
             session_id.to_string(),
@@ -806,7 +843,7 @@ PS0='\e]133;C\a${PS0:0:$((__cli_manager_ran=1,0))}'
             .write()
             .unwrap()
             .insert(session_id.to_string(), session);
-        info!("pty session ready: id={}", session_id);
+        debug!("pty session ready: id={}", session_id);
         Ok(process_traits)
     }
 
@@ -1009,7 +1046,7 @@ PS0='\e]133;C\a${PS0:0:$((__cli_manager_ran=1,0))}'
                         let diagnostics = session.diagnostics.lock().unwrap().clone();
                         session.missing_since = Some(now);
                         marked_missing += 1;
-                        info!(
+                        debug!(
                             "pty orphan candidate marked missing: id={}, age_secs={}, active_count={}, tracked_count={}, shell={}, exe={}, cwd={:?}",
                             session_id,
                             age.as_secs(),
@@ -1091,14 +1128,14 @@ PS0='\e]133;C\a${PS0:0:$((__cli_manager_ran=1,0))}'
             if let Some(handle) = reader_handle {
                 reader_handles.push((session_id, handle));
             } else {
-                info!("pty session killed (close_all): id={}", session_id);
+                debug!("pty session killed (close_all): id={}", session_id);
             }
         }
 
         let closed = reader_handles.len();
         for (session_id, handle) in reader_handles {
             let _ = handle.join();
-            info!("pty session killed (close_all): id={}", session_id);
+            debug!("pty session killed (close_all): id={}", session_id);
         }
         info!(
             "pty close_all: batch closed sessions, joined_readers={}",

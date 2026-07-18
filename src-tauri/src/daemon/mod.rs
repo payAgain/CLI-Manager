@@ -48,6 +48,6 @@ pub fn setup_process_governance() {
         }
         // 故意不 CloseHandle：Job 句柄与 daemon 进程同生共死，
         // 进程终止时句柄关闭触发 KILL_ON_JOB_CLOSE 清理全部子进程。
-        log::info!("daemon job object active (kill-on-close)");
+        log::debug!("daemon job object active (kill-on-close)");
     }
 }

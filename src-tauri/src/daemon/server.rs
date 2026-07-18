@@ -14,6 +14,7 @@ use super::protocol::{
 };
 use crate::claude_hook::{spawn_hook_listener, HookPayloadSink};
 use crate::pty::manager::{PtyEventSink, PtyManager, PtyProcessStatus};
+use crate::ssh_launch::SshLaunchPlan;
 use crate::third_party_notification::DispatcherHandle;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
@@ -645,11 +646,22 @@ impl DaemonHost {
             .and_then(|sessions| sessions.get(session_id).cloned())
     }
 
+    #[cfg(test)]
     fn reserve_session(
         &self,
         session_id: &str,
         cwd: Option<String>,
         shell: Option<String>,
+    ) -> Result<(), &'static str> {
+        self.reserve_session_with_launch(session_id, cwd, shell, None)
+    }
+
+    fn reserve_session_with_launch(
+        &self,
+        session_id: &str,
+        cwd: Option<String>,
+        shell: Option<String>,
+        ssh_launch: Option<&SshLaunchPlan>,
     ) -> Result<(), &'static str> {
         let mut sessions = self
             .sessions
@@ -668,6 +680,9 @@ impl DaemonHost {
                     session_id: session_id.to_string(),
                     cwd,
                     shell,
+                    environment_type: ssh_launch.map(|_| "ssh".to_string()),
+                    ssh_host_id: ssh_launch.map(|plan| plan.host_id.clone()),
+                    remote_path: ssh_launch.map(|plan| plan.remote_path.clone()),
                     alive: true,
                     task_status: None,
                     task_updated_at_ms: None,
@@ -794,7 +809,7 @@ impl DaemonHost {
             }
             sessions.remove(&id);
             total -= bytes;
-            log::info!("daemon dropped exited session buffer to enforce cap: id={id}");
+            log::warn!("daemon dropped exited session buffer to enforce cap: id={id}");
         }
     }
 
@@ -1336,7 +1351,7 @@ impl DaemonServer {
                 },
             );
         }
-        log::info!("daemon client connected ({peer}, id={client_id})");
+        log::debug!("daemon client connected ({peer}, id={client_id})");
 
         while let Some(line) = read_line_bounded(&mut reader) {
             match decode_client_frame(&line) {
@@ -1364,7 +1379,7 @@ impl DaemonServer {
                 client.writer.close();
             }
         }
-        log::info!("daemon client disconnected ({peer}, id={client_id})");
+        log::debug!("daemon client disconnected ({peer}, id={client_id})");
     }
 
     fn handle_websocket_connection(self: Arc<Self>, stream: TcpStream) {
@@ -1425,7 +1440,7 @@ impl DaemonServer {
                 },
             );
         }
-        log::info!("daemon websocket client connected ({peer}, id={client_id})");
+        log::debug!("daemon websocket client connected ({peer}, id={client_id})");
 
         while let Some(message) = read_websocket_client_message(&mut socket) {
             match message {
@@ -1459,7 +1474,7 @@ impl DaemonServer {
                 client.writer.close();
             }
         }
-        log::info!("daemon websocket client disconnected ({peer}, id={client_id})");
+        log::debug!("daemon websocket client disconnected ({peer}, id={client_id})");
     }
 
     fn handle_binary_frame(
@@ -1584,7 +1599,8 @@ impl DaemonServer {
                 cwd,
                 env_vars,
                 shell,
-            } => self.handle_create(client_id, id, session_id, cwd, env_vars, shell),
+                ssh_launch,
+            } => self.handle_create(client_id, id, session_id, cwd, env_vars, shell, ssh_launch),
             ClientFrame::Write {
                 id,
                 session_id,
@@ -1817,6 +1833,7 @@ impl DaemonServer {
         cwd: Option<String>,
         env_vars: Option<HashMap<String, String>>,
         shell: Option<String>,
+        ssh_launch: Option<SshLaunchPlan>,
     ) -> DaemonFrame {
         if !is_valid_session_id(&session_id) {
             return err_frame(id, "invalid session id");
@@ -1828,7 +1845,12 @@ impl DaemonServer {
         // 检查、预留与插入保持在同一临界区；并发 create 不得同时通过。
         if let Err(message) = self
             .host
-            .reserve_session(&session_id, cwd.clone(), shell.clone())
+            .reserve_session_with_launch(
+                &session_id,
+                cwd.clone(),
+                shell.clone(),
+                ssh_launch.as_ref(),
+            )
         {
             return err_frame(id, message);
         }
@@ -1843,17 +1865,19 @@ impl DaemonServer {
             client.attaching.remove(&session_id);
             Some(())
         });
+        // 先登记会话表再启动 PTY：reader 线程首帧输出可能早于登记完成。
         if attached.is_none() {
             if let Ok(mut sessions) = self.host.sessions.lock() {
                 sessions.remove(&session_id);
             }
             return err_frame(id, "client unavailable");
         }
-        match self.host.pty.create(
+        match self.host.pty.create_with_launch(
             &session_id,
             cwd.as_deref(),
             env_vars,
             shell.as_deref(),
+            ssh_launch.as_ref(),
             sink,
         ) {
             Ok(process_traits) => self
@@ -1970,6 +1994,9 @@ mod tests {
                 session_id: session_id.to_string(),
                 cwd: None,
                 shell: None,
+                environment_type: None,
+                ssh_host_id: None,
+                remote_path: None,
                 alive: true,
                 task_status: None,
                 task_updated_at_ms: None,

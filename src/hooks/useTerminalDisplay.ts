@@ -7,6 +7,7 @@ import { refreshTerminalViewport } from "../lib/terminalVisibility";
 import { isLightTerminalTheme } from "../lib/terminalThemes";
 import { logError, logWarn } from "../lib/logger";
 import { markTerminalSnapshotDirty } from "../lib/sessionSnapshotPersistence";
+import type { TerminalOutputNormalizationOptions } from "./useTerminalOsc";
 import { TerminalResizeDebouncer } from "../terminal/browser/TerminalResizeDebouncer";
 import { TerminalResizeRenderBarrier } from "../terminal/browser/TerminalResizeRenderBarrier";
 import {
@@ -25,7 +26,10 @@ const MIN_TERMINAL_COLS = 40;
 const MIN_TERMINAL_ROWS = 8;
 const HIDDEN_WEBGL_DISPOSE_DELAY_MS = 10_000;
 
-type NormalizeTerminalOutput = (text: string) => string;
+type NormalizeTerminalOutput = (
+  text: string,
+  options?: TerminalOutputNormalizationOptions,
+) => string;
 type TransformTerminalOutput = (text: string) => string;
 type AfterTerminalWrite = (terminal: Terminal) => void;
 
@@ -307,7 +311,9 @@ export function useTerminalDisplay({
     const queuePayload = (delivery: TerminalOutputDelivery, markSnapshotDirty: boolean) => {
       const payload = delivery.frame;
       const rawText = textDecoder.decode(payload.data, { stream: true });
-      const text = normalizeOutputRef.current(rawText);
+      const text = normalizeOutputRef.current(rawText, {
+        replyToColorQueries: payload.kind === "output",
+      });
       if (!text && payload.kind !== "replay" && payload.kind !== "reset") {
         delivery.commit(rawText.length);
         return;
@@ -355,7 +361,10 @@ export function useTerminalDisplay({
           if (entry.cols > 0 && entry.rows > 0 && (terminal.cols !== entry.cols || terminal.rows !== entry.rows)) {
             terminal.resize(entry.cols, entry.rows);
           }
-          const text = normalizeOutputRef.current(textDecoder.decode(entry.data, { stream: true }));
+          const text = normalizeOutputRef.current(
+            textDecoder.decode(entry.data, { stream: true }),
+            { replyToColorQueries: false },
+          );
           if (!text) {
             terminalProcessManager.acknowledgeOutput(sessionId, entry.sequence, 0);
             continue;

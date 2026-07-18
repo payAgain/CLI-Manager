@@ -164,6 +164,7 @@ export class PtyHostSocket {
     cwd: string | null,
     envVars: Record<string, string>,
     shell: string | null,
+    sshLaunch: unknown | null,
   ): Promise<TerminalProcessTraits | null> {
     this.closedSessions.delete(sessionId);
     this.attachedSessions.add(sessionId);
@@ -187,6 +188,7 @@ export class PtyHostSocket {
         cwd,
         env_vars: envVars,
         shell,
+        ssh_launch: sshLaunch,
       });
       const meta = (frame.meta ?? {}) as Record<string, unknown>;
       return normalizeProcessTraits(meta.processTraits);

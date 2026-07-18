@@ -1,5 +1,5 @@
 #[cfg(target_os = "windows")]
-use log::{info, warn};
+use log::{debug, info, warn};
 #[cfg(target_os = "windows")]
 use std::path::{Path, PathBuf};
 #[cfg(target_os = "windows")]
@@ -23,7 +23,7 @@ pub fn initialize<R: Runtime>(app: &AppHandle<R>) {
     #[cfg(target_os = "windows")]
     {
         if !windows_conpty_compatibility_fix_enabled() {
-            info!("bundled ConPTY sideload skipped: compatibility fix disabled");
+            debug!("bundled ConPTY sideload skipped: compatibility fix disabled");
             return;
         }
         match bundled_conpty_dir(app).and_then(prepend_conpty_dir_to_path) {
@@ -37,7 +37,7 @@ pub fn initialize<R: Runtime>(app: &AppHandle<R>) {
                     dir.to_string_lossy()
                 );
             }
-            Ok(None) => info!("bundled ConPTY sideload skipped: unsupported architecture"),
+            Ok(None) => debug!("bundled ConPTY sideload skipped: unsupported architecture"),
             Err(err) => warn!("bundled ConPTY sideload unavailable: {err}"),
         }
     }
@@ -86,7 +86,7 @@ fn windows_conpty_compatibility_fix_enabled() -> bool {
         .map_err(|err| err.to_string())
         .and_then(|text| std::fs::write(&settings_path, text).map_err(|err| err.to_string()))
     {
-        Ok(()) => info!("bundled ConPTY sideload setting initialized: enabled={default}"),
+        Ok(()) => debug!("bundled ConPTY sideload setting initialized: enabled={default}"),
         Err(err) => warn!("bundled ConPTY sideload setting write skipped: {err}"),
     }
     default
