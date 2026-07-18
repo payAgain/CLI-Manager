@@ -693,3 +693,36 @@ Claude 启动阶段提前订阅子任务 transcript，Codex rollout 增加有界
 ### Next Steps
 
 - None - task complete
+
+
+## Session 21: 合并 VS Code 终端正确性分支
+
+**Date**: 2026-07-18
+**Task**: 合并 VS Code 终端正确性分支
+**Branch**: `master`
+
+### Summary
+
+将 feat/vscode-terminal-correctness-completion 合并到最新 master，语义解决 6 个冲突，补齐测试桩并通过前端、Node 与 Rust 验证。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `7fd0c4a` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
