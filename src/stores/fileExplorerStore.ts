@@ -11,7 +11,7 @@ import type {
   ProjectImageFilePayload,
   ProjectTextFilePayload,
 } from "../lib/types";
-import { logError } from "../lib/logger";
+import { logError, recordCrashActivity } from "../lib/logger";
 import { translateCurrent } from "../lib/i18n";
 import { isSameProjectFileContext } from "../lib/terminalProject";
 
@@ -911,6 +911,14 @@ export const useFileExplorerStore = create<FileExplorerStore>((set, get) => ({
   openFile: async (entry) => {
     const project = get().project;
     if (!project || entry.kind !== "file") return;
+    recordCrashActivity("file.preview_open", {
+      projectId: project.id,
+      projectPath: project.path,
+      filePath: entry.path,
+      sizeBytes: entry.sizeBytes,
+      extension: extension(entry.path),
+      previewKind: isImage(entry.path) ? "image" : isMarkdown(entry.path) ? "markdown" : "text",
+    });
     const existing = get().openFiles.find((file) => file.path === entry.path);
     if (existing) {
       set({ activeFilePath: existing.path, activeFile: existing, activeDiffPath: null, activeDiff: null });

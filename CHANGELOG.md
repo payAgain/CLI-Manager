@@ -17,6 +17,7 @@
 ## [V1.2.9] - 2026-07-17
 
 ### 新增
+- **独立崩溃日志与跨进程诊断**：新增 `~/.cli-manager/logs/crash.log` 独立滚动日志，覆盖 Rust panic、React/浏览器未捕获异常、Promise 拒绝、WebGL context loss、启动失败及 PTY daemon 崩溃；对无法即时捕获的原生/WebView/强制终止，会在下次启动通过运行标记记录异常退出，并附带最近文件预览、终端/分屏、Shell、Worktree、窗口状态与脱敏后的操作上下文，便于定位随机退出原因。
 - **桌面宠物（PR #153）**：新增独立悬浮窗桌面宠物，可在主窗口外显示；设置页提供启用/关闭、宠物选择、尺寸（小/中/大）、置顶、锁位置、显示状态/会话名、全屏终端时自动隐藏、重置位置等选项。宠物情绪跟随终端 Tab 与后台任务状态联动（执行中 / 待处理 / 完成 / 失败 / 空闲 / 休眠），支持任务列表展示与点击跳回对应会话。
 - **桌面宠物包与图鉴**：支持 `.clipet` 宠物包（ZIP + `manifest.json` + png/webp/经清洗 svg），内置 CLI 小猫并预置 terminal-robot / pixel-fox / mint-slime；设置页可浏览图鉴、下载安装、本地导入与卸载。安装前校验包大小、校验和、`minAppVersion`、归档结构与资源安全（拒绝 HTML/JS/可执行文件/路径穿越）。
 - **Codex Pets 兼容**：可发现并加载本机 Codex Pets 精灵图包（`codex-sprite` 引擎），与 CLI-Manager 自有宠物一并出现在已安装列表；外部 Codex 宠物不支持应用内卸载。

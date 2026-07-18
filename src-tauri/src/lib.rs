@@ -6,6 +6,7 @@ mod claude_hook;
 pub mod codex_statusline;
 mod commands;
 mod conpty_sideload;
+mod crash_reporter;
 mod credential_store;
 // daemon 二进制（src/bin/cli-manager-daemon.rs）经 lib 复用以下模块，
 // 因此 app_paths 与 daemon 需 pub。
@@ -102,6 +103,11 @@ pub fn run_daemon_and_exit() -> ! {
             std::process::exit(1);
         }
     };
+    if let Err(err) = crash_reporter::initialize(data_dir.join("logs"), "pty-daemon") {
+        eprintln!("cli-manager-daemon: crash reporter unavailable: {err}");
+    } else if let Err(err) = crash_reporter::start_runtime() {
+        eprintln!("cli-manager-daemon: crash runtime marker unavailable: {err}");
+    }
     let info_path = daemon_info_path(&data_dir, cfg!(debug_assertions));
     let config = DaemonServerConfig {
         info_path,
@@ -111,6 +117,7 @@ pub fn run_daemon_and_exit() -> ! {
         eprintln!("cli-manager-daemon: {err}");
         std::process::exit(1);
     }
+    crash_reporter::mark_graceful_exit();
     std::process::exit(0);
 }
 
@@ -548,6 +555,9 @@ pub fn run() {
     let data_db_url = app_paths::db_url().expect("failed to resolve CLI-Manager database path");
     let log_dir = app_paths::logs_dir().expect("failed to resolve CLI-Manager log directory");
     std::fs::create_dir_all(&log_dir).expect("failed to create CLI-Manager log directory");
+    if let Err(err) = crash_reporter::initialize(log_dir.clone(), "app") {
+        eprintln!("failed to initialize CLI-Manager crash reporter: {err}");
+    }
     let mut context = tauri::generate_context!();
     if load_disable_hardware_acceleration_setting() {
         apply_webview_disable_gpu_config(context.config_mut());
@@ -582,6 +592,9 @@ pub fn run() {
                 .build()
         })
         .setup(move |app| {
+            if let Err(err) = crash_reporter::start_runtime() {
+                log::warn!("failed to start CLI-Manager crash runtime marker: {err}");
+            }
             let startup_args: Vec<String> = std::env::args().collect();
             if let Some(session_id) = background_session_arg(&startup_args) {
                 if let Ok(mut pending) = app.state::<PendingBackgroundSession>().0.lock() {
@@ -901,13 +914,17 @@ pub fn run() {
             statusline_profiles::statusline_profiles_export,
             statusline_profiles::statusline_profiles_analyze_import,
             statusline_profiles::statusline_profiles_commit_import,
+            crash_reporter::crash_context_update,
+            crash_reporter::frontend_crash_report,
             app_show_main_window,
         ])
         .build(context)
         .expect("error while building tauri application")
         .run(|app, event| {
             if let tauri::RunEvent::Exit = &event {
-                app.state::<commands::cc_connect::CcConnectManager>().shutdown();
+                app.state::<commands::cc_connect::CcConnectManager>()
+                    .shutdown();
+                crash_reporter::mark_graceful_exit();
             }
 
             #[cfg(target_os = "macos")]

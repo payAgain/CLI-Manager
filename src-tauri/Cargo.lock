@@ -707,6 +707,7 @@ dependencies = [
  "notify-debouncer-mini",
  "notify-rust",
  "portable-pty",
+ "regex",
  "reqwest 0.12.28",
  "semver",
  "serde",
