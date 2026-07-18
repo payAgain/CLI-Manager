@@ -70,7 +70,6 @@ export function WindowTitleBar() {
       <div
         className="flex min-w-0 flex-1 items-center gap-2 px-2.5 text-[13px]"
         data-tauri-drag-region
-        onDoubleClick={() => runWindowAction("toggleMaximize", () => getCurrentWindow().toggleMaximize())}
       >
         <img
           src={appIcon32}

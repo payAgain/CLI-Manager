@@ -660,3 +660,36 @@ Claude 启动阶段提前订阅子任务 transcript，Codex rollout 增加有界
 ### Next Steps
 
 - None - task complete
+
+
+## Session 20: 修复历史会话恢复 CLI 参数
+
+**Date**: 2026-07-16
+**Task**: 修复历史会话恢复 CLI 参数
+**Branch**: `master`
+
+### Summary
+
+统一历史详情与右键恢复入口，按项目来源和目录匹配配置；多匹配项提供搜索分组选择框，并继承 CLI 参数与启动环境。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `51c6ffd` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

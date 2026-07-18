@@ -15,7 +15,7 @@ import { getClaudeProviderOverride, getCodexProviderOverride, getProviderSwitchA
 import { useProjectStore } from "./projectStore";
 import { appendSyncedHistoryContextArg } from "../lib/syncedHistoryContext";
 import { translateCurrent } from "../lib/i18n";
-import { findProjectByPath, findWorktreeByPath } from "../lib/terminalProject";
+import { findProjectByPath, findWorktreeByPath, resolveProjectForProviderLaunch } from "../lib/terminalProject";
 import {
   addSessionToPaneTree,
   findPaneLeaf,
@@ -68,15 +68,22 @@ export type CliHookEventName =
 export type TabNotificationState = "none" | "running" | "attention" | "done" | "failed";
 export type ShellRuntimeEventName = "command_started" | "command_finished" | "prompt_shown";
 
-interface PtyAttachResult {
-  attached: boolean;
+interface DaemonSessionState {
   alive: boolean;
-  replayBase64: string;
   cwd?: string | null;
   shell?: string | null;
   createdAtMs?: number;
   taskStatus?: TabNotificationState | null;
   taskUpdatedAtMs?: number | null;
+}
+
+export interface PtyAttachResult extends DaemonSessionState {
+  attached: boolean;
+  replayBase64: string;
+}
+
+interface DaemonSessionMeta extends DaemonSessionState {
+  sessionId: string;
 }
 
 type TabStatusSourceName = "hook" | "shell";
@@ -103,6 +110,7 @@ export interface ShellRuntimePayload {
 }
 
 const SHELL_RUNTIME_MONITORING_ENV = "CLI_MANAGER_SHELL_RUNTIME_MONITORING";
+const PTY_OUTPUT_ACTIVITY_UPDATE_INTERVAL_MS = 1000;
 const TAB_STATUS_PRIORITY: Record<TabNotificationState, number> = {
   none: 0,
   done: 1,
@@ -200,8 +208,11 @@ interface TerminalStore {
   tabNotifications: Record<string, TabNotificationState>;
   tabStatuses: Record<string, TabStatusSources>;
   tabStatusDetails: Record<string, TabStatusDetails>;
+  ptyOutputActivityAt: Record<string, number>;
   splits: Record<string, SplitState>;
   hiddenBackgroundSessionIds: Set<string>;
+  /** 仅运行态：XTerm 输出监听就绪后才可执行 daemon attach。 */
+  daemonAttachPendingSessionIds: Set<string>;
   subagentTranscripts: Record<string, SubagentTranscriptContent>;
   createSession: (projectId?: string, cwd?: string, title?: string, startupCmd?: string, envVars?: Record<string, string>, shell?: string, paneId?: string, worktreeId?: string) => Promise<string>;
   closeSession: (id: string) => Promise<void>;
@@ -213,6 +224,7 @@ interface TerminalStore {
   mergeWorkspanAtPaneEdge: (sourceId: string, targetId: string, targetPaneId: string, edge: TerminalPaneDropEdge) => void;
   updateSessionCwd: (sessionId: string, cwd: string) => void;
   updateSessionTerminalSnapshot: (sessionId: string, initialTerminalOutput: string) => void;
+  recordPtyOutputActivity: (sessionId: string) => void;
   markAttentionInputHandled: (sessionId: string) => void;
   handleCliHookEvent: (payload: CliHookPayload) => string | null;
   handleShellRuntimeEvent: (payload: ShellRuntimePayload) => string | null;
@@ -248,21 +260,6 @@ interface TerminalStore {
 // 防止 StrictMode 双重调用
 let restoreInProgress = false;
 
-/// daemon attach 回放（base64 → UTF-8 文本）：写入 xterm 的 initialTerminalOutput。
-function decodeBase64Utf8(base64: string): string | undefined {
-  if (!base64) return undefined;
-  try {
-    const binary = atob(base64);
-    const bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i++) {
-      bytes[i] = binary.charCodeAt(i);
-    }
-    return new TextDecoder("utf-8").decode(bytes);
-  } catch {
-    return undefined;
-  }
-}
-
 function basenameFromPath(path: string | null | undefined): string | null {
   const normalized = path?.trim().replace(/\\/g, "/").replace(/\/+$/g, "") ?? "";
   if (!normalized) return null;
@@ -283,11 +280,11 @@ function normalizeDaemonTaskStatus(status: string | null | undefined): TabNotifi
   return null;
 }
 
-function resolveDaemonAttachTaskStatus(attach: PtyAttachResult): TabNotificationState {
+function resolveDaemonAttachTaskStatus(attach: DaemonSessionState): TabNotificationState {
   return normalizeDaemonTaskStatus(attach.taskStatus) ?? (attach.alive ? "running" : "done");
 }
 
-function resolveDaemonAttachUpdatedAt(attach: PtyAttachResult): string {
+function resolveDaemonAttachUpdatedAt(attach: DaemonSessionState): string {
   const updatedAtMs = attach.taskUpdatedAtMs;
   if (typeof updatedAtMs === "number" && Number.isFinite(updatedAtMs) && updatedAtMs > 0) {
     return new Date(updatedAtMs).toISOString();
@@ -297,7 +294,7 @@ function resolveDaemonAttachUpdatedAt(attach: PtyAttachResult): string {
 
 function resolveAttachedDaemonSession(
   persisted: TerminalSession | undefined,
-  attach: PtyAttachResult
+  attach: DaemonSessionState
 ): Pick<TerminalSession, "projectId" | "worktreeId" | "title" | "cwd" | "shell"> {
   const projectState = useProjectStore.getState();
   const cwd = persisted?.cwd ?? attach.cwd ?? undefined;
@@ -942,6 +939,7 @@ export function formatManualDirectCodexInputForPty(command: string, shell?: Shel
 
 export interface DetachedPtyLaunchOptions {
   projectId?: string;
+  worktreeId?: string;
   cwd?: string | null;
   startupCmd?: string | null;
   envVars?: Record<string, string> | null;
@@ -1013,9 +1011,15 @@ function buildPtyEnvVars(
   return Object.keys(next).length > 0 ? next : null;
 }
 
-function getCodexProviderLaunchConfig(projectId?: string, startupCmd?: string | null) {
+function getProviderLaunchProject(projectId?: string, worktreeId?: string) {
   if (!projectId) return null;
-  const project = useProjectStore.getState().projects.find((item) => item.id === projectId);
+  const projectState = useProjectStore.getState();
+  const project = projectState.projects.find((item) => item.id === projectId);
+  return project ? resolveProjectForProviderLaunch(project, projectState.worktrees, worktreeId) : null;
+}
+
+function getCodexProviderLaunchConfig(projectId?: string, startupCmd?: string | null, worktreeId?: string) {
+  const project = getProviderLaunchProject(projectId, worktreeId);
   if (!project || !isExactCodexProject(project) || project.startup_cmd.trim() || !startupCmd?.trim()) {
     return null;
   }
@@ -1029,9 +1033,8 @@ function getCodexProviderLaunchConfig(projectId?: string, startupCmd?: string | 
   };
 }
 
-function getClaudeProviderLaunchConfig(projectId?: string) {
-  if (!projectId) return null;
-  const project = useProjectStore.getState().projects.find((item) => item.id === projectId);
+function getClaudeProviderLaunchConfig(projectId?: string, worktreeId?: string) {
+  const project = getProviderLaunchProject(projectId, worktreeId);
   if (!project || getProviderSwitchAppType(project) !== "claude") return null;
   const override = getClaudeProviderOverride(project);
   if (!override) return null;
@@ -1052,8 +1055,8 @@ export async function createDetachedPtyProcess(options: DetachedPtyLaunchOptions
     envVars: buildPtyEnvVars(options.envVars ?? null, resolvedShell),
     shell: resolvedShell,
     hookEnvEnabled: await shouldEnableHookEnv(),
-    claudeProvider: getClaudeProviderLaunchConfig(options.projectId),
-    codexProvider: getCodexProviderLaunchConfig(options.projectId, options.startupCmd),
+    claudeProvider: getClaudeProviderLaunchConfig(options.projectId, options.worktreeId),
+    codexProvider: getCodexProviderLaunchConfig(options.projectId, options.startupCmd, options.worktreeId),
   });
 
   return {
@@ -1084,8 +1087,10 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
   tabNotifications: {},
   tabStatuses: {},
   tabStatusDetails: {},
+  ptyOutputActivityAt: {},
   splits: {},
   hiddenBackgroundSessionIds: new Set<string>(),
+  daemonAttachPendingSessionIds: new Set<string>(),
   subagentTranscripts: {},
 
   updateSessionCwd: (sessionId, cwd) => set((state) => ({
@@ -1102,6 +1107,18 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     )),
   })),
 
+  recordPtyOutputActivity: (sessionId) => {
+    const now = Date.now();
+    const previous = get().ptyOutputActivityAt[sessionId] ?? 0;
+    if (now - previous < PTY_OUTPUT_ACTIVITY_UPDATE_INTERVAL_MS) return;
+    set((state) => ({
+      ptyOutputActivityAt: {
+        ...state.ptyOutputActivityAt,
+        [sessionId]: now,
+      },
+    }));
+  },
+
   createSession: async (projectId, cwd, title, startupCmd, envVars, shell, paneId, worktreeId) => {
     const os = await getOsPlatform();
     const resolvedShell = resolveShellForPty(shell, !!projectId, os);
@@ -1114,8 +1131,8 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
         envVars: buildPtyEnvVars(envVars ?? null, resolvedShell),
         shell: resolvedShell,
         hookEnvEnabled: await shouldEnableHookEnv(),
-        claudeProvider: getClaudeProviderLaunchConfig(projectId),
-        codexProvider: getCodexProviderLaunchConfig(projectId, startupCmd),
+        claudeProvider: getClaudeProviderLaunchConfig(projectId, worktreeId),
+        codexProvider: getCodexProviderLaunchConfig(projectId, startupCmd, worktreeId),
       });
     } catch (err) {
       const description = formatTerminalCreateError(err);
@@ -1225,6 +1242,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     const newNotifications = { ...state.tabNotifications };
     const newTabStatuses = { ...state.tabStatuses };
     const newTabStatusDetails = { ...state.tabStatusDetails };
+    const newPtyOutputActivityAt = { ...state.ptyOutputActivityAt };
     const newSubagentTranscripts = { ...state.subagentTranscripts };
     delete newSubagentTranscripts[id];
     const owner = findWorkspanBySession(state.workspans, id);
@@ -1242,6 +1260,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     delete newNotifications[id];
     delete newTabStatuses[id];
     delete newTabStatusDetails[id];
+    delete newPtyOutputActivityAt[id];
 
     // Drop in-memory background overrides for closed sessions (R8).
     const prevHidden = state.hiddenBackgroundSessionIds;
@@ -1250,6 +1269,8 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
       newHidden = new Set(prevHidden);
       newHidden.delete(id);
     }
+    const newDaemonAttachPending = new Set(state.daemonAttachPendingSessionIds);
+    newDaemonAttachPending.delete(id);
 
     state.statusListeners[id]?.();
 
@@ -1261,8 +1282,10 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
       tabNotifications: newNotifications,
       tabStatuses: newTabStatuses,
       tabStatusDetails: newTabStatusDetails,
+      ptyOutputActivityAt: newPtyOutputActivityAt,
       subagentTranscripts: newSubagentTranscripts,
       splits: {},
+      daemonAttachPendingSessionIds: newDaemonAttachPending,
       ...(newHidden !== prevHidden ? { hiddenBackgroundSessionIds: newHidden } : {}),
     });
 
@@ -1542,8 +1565,8 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
         envVars: buildPtyEnvVars(options?.envVars ?? null, resolvedShell),
         shell: resolvedShell,
         hookEnvEnabled: await shouldEnableHookEnv(),
-        claudeProvider: getClaudeProviderLaunchConfig(options?.projectId),
-        codexProvider: getCodexProviderLaunchConfig(options?.projectId, options?.startupCmd),
+        claudeProvider: getClaudeProviderLaunchConfig(options?.projectId, options?.worktreeId),
+        codexProvider: getCodexProviderLaunchConfig(options?.projectId, options?.startupCmd, options?.worktreeId),
       });
     } catch (err) {
       const description = formatTerminalCreateError(err);
@@ -1793,16 +1816,20 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     const newNotifications = { ...state.tabNotifications };
     const newTabStatuses = { ...state.tabStatuses };
     const newTabStatusDetails = { ...state.tabStatusDetails };
+    const newPtyOutputActivityAt = { ...state.ptyOutputActivityAt };
     const newSubagentTranscripts = { ...state.subagentTranscripts };
     const newHidden = new Set(state.hiddenBackgroundSessionIds);
+    const newDaemonAttachPending = new Set(state.daemonAttachPendingSessionIds);
     for (const closedSessionId of closedSessionIds) {
       delete newStatuses[closedSessionId];
       delete newListeners[closedSessionId];
       delete newNotifications[closedSessionId];
       delete newTabStatuses[closedSessionId];
       delete newTabStatusDetails[closedSessionId];
+      delete newPtyOutputActivityAt[closedSessionId];
       delete newSubagentTranscripts[closedSessionId];
       newHidden.delete(closedSessionId);
+      newDaemonAttachPending.delete(closedSessionId);
     }
 
     const closedSet = new Set(closedSessionIds);
@@ -1819,8 +1846,10 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
       tabNotifications: newNotifications,
       tabStatuses: newTabStatuses,
       tabStatusDetails: newTabStatusDetails,
+      ptyOutputActivityAt: newPtyOutputActivityAt,
       splits: {},
       hiddenBackgroundSessionIds: newHidden,
+      daemonAttachPendingSessionIds: newDaemonAttachPending,
       subagentTranscripts: newSubagentTranscripts,
     });
 
@@ -1891,6 +1920,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     const restoredSessions: TerminalSession[] = [];
     const restoredStatuses: Record<string, SessionStatus> = {};
     const restoredListeners: Record<string, UnlistenFn> = {};
+    const daemonAttachPendingSessionIds = new Set<string>();
     let restoredTabState: Pick<TerminalStore, "tabStatuses" | "tabNotifications" | "tabStatusDetails"> = {
       tabStatuses: {},
       tabNotifications: {},
@@ -1902,13 +1932,13 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
 
     // Phase 2（Issue #123）：daemon 仍存活的会话优先 attach 续用——真后台续跑归来，
     // 不重建 PTY、不 resume。daemon 不可用/查询失败 → 空集合，全部走重建兜底。
-    let daemonAliveIds = new Set<string>();
+    let daemonSessionsById = new Map<string, DaemonSessionMeta>();
     try {
-      const daemonSessions = await invoke<Array<{ sessionId: string; alive: boolean }>>(
+      const daemonSessions = await invoke<DaemonSessionMeta[]>(
         "pty_daemon_sessions"
       );
-      daemonAliveIds = new Set(
-        daemonSessions.filter((s) => s.alive).map((s) => s.sessionId)
+      daemonSessionsById = new Map(
+        daemonSessions.filter((session) => session.alive).map((session) => [session.sessionId, session])
       );
     } catch (err) {
       logInfo("pty daemon sessions unavailable, restoring via recreate", { err });
@@ -1922,17 +1952,14 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
         continue;
       }
 
-      // daemon attach 分支：会话进程还活着，画面回放 + 事件订阅即恢复完成。
-      if (daemonAliveIds.has(ps.id)) {
+      // daemon 会话仍存活时先恢复 UI 元数据。实际 attach 等 XTerm 输出监听就绪后执行。
+      const daemonSession = daemonSessionsById.get(ps.id);
+      if (daemonSession) {
         try {
-          const attach = await invoke<PtyAttachResult>(
-            "pty_attach",
-            { sessionId: ps.id }
-          );
-          if (attach.attached && attach.alive) {
-            const taskStatus = resolveDaemonAttachTaskStatus(attach);
-            const taskUpdatedAt = resolveDaemonAttachUpdatedAt(attach);
-            const attachedMeta = resolveAttachedDaemonSession(ps, attach);
+          if (daemonSession.alive) {
+            const taskStatus = resolveDaemonAttachTaskStatus(daemonSession);
+            const taskUpdatedAt = resolveDaemonAttachUpdatedAt(daemonSession);
+            const attachedMeta = resolveAttachedDaemonSession(ps, daemonSession);
             const attachedSession: TerminalSession = {
               id: ps.id,
               projectId: attachedMeta.projectId,
@@ -1941,10 +1968,9 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
               cwd: attachedMeta.cwd,
               shell: attachedMeta.shell,
               envVars: ps.envVars,
-              // PTY 进程未断：不重跑 startupCmd、不 resume。
-              startupCmd: undefined,
+              // 仅保留给 Tab 厂商识别；daemon attach 不会重新执行该命令。
+              startupCmd: ps.startupCmd,
               cliSessionId: ps.cliSessionId,
-              initialTerminalOutput: decodeBase64Utf8(attach.replayBase64),
               deferStartupUntilInitialOutput: false,
             };
             const unlisten = await listen<PtyStatusPayload>(`pty-status-${ps.id}`, (event) => {
@@ -1969,6 +1995,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
             restoredSessions.push(attachedSession);
             restoredStatuses[ps.id] = "running";
             restoredListeners[ps.id] = unlisten;
+            daemonAttachPendingSessionIds.add(ps.id);
             restoredTabState = buildTabStatusUpdate(restoredTabState, ps.id, "hook", taskStatus, taskUpdatedAt);
             continue;
           }
@@ -2003,8 +2030,8 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
           envVars: buildPtyEnvVars(ps.envVars ?? null, resolvedShell),
           shell: resolvedShell,
           hookEnvEnabled: await shouldEnableHookEnv(),
-          claudeProvider: getClaudeProviderLaunchConfig(ps.projectId),
-          codexProvider: getCodexProviderLaunchConfig(ps.projectId, ps.startupCmd),
+          claudeProvider: getClaudeProviderLaunchConfig(ps.projectId, ps.worktreeId),
+          codexProvider: getCodexProviderLaunchConfig(ps.projectId, ps.startupCmd, ps.worktreeId),
         });
       } catch (err) {
         logError("Failed to restore session", { session: ps, err });
@@ -2127,6 +2154,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
 	      ...mirror,
 	      sessionStatuses: restoredStatuses,
 	      statusListeners: restoredListeners,
+	      daemonAttachPendingSessionIds,
 	      ...restoredTabState,
 	      splits: {},
 	    });
@@ -2163,15 +2191,13 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     }
 
     const persisted = useSessionStore.getState().sessions.find((session) => session.id === sessionId);
-    const attach = await invoke<PtyAttachResult>(
-      "pty_attach",
-      { sessionId }
-    );
-    if (!attach.attached) return false;
+    const daemonSession = (await invoke<DaemonSessionMeta[]>("pty_daemon_sessions"))
+      .find((item) => item.sessionId === sessionId);
+    if (!daemonSession) return false;
 
-    const taskStatus = resolveDaemonAttachTaskStatus(attach);
-    const taskUpdatedAt = resolveDaemonAttachUpdatedAt(attach);
-    const attachedMeta = resolveAttachedDaemonSession(persisted, attach);
+    const taskStatus = resolveDaemonAttachTaskStatus(daemonSession);
+    const taskUpdatedAt = resolveDaemonAttachUpdatedAt(daemonSession);
+    const attachedMeta = resolveAttachedDaemonSession(persisted, daemonSession);
     const session: TerminalSession = {
       id: sessionId,
       projectId: attachedMeta.projectId,
@@ -2180,9 +2206,9 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
       cwd: attachedMeta.cwd,
       shell: attachedMeta.shell,
       envVars: persisted?.envVars,
-      startupCmd: undefined,
+      // 元数据用于 Tab 厂商识别；daemon attach 不会重新执行该命令。
+      startupCmd: persisted?.startupCmd,
       cliSessionId: persisted?.cliSessionId,
-      initialTerminalOutput: decodeBase64Utf8(attach.replayBase64),
       deferStartupUntilInitialOutput: false,
     };
     const unlisten = await listen<PtyStatusPayload>(`pty-status-${sessionId}`, (event) => {
@@ -2219,9 +2245,13 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
       ...mirror,
       sessionStatuses: {
         ...current.sessionStatuses,
-        [sessionId]: attach.alive ? "running" : "exited",
+        [sessionId]: daemonSession.alive ? "running" : "exited",
       },
       statusListeners: { ...current.statusListeners, [sessionId]: unlisten },
+      daemonAttachPendingSessionIds: new Set([
+        ...current.daemonAttachPendingSessionIds,
+        sessionId,
+      ]),
       ...initialTabState,
     });
     await useSessionStore.getState().saveSessions(nextSessions);

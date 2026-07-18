@@ -93,6 +93,16 @@ export function projectWithWorktreeProviderOverrides(project: Project, worktree:
   };
 }
 
+export function resolveProjectForProviderLaunch(
+  project: Project,
+  worktrees: WorktreeRecord[],
+  worktreeId?: string
+): Project {
+  if (!worktreeId) return project;
+  const worktree = worktrees.find((item) => item.id === worktreeId && item.project_id === project.id);
+  return worktree ? projectWithWorktreeProviderOverrides(project, worktree) : project;
+}
+
 export function resolveProjectForSession(
   session: TerminalSession | null,
   sessions: TerminalSession[],

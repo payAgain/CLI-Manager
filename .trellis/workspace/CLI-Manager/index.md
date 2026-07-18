@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 19
-- **Last Active**: 2026-07-15
+- **Total Sessions**: 20
+- **Last Active**: 2026-07-16
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~662 | Active |
+| `journal-1.md` | ~695 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 20 | 2026-07-16 | 修复历史会话恢复 CLI 参数 | `51c6ffd` | `master` |
 | 19 | 2026-07-15 | 修复 Claude 状态栏 Powerline 符号显示 | `8e10baa` | `master` |
 | 18 | 2026-07-15 | 统一文件浏览器折叠目录聚合 | `123e632` | `master` |
 | 17 | 2026-07-14 | Hook 桥接独立启用开关 | `a4019cd` | `master` |

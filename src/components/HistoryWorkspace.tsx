@@ -11,6 +11,7 @@ import { useExternalSessionSyncStore } from "../stores/externalSessionSyncStore"
 import { useI18n } from "../lib/i18n";
 import { findWorktreeByPath, projectWithWorktreeProviderOverrides } from "../lib/terminalProject";
 import { appendResumeCliArgs } from "../lib/projectStartupCommand";
+import { getProviderSwitchAppType } from "../lib/providerSwitching";
 import { PromptLibrary } from "./prompts/PromptLibrary";
 import { DiffModal } from "./history/DiffModal";
 import { EditAuditModal } from "./history/EditAuditModal";
@@ -19,6 +20,7 @@ import { SessionDetailPane, type HistoryDetailView } from "./history/SessionDeta
 import { ConfirmDialog } from "./ConfirmDialog";
 import { buildHistorySessionChildMap, toGroupLabel, type TimeGroupLabel } from "./history/historyViewUtils";
 import { buildSessionProcessModel, type SessionProcessModel } from "./history/sessionEvents";
+import { HistoryResumeProjectDialog } from "./history/HistoryResumeProjectDialog";
 
 const SESSION_PAGE_SIZE = 20;
 const MESSAGE_PAGE_SIZE = 160;
@@ -87,19 +89,24 @@ function parseProjectEnvVars(project?: Project | null): Record<string, string> |
   }
 }
 
-function findHistoryProject(session: HistorySessionView | HistorySessionDetail, projects: Project[]): Project | null {
+function matchesHistorySource(project: Project, source: string): boolean {
+  return getProviderSwitchAppType(project) === source;
+}
+
+function findHistoryProjects(session: HistorySessionView | HistorySessionDetail, projects: Project[]): Project[] {
+  const sourceProjects = projects.filter((project) => matchesHistorySource(project, session.source));
   const cwd = "cwd" in session ? session.cwd?.trim() : null;
   if (cwd) {
     const normalizedCwd = normalizePathKey(cwd);
-    const cwdProject = projects.find((project) => normalizePathKey(project.path) === normalizedCwd);
-    if (cwdProject) return cwdProject;
+    const cwdProjects = sourceProjects.filter((project) => normalizePathKey(project.path) === normalizedCwd);
+    if (cwdProjects.length > 0) return cwdProjects;
   }
 
   const normalizedProjectKey = normalizePathKey(session.project_key);
-  if (!normalizedProjectKey) return null;
+  if (!normalizedProjectKey) return [];
   const normalizedProjectKeyLower = normalizedProjectKey.toLowerCase();
 
-  return projects.find((project) => {
+  return sourceProjects.filter((project) => {
     const projectPath = normalizePathKey(project.path);
     const projectName = project.name.trim().toLowerCase();
     return (
@@ -108,7 +115,7 @@ function findHistoryProject(session: HistorySessionView | HistorySessionDetail, 
       projectPathName(project.path).toLowerCase() === normalizedProjectKeyLower ||
       projectName === normalizedProjectKeyLower
     );
-  }) ?? null;
+  });
 }
 
 function resolveResumeCommand(session: HistorySessionView | HistorySessionDetail, project?: Project | null): string | null {
@@ -150,6 +157,13 @@ type DeleteIntent =
   | { type: "bulk"; sessionKeys: string[] };
 
 type HistoryTargetSource = "claude" | "codex";
+
+type ResumeIntent = {
+  session: HistorySessionView | HistorySessionDetail;
+  title: string;
+  worktree: WorktreeRecord | null;
+  projects: Project[];
+};
 
 interface HistoryConversionResult {
   source: string;
@@ -257,6 +271,7 @@ export function HistoryWorkspace({ active = true }: HistoryWorkspaceProps) {
   const batchDeleteResolverRef = useRef<((done: boolean) => void) | null>(null);
   const [liveEditWarningOpen, setLiveEditWarningOpen] = useState(false);
   const liveEditResolverRef = useRef<((allowed: boolean) => void) | null>(null);
+  const [resumeIntent, setResumeIntent] = useState<ResumeIntent | null>(null);
 
   useEffect(() => {
     const timer = setTimeout(() => setDebouncedSessionQuery(sessionQuery), 150);
@@ -772,39 +787,61 @@ export function HistoryWorkspace({ active = true }: HistoryWorkspaceProps) {
       : base;
   }, [batchDeleteIntent, isActiveSessionLive, t]);
 
-  const resumeConversation = useCallback(async () => {
-    if (!activeSession) {
-      toast.error("会话详情尚未加载完成");
-      return;
-    }
-
-    const worktree = findHistoryWorktree(activeSession, worktrees);
-    const project = findHistoryProject(activeSession, projects) ?? findProjectForWorktree(worktree, projects);
-    const launchProject = project && worktree ? projectWithWorktreeProviderOverrides(project, worktree) : project;
-    const command = resolveResumeCommand(activeSession, launchProject);
+  const resumeWithProject = useCallback(async (
+    session: HistorySessionView | HistorySessionDetail,
+    title: string,
+    project: Project,
+    worktree: WorktreeRecord | null
+  ) => {
+    const launchProject = worktree ? projectWithWorktreeProviderOverrides(project, worktree) : project;
+    const command = resolveResumeCommand(session, launchProject);
     if (!command) {
-      toast.error("无法继续对话", { description: "历史会话缺少有效的 sessionId 或来源不受支持" });
+      toast.error(t("history.toast.resumeTerminalFailed"), { description: t("history.resumeProject.invalidSession") });
       return;
     }
 
-    const cwd = resolveHistoryResumeCwd(activeSession, project, worktree);
+    const cwd = resolveHistoryResumeCwd(session, project, worktree);
     if (!cwd) {
-      toast.error("无法继续对话", { description: "未能识别该历史会话的项目目录" });
+      toast.error(t("history.toast.resumeTerminalFailed"), { description: t("history.resumeProject.missingCwd") });
       return;
     }
 
     try {
-      const title = worktree
-        ? worktree.name
-        : project?.name.trim() || `${activeSession.source === "claude" ? "Claude" : "Codex"} 继续：${activeView?.displayTitle ?? activeSession.title}`;
       const shell = launchProject?.shell && launchProject.shell !== "powershell" ? launchProject.shell : undefined;
-      await createSession(project?.id ?? worktree?.project_id, cwd, title, command, parseProjectEnvVars(launchProject), shell, undefined, worktree?.id);
+      await createSession(project.id, cwd, worktree?.name ?? (project.name.trim() || title), command, parseProjectEnvVars(launchProject), shell, undefined, worktree?.id);
+      setResumeIntent(null);
       closeHistory();
-      toast.success("已创建继续对话终端");
     } catch (err) {
-      toast.error("继续对话失败", { description: String(err) });
+      toast.error(t("history.toast.resumeTerminalFailed"), { description: String(err) });
     }
-  }, [activeSession, activeView?.displayTitle, closeHistory, createSession, projects, worktrees]);
+  }, [closeHistory, createSession, t]);
+
+  const requestResume = useCallback((session: HistorySessionView | HistorySessionDetail, title: string) => {
+    const worktree = findHistoryWorktree(session, worktrees);
+    const worktreeProject = findProjectForWorktree(worktree, projects);
+    const matchedProjects = findHistoryProjects(session, projects);
+    const candidates = worktreeProject && matchesHistorySource(worktreeProject, session.source)
+      ? [worktreeProject]
+      : matchedProjects;
+
+    if (candidates.length === 0) {
+      toast.error(t("history.toast.resumeTerminalFailed"), { description: t("history.resumeProject.notFound") });
+      return;
+    }
+    if (candidates.length === 1) {
+      void resumeWithProject(session, title, candidates[0], worktree);
+      return;
+    }
+    setResumeIntent({ session, title, worktree, projects: candidates });
+  }, [projects, resumeWithProject, t, worktrees]);
+
+  const resumeConversation = useCallback(() => {
+    if (!activeSession) {
+      toast.error(t("history.toast.resumeTerminalFailed"), { description: t("history.resumeProject.detailLoading") });
+      return;
+    }
+    requestResume(activeSession, activeView?.displayTitle ?? activeSession.title);
+  }, [activeSession, activeView?.displayTitle, requestResume, t]);
 
   const openByHit = async (hit: HistorySearchHit) => {
     try {
@@ -909,35 +946,9 @@ export function HistoryWorkspace({ active = true }: HistoryWorkspaceProps) {
 
   const resumeSessionInTerminal = useCallback(
     (session: HistorySessionView) => {
-      const worktree = findHistoryWorktree(session, worktrees);
-      const project = findHistoryProject(session, projects) ?? findProjectForWorktree(worktree, projects);
-      const launchProject = project && worktree ? projectWithWorktreeProviderOverrides(project, worktree) : project;
-      const command = resolveResumeCommand(session, launchProject);
-      if (!command) {
-        toast.error(t("history.toast.resumeTerminalFailed"), { description: "历史会话缺少有效的 sessionId 或来源不受支持" });
-        return;
-      }
-
-      const cwd = resolveHistoryResumeCwd(session, project, worktree);
-      if (!cwd) {
-        toast.error(t("history.toast.resumeTerminalFailed"), { description: "未能识别该历史会话的项目目录" });
-        return;
-      }
-
-      const shell = launchProject?.shell && launchProject.shell !== "powershell" ? launchProject.shell : undefined;
-      const title = worktree
-        ? worktree.name
-        : project?.name.trim() || `${session.source === "claude" ? "Claude" : "Codex"}: ${session.displayTitle || session.session_id}`;
-
-      void createSession(project?.id ?? worktree?.project_id, cwd, title, command, parseProjectEnvVars(launchProject), shell, undefined, worktree?.id)
-        .then(() => {
-          closeHistory();
-        })
-        .catch((err) => {
-          toast.error(t("history.toast.resumeTerminalFailed"), { description: String(err) });
-        });
+      requestResume(session, session.displayTitle || session.session_id);
     },
-    [closeHistory, createSession, projects, t, worktrees]
+    [requestResume]
   );
 
   const convertSession = useCallback(
@@ -1192,6 +1203,17 @@ export function HistoryWorkspace({ active = true }: HistoryWorkspaceProps) {
       />
 
       <EditAuditModal open={editAuditOpen} sessionKey={activeSessionKey} onClose={() => setEditAuditOpen(false)} />
+
+      <HistoryResumeProjectDialog
+        open={resumeIntent !== null}
+        projects={resumeIntent?.projects ?? []}
+        groups={groups}
+        onSelect={(project) => {
+          if (!resumeIntent) return;
+          void resumeWithProject(resumeIntent.session, resumeIntent.title, project, resumeIntent.worktree);
+        }}
+        onClose={() => setResumeIntent(null)}
+      />
     </>
   );
 }
