@@ -12,6 +12,7 @@ import { useI18n } from "../lib/i18n";
 import { findWorktreeByPath, projectWithWorktreeProviderOverrides } from "../lib/terminalProject";
 import { appendResumeCliArgs } from "../lib/projectStartupCommand";
 import { getProviderSwitchAppType } from "../lib/providerSwitching";
+import { projectSupportsCapability } from "../lib/projectCapabilities";
 import { PromptLibrary } from "./prompts/PromptLibrary";
 import { DiffModal } from "./history/DiffModal";
 import { EditAuditModal } from "./history/EditAuditModal";
@@ -163,6 +164,7 @@ type ResumeIntent = {
   title: string;
   worktree: WorktreeRecord | null;
   projects: Project[];
+  allowNewWindow: boolean;
 };
 
 interface HistoryConversionResult {
@@ -235,6 +237,10 @@ export function HistoryWorkspace({ active = true }: HistoryWorkspaceProps) {
   const historySidebarWidth = normalizeHistorySidebarWidth(storedHistorySidebarWidth);
   const updateSetting = useSettingsStore((s) => s.update);
   const projects = useProjectStore((s) => s.projects);
+  const historyProjects = useMemo(
+    () => projects.filter((project) => projectSupportsCapability(project, "history")),
+    [projects]
+  );
   const groups = useProjectStore((s) => s.groups);
   const worktrees = useWorktreeStore((s) => s.worktrees);
   const createSession = useTerminalStore((s) => s.createSession);
@@ -787,13 +793,13 @@ export function HistoryWorkspace({ active = true }: HistoryWorkspaceProps) {
       : base;
   }, [batchDeleteIntent, isActiveSessionLive, t]);
 
-  const resumeWithProject = useCallback(async (
+  const resumeSession = useCallback(async (
     session: HistorySessionView | HistorySessionDetail,
     title: string,
-    project: Project,
+    project: Project | null,
     worktree: WorktreeRecord | null
   ) => {
-    const launchProject = worktree ? projectWithWorktreeProviderOverrides(project, worktree) : project;
+    const launchProject = project && worktree ? projectWithWorktreeProviderOverrides(project, worktree) : project;
     const command = resolveResumeCommand(session, launchProject);
     if (!command) {
       toast.error(t("history.toast.resumeTerminalFailed"), { description: t("history.resumeProject.invalidSession") });
@@ -808,7 +814,16 @@ export function HistoryWorkspace({ active = true }: HistoryWorkspaceProps) {
 
     try {
       const shell = launchProject?.shell && launchProject.shell !== "powershell" ? launchProject.shell : undefined;
-      await createSession(project.id, cwd, worktree?.name ?? (project.name.trim() || title), command, parseProjectEnvVars(launchProject), shell, undefined, worktree?.id);
+      await createSession(
+        project?.id,
+        cwd,
+        worktree?.name ?? (project?.name.trim() || title),
+        command,
+        launchProject ? parseProjectEnvVars(launchProject) : undefined,
+        shell,
+        undefined,
+        worktree?.id
+      );
       setResumeIntent(null);
       closeHistory();
     } catch (err) {
@@ -818,22 +833,22 @@ export function HistoryWorkspace({ active = true }: HistoryWorkspaceProps) {
 
   const requestResume = useCallback((session: HistorySessionView | HistorySessionDetail, title: string) => {
     const worktree = findHistoryWorktree(session, worktrees);
-    const worktreeProject = findProjectForWorktree(worktree, projects);
-    const matchedProjects = findHistoryProjects(session, projects);
+    const worktreeProject = findProjectForWorktree(worktree, historyProjects);
+    const matchedProjects = findHistoryProjects(session, historyProjects);
     const candidates = worktreeProject && matchesHistorySource(worktreeProject, session.source)
       ? [worktreeProject]
       : matchedProjects;
 
     if (candidates.length === 0) {
-      toast.error(t("history.toast.resumeTerminalFailed"), { description: t("history.resumeProject.notFound") });
+      setResumeIntent({ session, title, worktree: null, projects, allowNewWindow: true });
       return;
     }
     if (candidates.length === 1) {
-      void resumeWithProject(session, title, candidates[0], worktree);
+      void resumeSession(session, title, candidates[0], worktree);
       return;
     }
-    setResumeIntent({ session, title, worktree, projects: candidates });
-  }, [projects, resumeWithProject, t, worktrees]);
+    setResumeIntent({ session, title, worktree, projects: candidates, allowNewWindow: false });
+  }, [projects, resumeSession, worktrees]);
 
   const resumeConversation = useCallback(() => {
     if (!activeSession) {
@@ -1014,7 +1029,7 @@ export function HistoryWorkspace({ active = true }: HistoryWorkspaceProps) {
           sourceFilter={sourceFilter}
           projectPathFilter={projectPathFilter}
           scopedProjectPathFilter={scopedProjectPathFilter}
-          projects={projects}
+          projects={historyProjects}
           groups={groups}
           globalQuery={globalQuery}
           favoriteOnly={favoriteOnly}
@@ -1208,9 +1223,13 @@ export function HistoryWorkspace({ active = true }: HistoryWorkspaceProps) {
         open={resumeIntent !== null}
         projects={resumeIntent?.projects ?? []}
         groups={groups}
+        onUseNewWindow={resumeIntent?.allowNewWindow ? () => {
+          if (!resumeIntent) return;
+          void resumeSession(resumeIntent.session, resumeIntent.title, null, null);
+        } : undefined}
         onSelect={(project) => {
           if (!resumeIntent) return;
-          void resumeWithProject(resumeIntent.session, resumeIntent.title, project, resumeIntent.worktree);
+          void resumeSession(resumeIntent.session, resumeIntent.title, project, resumeIntent.worktree);
         }}
         onClose={() => setResumeIntent(null)}
       />

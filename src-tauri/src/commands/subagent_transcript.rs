@@ -19,7 +19,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use log::{info, warn};
+use log::{debug, warn};
 use serde::Serialize;
 use serde_json::Value;
 use tauri::{AppHandle, Emitter, State};
@@ -50,7 +50,7 @@ fn log_transcript_oom_diagnostic(
             reset
         );
     } else {
-        info!(
+        debug!(
             "[oom-diagnostics:backend] area=subagent_transcript phase={phase} key={} path={} append_bytes={} offset={} reset={} threshold_exceeded=false",
             key,
             path,
@@ -137,7 +137,7 @@ impl SubagentTranscriptBridge {
                 stop,
             )
         });
-        info!("[subagent_transcript] subscribe: key={key} path={path}");
+        debug!("[subagent_transcript] subscribe: key={key} path={path}");
         Ok(SubscribeResult {
             path,
             initial_content,
@@ -149,7 +149,7 @@ impl SubagentTranscriptBridge {
         if let Ok(mut guard) = self.entries.lock() {
             if let Some(stop) = guard.remove(key) {
                 stop.store(true, Ordering::Relaxed);
-                info!("[subagent_transcript] unsubscribe: {key}");
+                debug!("[subagent_transcript] unsubscribe: {key}");
             }
         }
     }
@@ -168,7 +168,7 @@ fn tail_loop(
     let mut offset = initial_offset;
     let mut started = initial_started;
     let mut missing_logged = false;
-    info!(
+    debug!(
         "[subagent_transcript] tail started: key={key} path={}",
         path.to_string_lossy()
     );
@@ -188,7 +188,7 @@ fn tail_loop(
             if content.is_empty() {
                 continue;
             }
-            info!(
+            debug!(
                 "[subagent_transcript] tail read lines: key={key} bytes={} offset={} reset={reset}",
                 content.len(),
                 offset
@@ -296,7 +296,7 @@ fn normalize_explicit_transcript_path(path: String, wsl_distro_name: Option<&str
     if is_linux_absolute_path(&path) {
         if let Some(distro) = wsl_distro_name.map(str::trim).filter(|v| !v.is_empty()) {
             let unc = crate::wsl::linux_to_unc_wsl_path(&path, distro);
-            info!(
+            debug!(
                 "[subagent_transcript] explicit linux path resolved via WSL: distro={distro} linux={path} unc={unc}"
             );
             return unc;
@@ -474,7 +474,7 @@ fn run_wsl_command(
 }
 
 fn wsl_home_dir(distro: &str) -> Result<String, String> {
-    info!("[subagent_transcript:wsl] resolving HOME: distro={distro}");
+    debug!("[subagent_transcript:wsl] resolving HOME: distro={distro}");
     let (stdout, _stderr) = wsl_command_text(distro, &["sh", "-lc", "printf %s \"$HOME\""])?;
     let home = stdout.trim();
     if home.is_empty() {
@@ -492,7 +492,7 @@ fn resolve_wsl_transcript_path(
     let linux_home = wsl_home_dir(&distro)?;
     let resolved =
         derive_wsl_unc_transcript_path(&linux_home, &cwd, &session_id, &agent_id, &distro);
-    info!(
+    debug!(
         "[subagent_transcript:wsl] derived transcript path: distro={distro} cwd={cwd} sessionId={session_id} agentId={agent_id} path={resolved}"
     );
     Ok(resolved)
@@ -538,6 +538,74 @@ fn resolve_codex_sessions_root(codex_config_dir: Option<String>) -> PathBuf {
     base.join("sessions")
 }
 
+fn resolve_wsl_codex_config_root(
+    codex_config_dir: Option<String>,
+    distro: &str,
+    linux_home: &str,
+) -> Result<String, String> {
+    let Some(config_dir) = trimmed(codex_config_dir) else {
+        return Ok(format!("{}/.codex", linux_home.trim_end_matches('/')));
+    };
+    if is_linux_absolute_path(&config_dir) {
+        return Ok(config_dir.trim_end_matches('/').to_string());
+    }
+    if let Some((_configured_distro, linux_path)) =
+        crate::wsl::parse_wsl_unc_path(&normalize_wsl_scope_unc(&config_dir))
+    {
+        return Ok(linux_path.trim_end_matches('/').to_string());
+    }
+    if let Some(linux_path) = crate::wsl::windows_path_to_wsl(&config_dir) {
+        return Ok(linux_path.trim_end_matches('/').to_string());
+    }
+    Err(format!(
+        "invalid_wsl_codex_config_dir: distro={distro} path={config_dir}"
+    ))
+}
+
+fn resolve_wsl_codex_sessions_root(
+    codex_config_dir: Option<String>,
+    parent_transcript_path: Option<String>,
+    distro: &str,
+) -> Result<PathBuf, String> {
+    let has_explicit_config = codex_config_dir
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .is_some();
+    if !has_explicit_config {
+        if let Some(path) = trimmed(parent_transcript_path) {
+            let linux_path = if is_linux_absolute_path(&path) {
+                Some(path)
+            } else {
+                crate::wsl::parse_wsl_unc_path(&normalize_wsl_scope_unc(&path))
+                    .map(|(_path_distro, linux_path)| linux_path)
+            };
+            if let Some(linux_path) = linux_path {
+                let normalized = linux_path.replace('\\', "/");
+                if let Some(index) = normalized.find("/sessions/") {
+                    let sessions_root = &normalized[..index + "/sessions".len()];
+                    return Ok(PathBuf::from(crate::wsl::linux_to_unc_wsl_path(
+                        sessions_root,
+                        distro,
+                    )));
+                }
+            }
+        }
+    }
+
+    let config_root = if has_explicit_config {
+        resolve_wsl_codex_config_root(codex_config_dir, distro, "")?
+    } else {
+        let linux_home = wsl_home_dir(distro)?;
+        resolve_wsl_codex_config_root(None, distro, &linux_home)?
+    };
+    let linux_sessions_root = format!("{}/sessions", config_root.trim_end_matches('/'));
+    Ok(PathBuf::from(crate::wsl::linux_to_unc_wsl_path(
+        &linux_sessions_root,
+        distro,
+    )))
+}
+
 fn list_native_codex_rollout_candidates(root: &Path, agent_id: &str) -> Vec<PathBuf> {
     let expected_suffix = format!("-{agent_id}.jsonl");
     let mut out = Vec::new();
@@ -577,7 +645,7 @@ fn list_native_codex_rollout_candidates(root: &Path, agent_id: &str) -> Vec<Path
         }
     }
 
-    info!(
+    debug!(
         "[subagent_transcript:codex] native scan result: root={} agentId={} suffix={} dirs={} files={} matched={}",
         root.to_string_lossy(),
         agent_id,
@@ -605,7 +673,7 @@ fn list_wsl_codex_rollout_candidates(root: &Path, agent_id: &str) -> Vec<PathBuf
         "-printf",
         "%p\n",
     ];
-    info!(
+    debug!(
         "[subagent_transcript:codex] wsl scan start: root={} distro={} linuxRoot={} pattern={}",
         root_str, distro, linux_root, pattern
     );
@@ -623,7 +691,7 @@ fn list_wsl_codex_rollout_candidates(root: &Path, agent_id: &str) -> Vec<PathBuf
                 .filter(|line| !line.is_empty())
                 .map(|line| PathBuf::from(crate::wsl::linux_to_unc_wsl_path(line, &distro)))
                 .collect();
-            info!(
+            debug!(
                 "[subagent_transcript:codex] wsl scan result: root={} agentId={} count={} files={:?}",
                 root_str,
                 agent_id,
@@ -649,13 +717,13 @@ fn list_wsl_codex_rollout_candidates(root: &Path, agent_id: &str) -> Vec<PathBuf
 fn list_codex_rollout_candidates(root: &Path, agent_id: &str) -> Vec<PathBuf> {
     let root_str = root.to_string_lossy().to_string();
     if crate::wsl::is_wsl_config_dir(&root_str) {
-        info!(
+        debug!(
             "[subagent_transcript:codex] rollout scan mode=wsl root={} agentId={}",
             root_str, agent_id
         );
         return list_wsl_codex_rollout_candidates(root, agent_id);
     }
-    info!(
+    debug!(
         "[subagent_transcript:codex] rollout scan mode=native root={} agentId={}",
         root_str, agent_id
     );
@@ -705,7 +773,7 @@ fn codex_rollout_parent_thread_id(path: &Path) -> Option<String> {
     };
     let event_type = json.get("type").and_then(Value::as_str);
     if event_type != Some("session_meta") {
-        info!(
+        debug!(
             "[subagent_transcript:codex] inspect rollout first line is not session_meta: path={} type={:?}",
             path_text, event_type
         );
@@ -719,7 +787,7 @@ fn codex_rollout_parent_thread_id(path: &Path) -> Option<String> {
         return None;
     };
     let parent_thread_id = trimmed_str(payload.get("parent_thread_id").and_then(Value::as_str));
-    info!(
+    debug!(
         "[subagent_transcript:codex] inspect rollout session_meta: path={} payloadId={:?} parentThreadId={:?} threadId={:?}",
         path_text,
         payload.get("id").and_then(Value::as_str),
@@ -740,7 +808,7 @@ fn resolve_transcript_path(
     if let Some(explicit) = trimmed(transcript_path) {
         if is_linux_absolute_path(&explicit) {
             if let Some(distro) = trimmed(wsl_distro_name) {
-                info!(
+                debug!(
                     "[subagent_transcript] resolving explicit linux transcript path with distro={distro}"
                 );
                 let resolved = normalize_explicit_transcript_path(explicit, Some(&distro));
@@ -751,7 +819,7 @@ fn resolve_transcript_path(
             validate_explicit_transcript_path(&resolved)?;
             return Ok(resolved);
         }
-        info!(
+        debug!(
             "[subagent_transcript] resolving explicit transcript path: hasWslDistro={} isLinuxPath={}",
             wsl_distro_name.as_deref().is_some_and(|v| !v.trim().is_empty()),
             is_linux_absolute_path(&explicit)
@@ -766,14 +834,14 @@ fn resolve_transcript_path(
     let agent_id = trimmed(agent_id).ok_or_else(|| "missing_agent_id".to_string())?;
     let resolved_wsl_distro = resolve_wsl_distro_name(Some(&cwd), wsl_distro_name);
     if let Some(distro) = resolved_wsl_distro {
-        info!(
+        debug!(
             "[subagent_transcript] resolving derived WSL transcript path: distro={distro} cwd={cwd} sessionId={session_id} agentId={agent_id}"
         );
         return resolve_wsl_transcript_path(cwd, session_id, agent_id, distro);
     }
 
     let home = home_dir().ok_or_else(|| "no_home_dir".to_string())?;
-    info!(
+    debug!(
         "[subagent_transcript] resolving derived native transcript path: cwd={cwd} sessionId={session_id} agentId={agent_id}"
     );
     Ok(derive_transcript_path(&home, &cwd, &session_id, &agent_id))
@@ -796,7 +864,7 @@ pub async fn subagent_transcript_subscribe(
     }
     let path =
         resolve_transcript_path(transcript_path, cwd, session_id, agent_id, wsl_distro_name)?;
-    info!("[subagent_transcript] subscribe resolved path: key={key} path={path}");
+    debug!("[subagent_transcript] subscribe resolved path: key={key} path={path}");
     bridge.subscribe(app_handle, key, path)
 }
 
@@ -820,7 +888,7 @@ pub async fn subagent_transcript_discover(
 ) -> Result<Vec<String>, String> {
     let resolved_wsl_distro = resolve_wsl_distro_name(Some(&cwd), wsl_distro_name);
     if let Some(distro) = resolved_wsl_distro {
-        info!(
+        debug!(
             "[subagent_transcript:wsl] discover requested: distro={distro} cwd={cwd} sessionId={session_id}"
         );
         return discover_wsl_subagent_files(&cwd, &session_id, &distro);
@@ -835,14 +903,14 @@ pub async fn subagent_transcript_discover(
         .join("subagents");
 
     if !subagents_dir.exists() {
-        info!(
+        debug!(
             "[subagent_transcript] discover native dir missing: {}",
             subagents_dir.to_string_lossy()
         );
         return Ok(Vec::new());
     }
 
-    info!(
+    debug!(
         "[subagent_transcript] discover native dir: {}",
         subagents_dir.to_string_lossy()
     );
@@ -860,7 +928,7 @@ pub async fn subagent_transcript_discover(
         }
     }
 
-    info!(
+    debug!(
         "[subagent_transcript] discover native result: count={}",
         agent_files.len()
     );
@@ -872,6 +940,8 @@ pub async fn codex_subagent_transcript_discover(
     parent_session_id: String,
     agent_id: String,
     codex_config_dir: Option<String>,
+    wsl_distro_name: Option<String>,
+    parent_transcript_path: Option<String>,
 ) -> Result<Option<String>, String> {
     let parent_session_id = parent_session_id.trim().to_string();
     let agent_id = agent_id.trim().to_string();
@@ -882,15 +952,21 @@ pub async fn codex_subagent_transcript_discover(
         return Err("missing_agent_id".to_string());
     }
 
-    let sessions_root = resolve_codex_sessions_root(codex_config_dir);
-    info!(
-        "[subagent_transcript:codex] discover requested: root={} parentSessionId={} agentId={}",
+    let resolved_wsl_distro = trimmed(wsl_distro_name);
+    let sessions_root = if let Some(distro) = resolved_wsl_distro.as_deref() {
+        resolve_wsl_codex_sessions_root(codex_config_dir, parent_transcript_path, distro)?
+    } else {
+        resolve_codex_sessions_root(codex_config_dir)
+    };
+    debug!(
+        "[subagent_transcript:codex] discover requested: root={} parentSessionId={} agentId={} wslDistro={:?}",
         sessions_root.to_string_lossy(),
         parent_session_id,
-        agent_id
+        agent_id,
+        resolved_wsl_distro
     );
-    if !sessions_root.exists() {
-        info!(
+    if resolved_wsl_distro.is_none() && !sessions_root.exists() {
+        debug!(
             "[subagent_transcript:codex] sessions root missing: {}",
             sessions_root.to_string_lossy()
         );
@@ -898,7 +974,7 @@ pub async fn codex_subagent_transcript_discover(
     }
 
     let candidates = list_codex_rollout_candidates(&sessions_root, &agent_id);
-    info!(
+    debug!(
         "[subagent_transcript:codex] rollout candidates: root={} agentId={} count={}",
         sessions_root.to_string_lossy(),
         agent_id,
@@ -906,14 +982,14 @@ pub async fn codex_subagent_transcript_discover(
     );
     for candidate in candidates {
         let parent_thread_id = codex_rollout_parent_thread_id(&candidate);
-        info!(
+        debug!(
             "[subagent_transcript:codex] inspect rollout candidate: agentId={} path={} parentThreadId={:?}",
             agent_id,
             candidate.to_string_lossy(),
             parent_thread_id
         );
         if parent_thread_id.as_deref() == Some(parent_session_id.as_str()) {
-            info!(
+            debug!(
                 "[subagent_transcript:codex] rollout matched: agentId={} path={}",
                 agent_id,
                 candidate.to_string_lossy()
@@ -922,7 +998,7 @@ pub async fn codex_subagent_transcript_discover(
         }
     }
 
-    info!(
+    debug!(
         "[subagent_transcript:codex] rollout not found: root={} parentSessionId={} agentId={}",
         sessions_root.to_string_lossy(),
         parent_session_id,
@@ -958,7 +1034,7 @@ fn discover_wsl_subagent_files(
         "-printf",
         "%f\n",
     ];
-    info!("[subagent_transcript:wsl] discover dir: distro={distro} dir={subagents_dir}");
+    debug!("[subagent_transcript:wsl] discover dir: distro={distro} dir={subagents_dir}");
 
     match wsl_command_text(distro, &args) {
         Ok((stdout, stderr)) => {
@@ -974,7 +1050,7 @@ fn discover_wsl_subagent_files(
                 .filter(|name| name.starts_with("agent-") && name.ends_with(".jsonl"))
                 .map(ToString::to_string)
                 .collect();
-            info!(
+            debug!(
                 "[subagent_transcript:wsl] discover result: distro={distro} count={} files={:?}",
                 files.len(),
                 files
@@ -1107,6 +1183,49 @@ mod tests {
     fn resolves_wsl_distro_from_unc_cwd_when_env_missing() {
         let got = resolve_wsl_distro_name(Some(r"\\wsl.localhost\Ubuntu\data\test\sys"), None);
         assert_eq!(got.as_deref(), Some("Ubuntu"));
+    }
+
+    #[test]
+    fn resolves_default_wsl_codex_config_root_from_linux_home() {
+        let got = resolve_wsl_codex_config_root(None, "Ubuntu", "/home/me").unwrap();
+        assert_eq!(got, "/home/me/.codex");
+    }
+
+    #[test]
+    fn resolves_wsl_codex_config_root_path_variants() {
+        assert_eq!(
+            resolve_wsl_codex_config_root(Some("/home/me/custom-codex".to_string()), "Ubuntu", "",)
+                .unwrap(),
+            "/home/me/custom-codex"
+        );
+        assert_eq!(
+            resolve_wsl_codex_config_root(
+                Some(r"\\wsl$\Ubuntu\home\me\.codex".to_string()),
+                "Ubuntu",
+                "",
+            )
+            .unwrap(),
+            "/home/me/.codex"
+        );
+        assert_eq!(
+            resolve_wsl_codex_config_root(Some(r"C:\Users\me\.codex".to_string()), "Ubuntu", "",)
+                .unwrap(),
+            "/mnt/c/Users/me/.codex"
+        );
+    }
+
+    #[test]
+    fn resolves_wsl_codex_sessions_root_from_parent_transcript() {
+        let got = resolve_wsl_codex_sessions_root(
+            None,
+            Some("/root/.codex/sessions/2026/07/17/rollout-parent.jsonl".to_string()),
+            "Ubuntu",
+        )
+        .unwrap();
+        assert_eq!(
+            got.to_string_lossy(),
+            r"\\wsl.localhost\Ubuntu\root\.codex\sessions"
+        );
     }
 
     #[test]
