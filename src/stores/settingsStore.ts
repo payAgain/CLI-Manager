@@ -437,7 +437,7 @@ const DEFAULTS: Settings = {
   terminalThemeMode: "independent",
   terminalThemeName: "forestNightDark",
   sidebarDensity: "comfortable",
-  sidebarProjectFilterVisible: true,
+  sidebarProjectFilterVisible: false,
   viewMode: "standard",
   closeBehavior: "ask",
   exitWithRunningTasksBehavior: "ask",
