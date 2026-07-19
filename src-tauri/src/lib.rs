@@ -18,6 +18,7 @@ mod linux_graphics;
 mod log_rotation;
 pub mod pty;
 mod shell_resolver;
+mod ssh_agent_supply_chain;
 pub mod ssh_askpass;
 pub mod ssh_launch;
 pub mod ssh_proxy;
@@ -401,6 +402,17 @@ const MIGRATION_CREATE_SSH_AGENT_INTEGRATIONS_SQL: &str = "
                     ON ssh_agent_tool_integrations(history_source_instance_id);
               ";
 
+const MIGRATION_EXTEND_SSH_AGENT_INSTALLATIONS_VERSION: i64 = 23;
+const MIGRATION_EXTEND_SSH_AGENT_INSTALLATIONS_DESCRIPTION: &str =
+    "extend_ssh_agent_installation_metadata";
+const MIGRATION_EXTEND_SSH_AGENT_INSTALLATIONS_SQL: &str = "
+                ALTER TABLE ssh_agent_installations ADD COLUMN install_root TEXT NOT NULL DEFAULT '';
+                ALTER TABLE ssh_agent_installations ADD COLUMN source TEXT NOT NULL DEFAULT '';
+                ALTER TABLE ssh_agent_installations ADD COLUMN manifest_url TEXT NOT NULL DEFAULT '';
+                ALTER TABLE ssh_agent_installations ADD COLUMN artifact_sha256 TEXT NOT NULL DEFAULT '';
+                ALTER TABLE ssh_agent_installations ADD COLUMN previous_version TEXT NOT NULL DEFAULT '';
+              ";
+
 fn migrations() -> Vec<Migration> {
     vec![
         Migration {
@@ -637,6 +649,12 @@ fn migrations() -> Vec<Migration> {
             version: MIGRATION_CREATE_SSH_AGENT_INTEGRATIONS_VERSION,
             description: MIGRATION_CREATE_SSH_AGENT_INTEGRATIONS_DESCRIPTION,
             sql: MIGRATION_CREATE_SSH_AGENT_INTEGRATIONS_SQL,
+            kind: MigrationKind::Up,
+        },
+        Migration {
+            version: MIGRATION_EXTEND_SSH_AGENT_INSTALLATIONS_VERSION,
+            description: MIGRATION_EXTEND_SSH_AGENT_INSTALLATIONS_DESCRIPTION,
+            sql: MIGRATION_EXTEND_SSH_AGENT_INSTALLATIONS_SQL,
             kind: MigrationKind::Up,
         },
     ]
@@ -897,6 +915,10 @@ pub fn run() {
             commands::ssh::ssh_client_status,
             commands::ssh::ssh_test_connection,
             commands::ssh::ssh_agent_probe,
+            commands::ssh::ssh_agent_install_preview,
+            commands::ssh::ssh_agent_install,
+            commands::ssh::ssh_agent_rollback,
+            commands::ssh::ssh_agent_uninstall,
             commands::ssh::ssh_save_password,
             commands::ssh::ssh_password_status,
             commands::ssh::ssh_delete_password,

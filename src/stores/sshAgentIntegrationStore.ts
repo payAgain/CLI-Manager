@@ -3,6 +3,7 @@ import { getDb } from "../lib/db";
 import { validateSshToolConfigRoot } from "../lib/sshToolIntegration";
 import type {
   SshAgentInstallation,
+  SshAgentOperationResult,
   SshAgentProbeResult,
   SshAgentToolIntegration,
   SshHostToolPreference,
@@ -18,6 +19,7 @@ interface SshAgentIntegrationStore {
   fetchAll: () => Promise<void>;
   saveHostPreferences: (hostId: string, roots: Record<SshToolSource, string>) => Promise<void>;
   recordAgentProbe: (hostId: string, result: SshAgentProbeResult) => Promise<void>;
+  recordAgentOperation: (hostId: string, result: SshAgentOperationResult) => Promise<void>;
 }
 
 let fetchAllPromise: Promise<void> | null = null;
@@ -135,6 +137,55 @@ export const useSshAgentIntegrationStore = create<SshAgentIntegrationStore>((set
         result.target,
         result.installPath,
         result.status,
+        Date.now().toString(),
+      ],
+    );
+    await get().fetchAll();
+  },
+
+  recordAgentOperation: async (hostId, result) => {
+    if (fetchAllPromise) await fetchAllPromise;
+    const normalizedHostId = hostId.trim();
+    if (!normalizedHostId) throw new Error("ssh_host_not_found");
+    const db = await getDb();
+    if (result.action === "uninstalled" || result.action === "purged") {
+      await db.execute("DELETE FROM ssh_agent_installations WHERE host_id = $1", [normalizedHostId]);
+      await get().fetchAll();
+      return;
+    }
+    await db.execute(
+      `INSERT INTO ssh_agent_installations (
+         host_id, installation_id, remote_machine_id, agent_version,
+         protocol_version, target, install_path, install_root, source,
+         manifest_url, artifact_sha256, previous_version, status, checked_at
+       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'installed', $13)
+       ON CONFLICT(host_id) DO UPDATE SET
+         installation_id = excluded.installation_id,
+         remote_machine_id = excluded.remote_machine_id,
+         agent_version = excluded.agent_version,
+         protocol_version = excluded.protocol_version,
+         target = excluded.target,
+         install_path = excluded.install_path,
+         install_root = excluded.install_root,
+         source = excluded.source,
+         manifest_url = excluded.manifest_url,
+         artifact_sha256 = excluded.artifact_sha256,
+         previous_version = excluded.previous_version,
+         status = excluded.status,
+         checked_at = excluded.checked_at`,
+      [
+        normalizedHostId,
+        result.installationId,
+        result.remoteMachineId,
+        result.agentVersion,
+        result.protocolVersion,
+        result.target,
+        result.installPath,
+        result.installRoot,
+        result.source,
+        result.manifestUrl,
+        result.artifactSha256,
+        result.previousVersion,
         Date.now().toString(),
       ],
     );

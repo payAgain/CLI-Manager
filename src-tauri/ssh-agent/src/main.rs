@@ -1,3 +1,4 @@
+use cli_manager_ssh_agent::installer::{install_current_exe, rollback, uninstall, InstallOptions};
 use cli_manager_ssh_agent::layout::{path_state, resolve_layout};
 use cli_manager_ssh_agent::protocol::run_bridge;
 use cli_manager_ssh_agent::target_supported;
@@ -5,6 +6,17 @@ use cli_manager_ssh_agent::version_report;
 use serde_json::json;
 use std::io::{self, BufReader, BufWriter};
 use uuid::Uuid;
+
+fn option_value(options: &[String], name: &str) -> Result<Option<String>, String> {
+    let Some(index) = options.iter().position(|value| value == name) else {
+        return Ok(None);
+    };
+    options
+        .get(index + 1)
+        .cloned()
+        .map(Some)
+        .ok_or_else(|| format!("missing_option_value:{name}"))
+}
 
 fn print_json(value: serde_json::Value) {
     println!(
@@ -15,16 +27,29 @@ fn print_json(value: serde_json::Value) {
 
 fn status_report() -> serde_json::Value {
     match resolve_layout() {
-        Ok(layout) => json!({
-            "version": version_report(),
-            "layout": layout,
-            "state": {
-                "dataDir": path_state(&layout.data_dir),
-                "stateDir": path_state(&layout.state_dir),
-                "runtimeDir": path_state(&layout.runtime_dir),
-                "installationRecord": if layout.installation_record.is_file() { "available" } else { "missing" },
+        Ok(layout) => {
+            let installation = cli_manager_ssh_agent::installer::read_installation_record(&layout);
+            let diagnostic = installation.as_ref().err().cloned();
+            let mut report = json!({
+                "version": version_report(),
+                "layout": layout,
+                "installation": installation.as_ref().ok().and_then(|value| value.as_ref()),
+                "state": {
+                    "dataDir": path_state(&layout.data_dir),
+                    "stateDir": path_state(&layout.state_dir),
+                    "runtimeDir": path_state(&layout.runtime_dir),
+                    "installationRecord": match installation {
+                        Ok(Some(_)) => "available",
+                        Ok(None) => "missing",
+                        Err(_) => "invalid",
+                    },
+                }
+            });
+            if let Some(diagnostic) = diagnostic {
+                report["diagnostic"] = json!(diagnostic);
             }
-        }),
+            report
+        }
         Err(code) => json!({
             "version": version_report(),
             "layout": null,
@@ -70,6 +95,30 @@ fn run() -> Result<(), String> {
         }
         "status" => print_json(status_report()),
         "doctor" => print_json(doctor_report()),
+        "install" => {
+            let options: Vec<String> = args.collect();
+            let result = install_current_exe(InstallOptions {
+                install_dir: option_value(&options, "--install-dir")?.map(Into::into),
+                source: option_value(&options, "--source")?.unwrap_or_else(|| "manual".into()),
+                manifest_url: option_value(&options, "--manifest-url")?.unwrap_or_default(),
+                artifact_sha256: option_value(&options, "--artifact-sha256")?.unwrap_or_default(),
+                allow_downgrade: options.iter().any(|value| value == "--allow-downgrade"),
+            })?;
+            print_json(serde_json::to_value(result).map_err(|error| error.to_string())?);
+        }
+        "rollback" => {
+            let options: Vec<String> = args.collect();
+            let result = rollback(option_value(&options, "--install-dir")?.map(Into::into))?;
+            print_json(serde_json::to_value(result).map_err(|error| error.to_string())?);
+        }
+        "uninstall" => {
+            let options: Vec<String> = args.collect();
+            let result = uninstall(
+                option_value(&options, "--install-dir")?.map(Into::into),
+                options.iter().any(|value| value == "--purge"),
+            )?;
+            print_json(serde_json::to_value(result).map_err(|error| error.to_string())?);
+        }
         "bridge" => {
             let options: Vec<String> = args.collect();
             if !options.iter().any(|value| value == "--stdio") {
@@ -101,7 +150,7 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::{bridge_protocol, doctor_report, status_report};
+    use super::{bridge_protocol, doctor_report, option_value, status_report};
 
     #[test]
     fn bridge_requires_an_explicit_compatible_protocol() {
@@ -124,5 +173,21 @@ mod tests {
         let doctor = doctor_report();
         assert!(doctor["supported"].is_boolean());
         assert!(doctor["code"].is_string());
+    }
+
+    #[test]
+    fn options_require_values() {
+        assert_eq!(
+            option_value(&["--install-dir".into()], "--install-dir").unwrap_err(),
+            "missing_option_value:--install-dir"
+        );
+        assert_eq!(
+            option_value(
+                &["--install-dir".into(), "/opt/agent".into()],
+                "--install-dir"
+            )
+            .unwrap(),
+            Some("/opt/agent".into())
+        );
     }
 }

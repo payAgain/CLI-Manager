@@ -460,7 +460,7 @@ CLI-Manager provides two mature parallel-work paths: automatic sub-agent visuali
 - Mature Git Worktree task isolation and commit / merge / cleanup workflow
 - Multi-source history parsing (Claude Code, Codex CLI, Gemini CLI, GitHub Copilot CLI, Antigravity, Grok Build, Pi, OpenCode, Kiro, Cursor, and Cline)
 - Deep Claude / Codex history workflows (Diff, edit, resume, conversion, and analytics)
-- SSH remote projects and terminals (OpenSSH launch plans, proxy support, diagnostics, and remote directory browsing)
+- SSH remote projects and terminals (OpenSSH launch plans, proxy support, diagnostics, remote directory browsing, and signed Linux Agent lifecycle management)
 - cc-connect mobile conversations (Telegram / Feishu with Claude Code or Codex)
 - Desktop pets (`.clipet` packages and Codex Pets compatibility)
 - Read-only cc-switch provider database parsing
@@ -476,6 +476,20 @@ CLI-Manager provides two mature parallel-work paths: automatic sub-agent visuali
 Go to the [Releases](https://github.com/dark-hxx/CLI-Manager/releases) page and download the latest version.
 
 > Windows builds are the primary release artifact at the moment. macOS / Linux users are recommended to build from source.
+
+### SSH Remote Agent
+
+For a configured SSH Host, open **Settings -> SSH Hosts -> CLI Integration** to explicitly preview and install, upgrade, roll back, or uninstall `cli-manager-ssh-agent`. The first supported remote targets are Linux x86_64 and aarch64. Opening the page never connects automatically, and Agent lifecycle operations never install or modify Claude/Codex Hooks.
+
+The same signed release artifacts can be installed from a reviewed POSIX script:
+
+```sh
+curl -fL -o install-ssh-agent.sh https://github.com/dark-hxx/CLI-Manager/releases/latest/download/install-ssh-agent.sh
+less install-ssh-agent.sh
+sh install-ssh-agent.sh
+```
+
+The script requires `curl`, `minisign`, and either `jq` or `python3`. It verifies the signed manifest, target, artifact size, and SHA-256 before execution. Use `--install-dir` for a custom root; HTTP mirrors require the explicit `--allow-http` option and still must pass the built-in public-key verification.
 
 ### Option 2: Run from Source
 

@@ -107,8 +107,44 @@ export interface SshAgentInstallation {
   protocol_version: string;
   target: string;
   install_path: string;
+  install_root: string;
+  source: string;
+  manifest_url: string;
+  artifact_sha256: string;
+  previous_version: string;
   status: string;
   checked_at: string;
+}
+
+export interface SshAgentInstallPreview {
+  action: "install" | "upgrade" | "reinstall" | "downgrade";
+  manifestUrl: string;
+  channel: string;
+  version: string;
+  protocolMin: number;
+  protocolMax: number;
+  target: string;
+  artifactUrl: string;
+  artifactSize: number;
+  artifactSha256: string;
+  installRoot: string;
+  installPath: string;
+  currentVersion: string;
+}
+
+export interface SshAgentOperationResult {
+  action: "installed" | "updated" | "rolledBack" | "uninstalled" | "purged";
+  installationId: string;
+  remoteMachineId: string;
+  agentVersion: string;
+  protocolVersion: string;
+  target: string;
+  installRoot: string;
+  installPath: string;
+  source: string;
+  manifestUrl: string;
+  artifactSha256: string;
+  previousVersion: string;
 }
 
 export interface SshAgentProbeResult {

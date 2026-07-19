@@ -4,7 +4,7 @@
 
 Apply this contract when changing `cli-manager-ssh-agent`, shared SSH transport generation, one-shot Agent probes, Agent installation metadata, bridge framing, or the SSH Host CLI Integration status UI.
 
-The current delivered scope is the standalone Agent protocol skeleton plus explicit one-shot `version/status/doctor` probing. Probe availability does not imply that install, Hook, history, files, Git, stats, or a persistent bridge is already delivered.
+The current delivered scope is the standalone Agent protocol skeleton, explicit one-shot `version/status/doctor` probing, and the signed Agent install/upgrade/rollback/uninstall supply chain. Agent lifecycle availability does not imply that Hook, history, files, Git, stats, or a persistent bridge is already delivered.
 
 ## 2. Signatures
 
@@ -44,6 +44,11 @@ pub async fn ssh_agent_probe(
     spec: SshTransportSpec,
     agent_path: Option<String>,
 ) -> Result<SshAgentProbeResult, String>;
+
+pub async fn ssh_agent_install_preview(...) -> Result<SshAgentInstallPreview, String>;
+pub async fn ssh_agent_install(...) -> Result<SshAgentOperationResult, String>;
+pub async fn ssh_agent_rollback(...) -> Result<SshAgentOperationResult, String>;
+pub async fn ssh_agent_uninstall(...) -> Result<SshAgentOperationResult, String>;
 ```
 
 `SshAgentProbeResult` contains `status`, stable `code`, sanitized executable/version/protocol/target metadata, `supported`, and an ephemeral diagnostic `detail`. Only metadata fields enter `ssh_agent_installations`; `detail` is never persisted.
@@ -54,6 +59,9 @@ pub async fn ssh_agent_probe(
 cli-manager-ssh-agent version
 cli-manager-ssh-agent status
 cli-manager-ssh-agent doctor
+cli-manager-ssh-agent install [--install-dir PATH] [--allow-downgrade]
+cli-manager-ssh-agent rollback [--install-dir PATH]
+cli-manager-ssh-agent uninstall [--install-dir PATH] [--purge]
 cli-manager-ssh-agent bridge --stdio --protocol 1
 ```
 
@@ -77,6 +85,15 @@ Frames use a four-byte big-endian length followed by UTF-8 JSON. The maximum fra
 - Protocol major mismatch is incompatible. Protocol minor differences are handled later through capabilities. The first supported Agent target matrix is Linux `x86_64` and `aarch64`.
 - `ssh_agent_installations` preserves last-known sanitized metadata on unreachable/authentication-required probes, but a confirmed `notInstalled` result clears stale version/path metadata.
 - Bridge `--protocol` is mandatory. A clean EOF before a frame starts is normal; a partial four-byte length or payload is a protocol error.
+- Desktop install and the HTTP(S) script consume the same schema-1 release manifest and Tauri updater Minisign trust root. The signature covers manifest bytes; the manifest pins channel, semantic version, protocol range, Linux target, URL, size, and SHA-256.
+- Release URLs default to HTTPS. HTTP requires explicit user opt-in, never permits embedded credentials, query strings, or fragments, and still requires a valid signature. Manifest, signature, and artifact downloads are bounded.
+- Install preview is read-only. Confirmation re-fetches and re-verifies the manifest before downloading or opening SSH, preventing a stale preview from authorizing different bytes.
+- The desktop uploads the verified artifact through `ssh -T` stdin to a random state-directory staging path. The remote shell receives only fixed commands plus POSIX-quoted validated values; the WebView never assembles an unrestricted shell program.
+- The Agent owns installation transactions: an exclusive lock, `versions/<version>`, atomic `current`/`previous` symlinks, a CLI-Manager-owned `$HOME/.local/bin` launcher, and an atomic XDG state `installation.json` discovery record.
+- Existing custom install roots are reused from the discovery record when no new root is supplied. A corrupt record is archived and repaired by an explicit install. A valid current binary remains the downgrade authority even if the record is missing.
+- Downgrades are rejected unless explicitly allowed. A failed promote restores `current`, `previous`, and the launcher. Rollback swaps only distinct valid versions and restores links if self-check or record persistence fails.
+- Uninstall quarantines managed versions before removing links and the discovery record; a failure restores all original links and versions. Normal uninstall keeps one bounded record, while `--purge` removes Agent state. No Agent lifecycle command modifies Claude/Codex Hook configuration.
+- Operation JSON is accepted only after strict marker, action, UUID, version, protocol, target, path, source, manifest URL, and SHA-256 validation. Arbitrary remote output is never persisted.
 
 ## 4. Validation & Error Matrix
 
@@ -96,6 +113,13 @@ Frames use a four-byte big-endian length followed by UTF-8 JSON. The maximum fra
 | Protocol major is not 1 | status `incompatible`, code `ssh_agent_protocol_incompatible` |
 | OS/architecture is outside Linux x64/arm64 | status `unsupported`, code `unsupported_target` |
 | Supported target has no usable HOME/XDG layout | status `corrupt`, code `home_directory_unavailable` |
+| Manifest signature, schema, protocol, URL, target, size, or SHA-256 is invalid | reject before upload |
+| Concurrent install/upgrade holds the lock | `agent_install_locked` |
+| Incoming semantic version is lower without explicit approval | `agent_downgrade_forbidden` |
+| Existing launcher is not owned by CLI-Manager | `agent_launcher_conflict` |
+| Requested root differs from a valid discovery record | `agent_install_root_mismatch` |
+| Promote/self-check/record write fails | restore old `current`, `previous`, and launcher |
+| Rollback has no distinct previous target | `agent_previous_missing` / `agent_previous_same_as_current` |
 | `bridge --stdio` omits `--protocol` | `bridge_protocol_required` |
 | Frame length is zero or over 1 MiB | `frame_size_invalid` |
 | EOF occurs after only part of the length prefix | `frame_length_read_failed:*` |
@@ -106,6 +130,10 @@ Frames use a four-byte big-endian length followed by UTF-8 JSON. The maximum fra
 - Good: a login banner precedes the marker by less than 8 KiB; the doctor report is parsed and only sanitized metadata is stored.
 - Base: the Agent is absent; the UI records `notInstalled` without installing anything or modifying Hook configuration.
 - Base: MFA authentication requires an interactive terminal; the probe reports `authenticationRequired` and does not retry.
+- Good: a signed x64/aarch64 artifact is uploaded through stdin, self-checks from staging, atomically becomes `current`, and leaves the former version as `previous`.
+- Good: an existing custom install root is upgraded in place without needing to repeat `--install-dir` inside the Agent transaction.
+- Base: a missing or malformed discovery record is reconstructed only after an explicit install; no page-open or probe action changes remote files.
+- Bad: trust an artifact hash from the WebView, skip manifest re-verification after preview, overwrite a non-owned launcher, or run `curl | sh` without review.
 - Bad: reuse the `-tt` terminal launch to run doctor, causing PTY/profile output to contaminate protocol stdout.
 - Bad: cache remote stderr, proxy credentials, AskPass tokens, or arbitrary doctor JSON in SQLite.
 - Bad: treat partial frame headers as clean disconnects; this hides protocol truncation and corrupt streams.
@@ -119,6 +147,10 @@ Frames use a four-byte big-endian length followed by UTF-8 JSON. The maximum fra
 - Assert transport parity for config alias, Agent, identity-file, credential reference, interactive auth, ProxyJump, and direct proxy precedence.
 - Assert explicit path validation and safe HOME expansion.
 - Assert bounded banner/report parsing, invalid UTF-8/contamination, protocol mismatch, identity mismatch, unsupported target, clean EOF, partial frame length, oversized frame, and mandatory bridge protocol.
+- Assert manifest tampering, duplicate/unknown targets, HTTP opt-in, query/fragment rejection, target selection, size/SHA-256 mismatch, and bounded downloads.
+- Assert install path quoting, strict operation markers/metadata, semantic version actions, lock conflicts, default/custom roots, corrupt/missing discovery recovery, promote rollback, distinct previous versions, and transactional uninstall.
+- Run the POSIX installer smoke test for HTTPS dry-run, default HTTP rejection, explicit HTTP, custom install root, downgrade forwarding, and temporary-directory cleanup.
+- Compile the Agent for Linux `x86_64-unknown-linux-gnu` and `aarch64-unknown-linux-gnu` in addition to host tests.
 - Manually verify the CLI Integration page opens without SSH traffic and only Probe Agent starts a one-shot connection.
 
 ## 7. Wrong vs Correct

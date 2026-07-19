@@ -1,15 +1,19 @@
+use semver::Version;
 use serde::{Deserialize, Serialize};
 use std::process::Command;
 use std::time::Duration;
 use uuid::Uuid;
 
 use crate::shell_resolver::{output_with_timeout, silent_command};
+use crate::ssh_agent_supply_chain::{download_artifact, fetch_verified_release, select_artifact};
 use crate::ssh_transport::{
     format_remote_home_path, posix_quote, validate_remote_home_path, SshOneShotOptions,
     SshRemoteHomePathError, SshTransportLaunch, SshTransportSpec,
 };
 
 const AGENT_PROBE_MAGIC: &str = "CLI_MANAGER_SSH_AGENT_PROBE/1";
+const AGENT_ENV_MAGIC: &str = "CLI_MANAGER_SSH_AGENT_ENV/1";
+const AGENT_OPERATION_MAGIC: &str = "CLI_MANAGER_SSH_AGENT_OPERATION/1";
 const AGENT_PROTOCOL_MAJOR: u16 = 1;
 const MAX_AGENT_PROBE_BANNER_BYTES: usize = 8 * 1024;
 const MAX_AGENT_PROBE_REPORT_BYTES: usize = 64 * 1024;
@@ -253,6 +257,74 @@ fn run_agent_probe_process(
     })
 }
 
+fn run_agent_input_process(
+    mut command: Command,
+    input: Vec<u8>,
+    timeout: Duration,
+) -> std::io::Result<AgentProbeProcessOutput> {
+    use std::io::Write;
+    use std::process::Stdio;
+    use std::time::Instant;
+
+    command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = command.spawn()?;
+    let stdin = child.stdin.take();
+    let stdout = child.stdout.take();
+    let stderr = child.stderr.take();
+    let writer = std::thread::spawn(move || {
+        let mut stdin = stdin.ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                "ssh_agent_upload_stdin_missing",
+            )
+        })?;
+        stdin.write_all(&input)
+    });
+    let stdout_reader = std::thread::spawn(move || {
+        stdout
+            .map(|pipe| read_bounded(pipe, MAX_AGENT_PROBE_REPORT_BYTES))
+            .unwrap_or_default()
+    });
+    let stderr_reader = std::thread::spawn(move || {
+        stderr
+            .map(|pipe| read_bounded(pipe, MAX_AGENT_PROBE_STDERR_BYTES))
+            .unwrap_or_default()
+    });
+    let deadline = Instant::now() + timeout;
+    let status = loop {
+        if let Some(status) = child.try_wait()? {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = writer.join();
+            let _ = stdout_reader.join();
+            let _ = stderr_reader.join();
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "ssh_agent_operation_timeout",
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    };
+    writer
+        .join()
+        .map_err(|_| std::io::Error::other("ssh_agent_upload_writer_panicked"))??;
+    let (stdout, stdout_truncated) = stdout_reader.join().unwrap_or_default();
+    let (stderr, _) = stderr_reader.join().unwrap_or_default();
+    Ok(AgentProbeProcessOutput {
+        status_success: status.success(),
+        status_code: status.code(),
+        stdout,
+        stderr,
+        stdout_truncated,
+    })
+}
+
 fn validate_spec(spec: &SshConnectionSpec) -> Result<(), String> {
     spec.validate()
 }
@@ -387,7 +459,7 @@ fn ssh_probe_command(
     ssh_remote_command_with_options(spec, "true", true, accept_new_host_key)
 }
 
-fn build_agent_probe_script(agent_path: Option<&str>) -> Result<String, String> {
+fn agent_discovery_script(agent_path: Option<&str>) -> Result<String, String> {
     let explicit = match agent_path.map(str::trim).filter(|path| !path.is_empty()) {
         Some(path) => {
             validate_remote_home_path(path).map_err(|error| match error {
@@ -404,15 +476,466 @@ fn build_agent_probe_script(agent_path: Option<&str>) -> Result<String, String> 
         .map(|path| format!("if [ -x {path} ]; then agent={path}; fi\n"))
         .unwrap_or_default();
     Ok(format!(
-        "set -eu\nagent=''\n{explicit_probe}\
+        "agent=''\n{explicit_probe}\
          if [ -z \"$agent\" ] && command -v cli-manager-ssh-agent >/dev/null 2>&1; then agent=$(command -v cli-manager-ssh-agent); fi\n\
          if [ -z \"$agent\" ] && [ -x \"${{HOME}}/.local/bin/cli-manager-ssh-agent\" ]; then agent=\"${{HOME}}/.local/bin/cli-manager-ssh-agent\"; fi\n\
          data_agent=\"${{XDG_DATA_HOME:-${{HOME}}/.local/share}}/cli-manager-ssh-agent/current/cli-manager-ssh-agent\"\n\
-         if [ -z \"$agent\" ] && [ -x \"$data_agent\" ]; then agent=\"$data_agent\"; fi\n\
+         if [ -z \"$agent\" ] && [ -x \"$data_agent\" ]; then agent=\"$data_agent\"; fi\n"
+    ))
+}
+
+fn build_agent_probe_script(agent_path: Option<&str>) -> Result<String, String> {
+    let discovery = agent_discovery_script(agent_path)?;
+    Ok(format!(
+        "set -eu\n{discovery}\
          if [ -z \"$agent\" ]; then printf '{AGENT_PROBE_MAGIC} notInstalled\\n'; exit 127; fi\n\
          printf '{AGENT_PROBE_MAGIC} found\\n%s\\n' \"$agent\"\n\
          exec \"$agent\" doctor"
     ))
+}
+
+#[derive(Debug, Clone)]
+struct RemoteAgentEnvironment {
+    target: String,
+    install_root: String,
+    state_dir: String,
+    install_path: String,
+}
+
+fn build_agent_environment_script() -> String {
+    format!(
+        "set -eu\n\
+         if [ -z \"${{HOME:-}}\" ]; then printf '{AGENT_ENV_MAGIC} error\\nhome_directory_unavailable\\n'; exit 65; fi\n\
+         os=$(uname -s 2>/dev/null || true)\narch=$(uname -m 2>/dev/null || true)\n\
+         case \"$os/$arch\" in Linux/x86_64|Linux/amd64) target='linux-x86_64' ;; Linux/aarch64|Linux/arm64) target='linux-aarch64' ;; *) printf '{AGENT_ENV_MAGIC} error\\nunsupported_target:%s/%s\\n' \"$os\" \"$arch\"; exit 65 ;; esac\n\
+         install_root=\"${{XDG_DATA_HOME:-${{HOME}}/.local/share}}/cli-manager-ssh-agent\"\n\
+         state_dir=\"${{XDG_STATE_HOME:-${{HOME}}/.local/state}}/cli-manager-ssh-agent\"\n\
+         install_path=\"${{HOME}}/.local/bin/cli-manager-ssh-agent\"\n\
+         printf '{AGENT_ENV_MAGIC} found\\n%s\\n%s\\n%s\\n%s\\n' \"$target\" \"$install_root\" \"$state_dir\" \"$install_path\""
+    )
+}
+
+fn parse_agent_environment(stdout: &[u8]) -> Result<RemoteAgentEnvironment, String> {
+    let text = std::str::from_utf8(stdout)
+        .map_err(|_| "ssh_agent_environment_output_invalid".to_string())?;
+    let marker_offset = text
+        .find(AGENT_ENV_MAGIC)
+        .ok_or_else(|| "ssh_agent_environment_magic_missing".to_string())?;
+    if marker_offset > MAX_AGENT_PROBE_BANNER_BYTES {
+        return Err("ssh_agent_probe_banner_too_large".to_string());
+    }
+    let mut lines = text[marker_offset..].lines();
+    match lines.next() {
+        Some(line) if line.trim_end_matches('\r') == format!("{AGENT_ENV_MAGIC} found") => {}
+        Some(line) if line.trim_end_matches('\r') == format!("{AGENT_ENV_MAGIC} error") => {
+            return Err(lines
+                .next()
+                .unwrap_or("ssh_agent_environment_failed")
+                .to_string())
+        }
+        _ => return Err("ssh_agent_environment_magic_invalid".to_string()),
+    }
+    let target = lines
+        .next()
+        .ok_or_else(|| "ssh_agent_environment_output_invalid".to_string())?
+        .trim_end_matches('\r')
+        .to_string();
+    if !matches!(target.as_str(), "linux-x86_64" | "linux-aarch64") {
+        return Err("unsupported_target".to_string());
+    }
+    let mut next_path = || -> Result<String, String> {
+        let path = lines
+            .next()
+            .ok_or_else(|| "ssh_agent_environment_output_invalid".to_string())?
+            .trim_end_matches('\r')
+            .to_string();
+        validate_remote_home_path(&path)
+            .map_err(|_| "ssh_agent_environment_path_invalid".to_string())?;
+        Ok(path)
+    };
+    let environment = RemoteAgentEnvironment {
+        target,
+        install_root: next_path()?,
+        state_dir: next_path()?,
+        install_path: next_path()?,
+    };
+    if lines.any(|line| !line.trim().is_empty()) {
+        return Err("ssh_agent_environment_output_contaminated".to_string());
+    }
+    Ok(environment)
+}
+
+async fn detect_remote_agent_environment(
+    spec: &SshConnectionSpec,
+) -> Result<RemoteAgentEnvironment, String> {
+    validate_spec(spec)?;
+    ensure_non_interactive(spec)?;
+    let launch = spec.build_one_shot_launch(
+        build_agent_environment_script(),
+        SshOneShotOptions::default(),
+    )?;
+    let timeout = Duration::from_secs(spec.connect_timeout_sec.saturating_add(15).min(315));
+    let output = tauri::async_runtime::spawn_blocking(move || {
+        run_agent_probe_process(command_from_transport_launch(launch), timeout)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .map_err(|error| format!("ssh_agent_environment_failed:{error}"))?;
+    if output.stdout_truncated {
+        return Err("ssh_agent_probe_output_too_large".to_string());
+    }
+    parse_agent_environment(&output.stdout).map_err(|error| {
+        if error == "ssh_agent_environment_magic_missing" && output.status_code == Some(255) {
+            "ssh_agent_unreachable".to_string()
+        } else if error == "ssh_agent_environment_magic_missing" {
+            let detail = single_line(&output.stderr);
+            if detail.is_empty() {
+                error
+            } else {
+                format!("{error}:{detail}")
+            }
+        } else {
+            error
+        }
+    })
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SshAgentInstallPreview {
+    action: String,
+    manifest_url: String,
+    channel: String,
+    version: String,
+    protocol_min: u16,
+    protocol_max: u16,
+    target: String,
+    artifact_url: String,
+    artifact_size: u64,
+    artifact_sha256: String,
+    install_root: String,
+    install_path: String,
+    current_version: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentOperationInstallation {
+    installation_id: String,
+    remote_machine_id: String,
+    agent_version: String,
+    protocol_version: String,
+    target: String,
+    install_root: String,
+    install_path: String,
+    source: String,
+    manifest_url: String,
+    artifact_sha256: String,
+    previous_version: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentOperationReport {
+    action: String,
+    installation: Option<AgentOperationInstallation>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SshAgentOperationResult {
+    action: String,
+    installation_id: String,
+    remote_machine_id: String,
+    agent_version: String,
+    protocol_version: String,
+    target: String,
+    install_root: String,
+    install_path: String,
+    source: String,
+    manifest_url: String,
+    artifact_sha256: String,
+    previous_version: String,
+}
+
+fn parse_agent_operation(stdout: &[u8]) -> Result<AgentOperationReport, String> {
+    let text = std::str::from_utf8(stdout)
+        .map_err(|_| "ssh_agent_operation_output_invalid".to_string())?;
+    let marker_offset = text
+        .find(AGENT_OPERATION_MAGIC)
+        .ok_or_else(|| "ssh_agent_operation_magic_missing".to_string())?;
+    if marker_offset > MAX_AGENT_PROBE_BANNER_BYTES {
+        return Err("ssh_agent_probe_banner_too_large".to_string());
+    }
+    let (marker, payload) = text[marker_offset..]
+        .split_once('\n')
+        .ok_or_else(|| "ssh_agent_operation_output_invalid".to_string())?;
+    if marker.trim_end_matches('\r') != format!("{AGENT_OPERATION_MAGIC} result") {
+        return Err("ssh_agent_operation_magic_invalid".to_string());
+    }
+    let report: AgentOperationReport = serde_json::from_str(payload.trim())
+        .map_err(|_| "ssh_agent_operation_output_contaminated".to_string())?;
+    validate_agent_operation(&report)?;
+    Ok(report)
+}
+
+fn validate_agent_operation(report: &AgentOperationReport) -> Result<(), String> {
+    let needs_installation = matches!(
+        report.action.as_str(),
+        "installed" | "updated" | "rolledBack"
+    );
+    let removes_installation = matches!(report.action.as_str(), "uninstalled" | "purged");
+    if !needs_installation && !removes_installation {
+        return Err("ssh_agent_operation_action_invalid".to_string());
+    }
+    if removes_installation {
+        return if report.installation.is_none() {
+            Ok(())
+        } else {
+            Err("ssh_agent_operation_installation_unexpected".to_string())
+        };
+    }
+    let installation = report
+        .installation
+        .as_ref()
+        .ok_or_else(|| "ssh_agent_operation_installation_missing".to_string())?;
+    Uuid::parse_str(&installation.installation_id)
+        .map_err(|_| "ssh_agent_operation_installation_id_invalid".to_string())?;
+    if installation.remote_machine_id.is_empty()
+        || installation.remote_machine_id.len() > 256
+        || installation.remote_machine_id.contains(['\0', '\r', '\n'])
+    {
+        return Err("ssh_agent_operation_machine_id_invalid".to_string());
+    }
+    Version::parse(installation.agent_version.trim_start_matches('v'))
+        .map_err(|_| "ssh_agent_operation_version_invalid".to_string())?;
+    let (protocol_major, protocol_minor) = installation
+        .protocol_version
+        .split_once('.')
+        .ok_or_else(|| "ssh_agent_operation_protocol_invalid".to_string())?;
+    if protocol_major.parse::<u16>().ok() != Some(AGENT_PROTOCOL_MAJOR)
+        || protocol_minor.parse::<u16>().is_err()
+    {
+        return Err("ssh_agent_operation_protocol_invalid".to_string());
+    }
+    if !matches!(
+        installation.target.as_str(),
+        "linux/x86_64" | "linux/aarch64"
+    ) {
+        return Err("ssh_agent_operation_target_invalid".to_string());
+    }
+    for path in [&installation.install_root, &installation.install_path] {
+        validate_remote_home_path(path)
+            .map_err(|_| "ssh_agent_operation_path_invalid".to_string())?;
+    }
+    if !matches!(
+        installation.source.as_str(),
+        "desktop" | "https-script" | "http-script" | "manual"
+    ) {
+        return Err("ssh_agent_operation_source_invalid".to_string());
+    }
+    if !installation.manifest_url.is_empty() {
+        let url = reqwest::Url::parse(&installation.manifest_url)
+            .map_err(|_| "ssh_agent_operation_manifest_url_invalid".to_string())?;
+        if !matches!(url.scheme(), "https" | "http")
+            || !url.username().is_empty()
+            || url.password().is_some()
+            || url.query().is_some()
+            || url.fragment().is_some()
+        {
+            return Err("ssh_agent_operation_manifest_url_invalid".to_string());
+        }
+    }
+    if installation.source != "manual" && installation.manifest_url.is_empty() {
+        return Err("ssh_agent_operation_manifest_url_missing".to_string());
+    }
+    if !installation.artifact_sha256.is_empty()
+        && (installation.artifact_sha256.len() != 64
+            || !installation
+                .artifact_sha256
+                .bytes()
+                .all(|value| value.is_ascii_hexdigit()))
+    {
+        return Err("ssh_agent_operation_sha256_invalid".to_string());
+    }
+    if installation.source != "manual" && installation.artifact_sha256.is_empty() {
+        return Err("ssh_agent_operation_sha256_missing".to_string());
+    }
+    if !installation.previous_version.is_empty() {
+        Version::parse(installation.previous_version.trim_start_matches('v'))
+            .map_err(|_| "ssh_agent_operation_previous_version_invalid".to_string())?;
+    }
+    Ok(())
+}
+
+fn operation_result(report: AgentOperationReport) -> SshAgentOperationResult {
+    let installation = report.installation;
+    SshAgentOperationResult {
+        action: report.action,
+        installation_id: installation
+            .as_ref()
+            .map(|value| value.installation_id.clone())
+            .unwrap_or_default(),
+        remote_machine_id: installation
+            .as_ref()
+            .map(|value| value.remote_machine_id.clone())
+            .unwrap_or_default(),
+        agent_version: installation
+            .as_ref()
+            .map(|value| value.agent_version.clone())
+            .unwrap_or_default(),
+        protocol_version: installation
+            .as_ref()
+            .map(|value| value.protocol_version.clone())
+            .unwrap_or_default(),
+        target: installation
+            .as_ref()
+            .map(|value| value.target.clone())
+            .unwrap_or_default(),
+        install_root: installation
+            .as_ref()
+            .map(|value| value.install_root.clone())
+            .unwrap_or_default(),
+        install_path: installation
+            .as_ref()
+            .map(|value| value.install_path.clone())
+            .unwrap_or_default(),
+        source: installation
+            .as_ref()
+            .map(|value| value.source.clone())
+            .unwrap_or_default(),
+        manifest_url: installation
+            .as_ref()
+            .map(|value| value.manifest_url.clone())
+            .unwrap_or_default(),
+        artifact_sha256: installation
+            .as_ref()
+            .map(|value| value.artifact_sha256.clone())
+            .unwrap_or_default(),
+        previous_version: installation
+            .map(|value| value.previous_version)
+            .unwrap_or_default(),
+    }
+}
+
+fn validated_install_root(
+    requested: Option<&str>,
+    environment: &RemoteAgentEnvironment,
+) -> Result<String, String> {
+    let root = requested
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(&environment.install_root);
+    validate_remote_home_path(root).map_err(|error| match error {
+        SshRemoteHomePathError::Invalid => "ssh_agent_install_dir_invalid".to_string(),
+        SshRemoteHomePathError::ParentTraversal => {
+            "ssh_agent_install_dir_parent_forbidden".to_string()
+        }
+    })?;
+    Ok(root.to_string())
+}
+
+fn install_action(current_version: Option<&str>, incoming_version: &str) -> String {
+    let Some(current) = current_version
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .and_then(|value| Version::parse(value.trim_start_matches('v')).ok())
+    else {
+        return "install".to_string();
+    };
+    let Ok(incoming) = Version::parse(incoming_version.trim_start_matches('v')) else {
+        return "install".to_string();
+    };
+    match incoming.cmp(&current) {
+        std::cmp::Ordering::Greater => "upgrade",
+        std::cmp::Ordering::Equal => "reinstall",
+        std::cmp::Ordering::Less => "downgrade",
+    }
+    .to_string()
+}
+
+fn build_agent_install_script(
+    environment: &RemoteAgentEnvironment,
+    install_root: &str,
+    manifest_url: &str,
+    artifact_sha256: &str,
+    allow_downgrade: bool,
+) -> String {
+    let staging = format!(
+        "{}/upload-{}",
+        environment.state_dir.trim_end_matches('/'),
+        Uuid::new_v4().simple()
+    );
+    let downgrade = if allow_downgrade {
+        " --allow-downgrade"
+    } else {
+        ""
+    };
+    format!(
+        "set -eu\numask 077\nstage={}\nmkdir -p \"$stage\"\ntrap 'rm -rf \"$stage\"' EXIT HUP INT TERM\n\
+         cat > \"$stage/cli-manager-ssh-agent\"\nchmod 700 \"$stage/cli-manager-ssh-agent\"\n\
+         printf '{AGENT_OPERATION_MAGIC} result\\n'\nset +e\n\
+         \"$stage/cli-manager-ssh-agent\" install --install-dir {} --source desktop --manifest-url {} --artifact-sha256 {}{}\n\
+         status=$?\nset -e\nrm -rf \"$stage\"\ntrap - EXIT HUP INT TERM\nexit $status",
+        posix_quote(&staging),
+        posix_quote(install_root),
+        posix_quote(manifest_url),
+        posix_quote(artifact_sha256),
+        downgrade,
+    )
+}
+
+fn build_agent_management_script(
+    agent_path: Option<&str>,
+    command: &str,
+    purge: bool,
+) -> Result<String, String> {
+    if !matches!(command, "rollback" | "uninstall") {
+        return Err("ssh_agent_operation_invalid".to_string());
+    }
+    let discovery = agent_discovery_script(agent_path)?;
+    let purge = if purge { " --purge" } else { "" };
+    Ok(format!(
+        "set -eu\n{discovery}\
+         if [ -z \"$agent\" ]; then exit 127; fi\n\
+         printf '{AGENT_OPERATION_MAGIC} result\\n'\n\
+         exec \"$agent\" {command}{purge}"
+    ))
+}
+
+async fn run_agent_operation(
+    spec: &SshConnectionSpec,
+    script: String,
+    input: Option<Vec<u8>>,
+) -> Result<SshAgentOperationResult, String> {
+    let launch = spec.build_one_shot_launch(script, SshOneShotOptions::default())?;
+    let timeout = Duration::from_secs(spec.connect_timeout_sec.saturating_add(180).min(480));
+    let output = tauri::async_runtime::spawn_blocking(move || match input {
+        Some(input) => {
+            run_agent_input_process(command_from_transport_launch(launch), input, timeout)
+        }
+        None => run_agent_probe_process(command_from_transport_launch(launch), timeout),
+    })
+    .await
+    .map_err(|error| error.to_string())?
+    .map_err(|error| format!("ssh_agent_operation_failed:{error}"))?;
+    if output.stdout_truncated {
+        return Err("ssh_agent_probe_output_too_large".to_string());
+    }
+    match parse_agent_operation(&output.stdout) {
+        Ok(report) if output.status_success => Ok(operation_result(report)),
+        Ok(_) | Err(_) => {
+            let detail = single_line(&output.stderr);
+            if detail.is_empty() {
+                Err(format!(
+                    "ssh_agent_operation_failed:{}",
+                    output.status_code.unwrap_or(-1)
+                ))
+            } else {
+                Err(detail)
+            }
+        }
+    }
 }
 
 fn parse_agent_probe_stdout(stdout: &[u8]) -> Result<ParsedAgentProbe, String> {
@@ -716,6 +1239,93 @@ pub async fn ssh_agent_probe(
 }
 
 #[tauri::command]
+pub async fn ssh_agent_install_preview(
+    host_id: String,
+    spec: SshConnectionSpec,
+    manifest_url: Option<String>,
+    install_dir: Option<String>,
+    current_version: Option<String>,
+    allow_http: bool,
+) -> Result<SshAgentInstallPreview, String> {
+    Uuid::parse_str(host_id.trim()).map_err(|_| "ssh_host_id_invalid".to_string())?;
+    validate_spec(&spec)?;
+    ensure_non_interactive(&spec)?;
+    let release = fetch_verified_release(manifest_url.as_deref(), allow_http).await?;
+    let environment = detect_remote_agent_environment(&spec).await?;
+    let install_root = validated_install_root(install_dir.as_deref(), &environment)?;
+    let artifact = select_artifact(&release.manifest, &environment.target)?.clone();
+    Ok(SshAgentInstallPreview {
+        action: install_action(current_version.as_deref(), &release.manifest.version),
+        manifest_url: release.manifest_url,
+        channel: release.manifest.channel,
+        version: release.manifest.version,
+        protocol_min: release.manifest.protocol_min,
+        protocol_max: release.manifest.protocol_max,
+        target: artifact.target.clone(),
+        artifact_url: artifact.url.clone(),
+        artifact_size: artifact.size,
+        artifact_sha256: artifact.sha256.clone(),
+        install_root,
+        install_path: environment.install_path,
+        current_version: current_version.unwrap_or_default(),
+    })
+}
+
+#[tauri::command]
+pub async fn ssh_agent_install(
+    host_id: String,
+    spec: SshConnectionSpec,
+    manifest_url: Option<String>,
+    install_dir: Option<String>,
+    allow_http: bool,
+    allow_downgrade: bool,
+) -> Result<SshAgentOperationResult, String> {
+    Uuid::parse_str(host_id.trim()).map_err(|_| "ssh_host_id_invalid".to_string())?;
+    validate_spec(&spec)?;
+    ensure_non_interactive(&spec)?;
+    let release = fetch_verified_release(manifest_url.as_deref(), allow_http).await?;
+    let environment = detect_remote_agent_environment(&spec).await?;
+    let install_root = validated_install_root(install_dir.as_deref(), &environment)?;
+    let artifact = select_artifact(&release.manifest, &environment.target)?.clone();
+    let bytes = download_artifact(&artifact, allow_http).await?;
+    let script = build_agent_install_script(
+        &environment,
+        &install_root,
+        &release.manifest_url,
+        &artifact.sha256,
+        allow_downgrade,
+    );
+    run_agent_operation(&spec, script, Some(bytes)).await
+}
+
+#[tauri::command]
+pub async fn ssh_agent_rollback(
+    host_id: String,
+    spec: SshConnectionSpec,
+    agent_path: Option<String>,
+) -> Result<SshAgentOperationResult, String> {
+    Uuid::parse_str(host_id.trim()).map_err(|_| "ssh_host_id_invalid".to_string())?;
+    validate_spec(&spec)?;
+    ensure_non_interactive(&spec)?;
+    let script = build_agent_management_script(agent_path.as_deref(), "rollback", false)?;
+    run_agent_operation(&spec, script, None).await
+}
+
+#[tauri::command]
+pub async fn ssh_agent_uninstall(
+    host_id: String,
+    spec: SshConnectionSpec,
+    agent_path: Option<String>,
+    purge: bool,
+) -> Result<SshAgentOperationResult, String> {
+    Uuid::parse_str(host_id.trim()).map_err(|_| "ssh_host_id_invalid".to_string())?;
+    validate_spec(&spec)?;
+    ensure_non_interactive(&spec)?;
+    let script = build_agent_management_script(agent_path.as_deref(), "uninstall", purge)?;
+    run_agent_operation(&spec, script, None).await
+}
+
+#[tauri::command]
 pub async fn ssh_check_path(
     spec: SshConnectionSpec,
     path: String,
@@ -811,10 +1421,12 @@ pub async fn ssh_list_directories(
 #[cfg(test)]
 mod tests {
     use super::{
-        build_agent_probe_script, host_key_fingerprint, is_authenticated_log,
-        parse_agent_probe_stdout, posix_quote, read_bounded, result_from_agent_report,
-        ssh_password_account, ssh_probe_command, validate_remote_path, validate_spec,
-        AgentDoctorProbe, AgentVersionProbe, ParsedAgentProbe, SshConnectionSpec,
+        build_agent_install_script, build_agent_management_script, build_agent_probe_script,
+        host_key_fingerprint, install_action, is_authenticated_log, parse_agent_environment,
+        parse_agent_operation, parse_agent_probe_stdout, posix_quote, read_bounded,
+        result_from_agent_report, ssh_password_account, ssh_probe_command, validate_remote_path,
+        validate_spec, AgentDoctorProbe, AgentVersionProbe, ParsedAgentProbe,
+        RemoteAgentEnvironment, SshConnectionSpec,
     };
 
     fn spec() -> SshConnectionSpec {
@@ -865,6 +1477,80 @@ mod tests {
         );
         let script = build_agent_probe_script(Some("~/bin/cli-manager-ssh-agent")).unwrap();
         assert!(script.contains("agent=\"${HOME}\"/'bin/cli-manager-ssh-agent'"));
+    }
+
+    #[test]
+    fn agent_environment_parser_ignores_only_bounded_banner() {
+        let stdout = b"Welcome\nCLI_MANAGER_SSH_AGENT_ENV/1 found\nlinux-aarch64\n/home/dev/.local/share/cli-manager-ssh-agent\n/home/dev/.local/state/cli-manager-ssh-agent\n/home/dev/.local/bin/cli-manager-ssh-agent\n";
+        let environment = parse_agent_environment(stdout).unwrap();
+        assert_eq!(environment.target, "linux-aarch64");
+        assert_eq!(
+            environment.install_root,
+            "/home/dev/.local/share/cli-manager-ssh-agent"
+        );
+        assert!(parse_agent_environment(
+            b"CLI_MANAGER_SSH_AGENT_ENV/1 found\nlinux-x86_64\nrelative\n/state\n/bin\n"
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn agent_install_script_quotes_remote_values() {
+        let environment = RemoteAgentEnvironment {
+            target: "linux-x86_64".into(),
+            install_root: "/home/dev/.local/share/cli-manager-ssh-agent".into(),
+            state_dir: "/home/dev/state dir".into(),
+            install_path: "/home/dev/.local/bin/cli-manager-ssh-agent".into(),
+        };
+        let script = build_agent_install_script(
+            &environment,
+            "/opt/agent root",
+            "https://example.com/agent's.json",
+            &"a".repeat(64),
+            true,
+        );
+        assert!(script.contains("--install-dir '/opt/agent root'"));
+        assert!(script.contains("agent'\\''s.json"));
+        assert!(script.contains("--allow-downgrade"));
+    }
+
+    #[test]
+    fn agent_management_allows_only_fixed_commands() {
+        assert!(build_agent_management_script(None, "rollback", false).is_ok());
+        assert!(build_agent_management_script(None, "uninstall", true).is_ok());
+        assert_eq!(
+            build_agent_management_script(None, "shell", false).unwrap_err(),
+            "ssh_agent_operation_invalid"
+        );
+    }
+
+    #[test]
+    fn agent_operation_parser_rejects_trailing_output() {
+        let report = parse_agent_operation(
+            b"banner\nCLI_MANAGER_SSH_AGENT_OPERATION/1 result\n{\"action\":\"uninstalled\",\"installation\":null}\n",
+        )
+        .unwrap();
+        assert_eq!(report.action, "uninstalled");
+        assert!(parse_agent_operation(
+            b"CLI_MANAGER_SSH_AGENT_OPERATION/1 result\n{\"action\":\"uninstalled\",\"installation\":null}\nnoise"
+        )
+        .is_err());
+        assert!(parse_agent_operation(
+            b"CLI_MANAGER_SSH_AGENT_OPERATION/1 forged\n{\"action\":\"uninstalled\",\"installation\":null}\n"
+        )
+        .is_err());
+        assert!(parse_agent_operation(
+            b"CLI_MANAGER_SSH_AGENT_OPERATION/1 result\n{\"action\":\"unknown\",\"installation\":null}\n"
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn install_preview_uses_semantic_version_order() {
+        assert_eq!(install_action(None, "1.0.0"), "install");
+        assert_eq!(install_action(Some("1.0.0"), "1.0.1"), "upgrade");
+        assert_eq!(install_action(Some("1.0.0"), "1.0.0"), "reinstall");
+        assert_eq!(install_action(Some("2.0.0"), "1.0.0"), "downgrade");
     }
 
     #[test]

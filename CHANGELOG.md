@@ -7,6 +7,7 @@
 - SSH 主机新增 Claude/Codex“CLI 配置目录（Hook 与历史）”设置，SSH 项目可单独覆盖；新建、分屏、复制、恢复等统一启动链路会按“项目覆盖 -> 主机配置 -> CLI 原生默认”解析，并安全注入 `CLAUDE_CONFIG_DIR` 或 `CODEX_HOME`。自定义目录仅接受绝对 POSIX 路径或 `~/...`，保存配置不会安装 Agent 或修改远端 Hook。
 - 删除 SSH 主机时会先阻止活动终端和跳板机引用，再解除项目绑定；远端 Agent/Hook 不会被隐式卸载，已验证的远端集成身份保留为待重新绑定状态。
 - 新增独立 `cli-manager-ssh-agent` 协议骨架以及每台 SSH 主机的显式 Agent 检测入口；交互终端与后台短连接复用同一套认证、跳板机、代理和 AskPass 参数。打开设置不会自动连接，只有点击“检测 Agent”才建立一次 `ssh -T` 短连接；登录提示、输出大小、Agent 身份、Linux x64/arm64 目标和协议主版本均经过有界校验，检测结果只保存脱敏的版本、协议、目标和路径元数据。
+- SSH 主机“CLI 集成”新增 `cli-manager-ssh-agent` 安装、升级、回滚和卸载预览；桌面端复用当前 SSH 认证链上传 Linux x64/arm64 签名制品，Agent 通过安装锁、discovery record、版本目录及 `current/previous` 原子链接完成切换，默认拒绝降级并在失败时恢复旧链接。发布流程同步生成 Minisign 签名 manifest 与可审阅的 POSIX `install-ssh-agent.sh`，支持 HTTPS 和显式受信 HTTP 镜像、自定义安装目录、size/SHA-256 校验及 dry-run；这些操作均不修改 Claude/Codex Hook。
 
 ## [V1.2.9] - 2026-07-18
 

@@ -6,7 +6,7 @@ This is the single execution tracker for the task. Research, product requirement
 |---|---|---|---|
 | S01 | Config roots and launch injection | completed | migration, TS type-check, SSH launch Rust tests |
 | S02 | Shared transport and Agent probe | completed | transport parity, probe/error classification, protocol tests |
-| S03 | Agent install supply chain | pending | signature/hash/target/install/rollback tests |
+| S03 | Agent install supply chain | completed | signature/hash/target/install/rollback tests |
 | S04 | Remote Hook lifecycle | pending | adapter merge, ownership, atomicity, spool tests |
 | S05 | Reusable Agent bridge runtime | pending | one-bridge invariant, reconnect, cancellation, shutdown tests |
 | S06 | Remote history indexing and cache | pending | parser/index/catalog/cursor/offline tests |
@@ -49,10 +49,21 @@ This is the single execution tracker for the task. Research, product requirement
 
 ### S03 Agent install supply chain
 
-- [ ] Implement explicit SSH upload install/upgrade/uninstall and discovery records.
-- [ ] Implement signed HTTPS manifest/script installation using the same artifacts.
-- [ ] Verify signature, SHA-256, target, permissions, rollback, and unsupported systems.
-- [ ] Add UI preview/confirmation and focused supply-chain tests.
+- [x] Add explicit per-Host preview, SSH stdin upload install/upgrade, rollback, uninstall, custom root, discovery metadata, and bilingual diagnostics.
+- [x] Add Agent-owned install locking, staged self-check, version directories, atomic `current/previous` and launcher switching, corrupt-record recovery, downgrade protection, rollback, and transactional uninstall.
+- [x] Add one signed manifest for desktop and POSIX script installation, reuse the Tauri updater Minisign trust root, and enforce HTTPS/default plus explicit signed HTTP mirror policy.
+- [x] Add Linux x64/aarch64 release artifacts, size/SHA-256/target/protocol verification, manifest generation, release upload, and path-scoped Ubuntu Agent CI.
+- [x] Add HTTP(S) installer dry-run/custom-root/downgrade/uninstall options without modifying Hook configuration.
+- [x] Pass TypeScript, desktop Rust, Agent host tests, Linux x64/aarch64 all-target checks, POSIX installer smoke, manifest smoke, migration tests, and diff checks.
+- [x] Update README, `[TEMP]` changelog, feature inventory, and executable SSH Agent contract.
+- [x] Complete repeated review/fix cycles until the final review has no findings.
+
+#### S03 Review Log
+
+1. Review 1 found custom-root upgrades did not automatically reuse the discovery record, corrupt records permanently blocked repair, missing records could bypass downgrade checks, signed URLs accepted query/fragment ambiguity, and the script lacked strict download bounds. Fixed the shared install and URL-policy roots.
+2. Review 2 found remote operation JSON was parsed but not contract-validated, and uninstall could leave partial state after a mid-operation failure. Added strict marker/action/identity/version/protocol/path/source/hash validation and a quarantine/restore uninstall transaction.
+3. Review 3 found successful script installation bypassed temporary cleanup via `exec`, staged self-check omitted `doctor --self`, same-version reinstall produced false previous metadata, and public keys could drift across updater/desktop/script. Fixed cleanup and version semantics, added POSIX smoke coverage, centralized the public key, and made release generation verify all trust-root copies.
+4. Review 4 found no further S03 issues. Final evidence: `npx tsc --noEmit`; desktop `cargo check`; desktop library tests `561 passed, 1 ignored` after one unrelated AskPass socket flake passed three focused reruns and the full rerun; Agent host tests `14 passed`; Linux x64/aarch64 `cargo check --all-targets`; POSIX installer smoke; manifest/key-consistency smoke; `git diff --check`.
 
 ### S04 Remote Hook lifecycle
 

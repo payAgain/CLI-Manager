@@ -723,6 +723,7 @@ dependencies = [
  "local-ip-address",
  "log",
  "memchr",
+ "minisign-verify",
  "nix",
  "notify",
  "notify-debouncer-mini",
