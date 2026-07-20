@@ -2,6 +2,9 @@
 
 ## [TEMP] - 2026-07-20
 
+### 新增
+- **Pi Agent Hook 桥接与实时统计**：Hook 设置新增 Pi Agent 桥接，安装 TypeScript Extension（`~/.pi/agent/extensions/cli-manager-hook.ts`）上报 `session_start` / `agent_start` / `agent_settled` 生命周期事件；HTTP 桥接识别 `source=pi`，绑定 `sessionId` 后终端侧栏可读取 Pi 会话实时 Token 统计。支持按模块安装/卸载、配置目录选择，以及侧栏 Hook 状态灯与自动修复流程。
+
 ### 修复
 - **cc-switch 通用配置与本地托底保护**：Hook 与状态栏会先写入本地 CLI 配置，再自动尝试写入 cc-switch 通用配置；通用配置是切换供应商时合并到所有启用“应用通用配置”的供应商中的共享片段。未配置或未检测到 cc-switch 时，本地配置文件写入仍作为托底生效。Claude 状态栏保存/切换配置后同步 `common_config_claude.statusLine`，Codex 原生状态栏同步 `common_config_codex` 的 `[tui].status_line`，避免 cc-switch 切换供应商后状态栏配置丢失；Hook 同步继续仅写入 CLI-Manager 拥有的共享 Hook 配置。
 

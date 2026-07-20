@@ -81,6 +81,7 @@ function inferHistorySource(haystack: string): HistorySource | null {
   const lower = haystack.toLowerCase();
   if (/\bcodex\b/.test(lower)) return "codex";
   if (/\bclaude\b/.test(lower)) return "claude";
+  if (/(?:^|\s)pi(?:\s|$)/.test(lower) || /\bpi[-_ ]?agent\b/.test(lower)) return "pi";
   return null;
 }
 

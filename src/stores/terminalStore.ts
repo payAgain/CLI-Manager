@@ -59,7 +59,7 @@ import {
 } from "./terminalWorkspan";
 
 export type SessionStatus = "running" | "exited" | "error";
-export type CliHookSource = "claude" | "codex";
+export type CliHookSource = "claude" | "codex" | "pi";
 export type CliHookEventName =
   | "SessionStart"
   | "UserPromptSubmit"
@@ -203,6 +203,7 @@ interface HookToolStatus {
 interface HookSettingsStatusPayload {
   claude: HookToolStatus;
   codex: HookToolStatus;
+  pi: HookToolStatus;
   claudeAutoRepaired?: boolean;
 }
 
@@ -1178,17 +1179,21 @@ function scheduleHookRunningTimeout(tabId: string, updatedAt: string) {
 
 async function shouldEnableHookEnv(): Promise<boolean> {
   const settings = useSettingsStore.getState();
-  if (!settings.claudeHookBridgeEnabled && !settings.codexHookBridgeEnabled) return false;
+  if (!settings.claudeHookBridgeEnabled && !settings.codexHookBridgeEnabled && !settings.piHookBridgeEnabled) {
+    return false;
+  }
   try {
     const status = await invoke<HookSettingsStatusPayload>("hook_settings_get_status", {
       selectedDir: settings.claudeHookConfigDir?.trim() || null,
       codexSelectedDir: settings.codexHookConfigDir?.trim() || null,
+      piSelectedDir: settings.piHookConfigDir?.trim() || null,
       ccSwitchDbPath: settings.ccSwitchDbPath ?? undefined,
       autoRepair: settings.claudeHookBridgeEnabled && settings.claudeHookAutoRepairKnownInstalled,
     });
     return (
       (settings.claudeHookBridgeEnabled && status.claude.status === "installed") ||
-      (settings.codexHookBridgeEnabled && status.codex.status === "installed")
+      (settings.codexHookBridgeEnabled && status.codex.status === "installed") ||
+      (settings.piHookBridgeEnabled && status.pi.status === "installed")
     );
   } catch (err) {
     logError("hook_settings_get_status failed while deciding terminal hook env", { err });
