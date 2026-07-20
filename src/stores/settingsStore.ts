@@ -66,6 +66,7 @@ type LastSettingsTab =
   | "cc-connect"
   | "ssh-hosts"
   | "sync"
+  | "history-sources"
   | "hooks"
   | "statusline"
   | "command-suggestions"
@@ -436,7 +437,7 @@ const DEFAULTS: Settings = {
   terminalThemeMode: "independent",
   terminalThemeName: "forestNightDark",
   sidebarDensity: "comfortable",
-  sidebarProjectFilterVisible: true,
+  sidebarProjectFilterVisible: false,
   viewMode: "standard",
   closeBehavior: "ask",
   exitWithRunningTasksBehavior: "ask",
@@ -592,6 +593,7 @@ const LAST_SETTINGS_TABS: readonly LastSettingsTab[] = [
   "cc-connect",
   "ssh-hosts",
   "sync",
+  "history-sources",
   "hooks",
   "statusline",
   "command-suggestions",
