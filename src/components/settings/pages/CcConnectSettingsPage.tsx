@@ -62,6 +62,7 @@ interface CcConnectProfile {
   allowFrom: string;
   platforms: CcConnectPlatformProfile[];
   yoloEnabled: boolean;
+  maxTurnTimeMins: number;
   proxyEnabled: boolean;
   proxyUrl: string | null;
   loggingEnabled: boolean;
@@ -140,6 +141,7 @@ function withPlatformProfiles(profile: CcConnectProfile): CcConnectProfile {
   });
   return {
     ...profile,
+    maxTurnTimeMins: profile.maxTurnTimeMins ?? 15,
     platforms,
     allowFrom: platforms.find((item) => item.platform === profile.platform)?.allowFrom ?? "",
   };
@@ -182,6 +184,7 @@ const EMPTY_PROFILE: CcConnectProfile = {
     allowFrom: "",
   })),
   yoloEnabled: false,
+  maxTurnTimeMins: 15,
   proxyEnabled: true,
   proxyUrl: null,
   loggingEnabled: false,
@@ -1105,6 +1108,24 @@ export function CcConnectSettingsPage() {
           label={t("settings.ccConnect.yoloEnabled")}
           description={t("settings.ccConnect.yoloEnabledDescription")}
           aria-label={t("settings.ccConnect.yoloEnabled")}
+        />
+        <NumberInput
+          mt="sm"
+          value={profile.maxTurnTimeMins}
+          min={0}
+          max={1440}
+          step={5}
+          allowDecimal={false}
+          clampBehavior="strict"
+          label={t("settings.ccConnect.maxTurnTime")}
+          description={t("settings.ccConnect.maxTurnTimeDescription")}
+          suffix={t("settings.ccConnect.maxTurnTimeSuffix")}
+          onChange={(value) => {
+            const next = typeof value === "number" && Number.isFinite(value)
+              ? Math.min(1440, Math.max(0, Math.round(value)))
+              : 15;
+            updateProfile("maxTurnTimeMins", next);
+          }}
         />
         <Checkbox
           mt="sm"

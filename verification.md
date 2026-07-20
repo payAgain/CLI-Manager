@@ -319,3 +319,22 @@
 - MSI：`src-tauri/target/release/bundle/msi/CLI-Manager_1.2.10_x64_en-US.msi`，SHA-256 `86A5756BB49D2793E21746B1D2F231BDBB9C1410F559DCDE3B8FF7D24EC8DB0F`。
 - Release EXE：SHA-256 `7F63FC46432115F1616B8B18D8083E5B89F13E41EE2382A79230DD6236A5C695`。
 - 当前异常托管在最终回复前继续运行；已要求延迟停止 cc-connect、移除 `s3` 和 handoff 记录，同时保留原 Session `019f5e8b-2d11-76d1-89b4-a0c0ff20d111` 与漂移 Session `019f7a9b-01c1-75e3-aa9c-0e59ca43a7ef` 的全部 Codex 文件。
+
+## 远程单轮任务时限可视化配置（2026-07-20）
+
+### 功能与兼容性
+
+- “设置 -> 远程连接”新增“单轮任务时间上限”分钟输入框，允许 `0~1440`；`0` 按 cc-connect v1.4.1 官方配置语义表示禁用绝对时限。
+- 保存后写入受管 `config.toml` 的顶层 `max_turn_time_mins`，Telegram、飞书、微信和企业微信共用该值；cc-connect 正在运行时沿用既有事务自动重启并生效。
+- 旧 `profile.json` 缺少字段时保持 CLI-Manager 原有的 15 分钟默认值，避免升级后行为突变；后端拒绝超过 1440 分钟的请求。
+- 新增中文、英文设置文案，英文继续使用 24 小时时间格式的全局规则。
+
+### 验证
+
+- `rustfmt --check --edition 2021 src\commands\cc_connect.rs`：通过。
+- `.\node_modules\.bin\tsc.cmd --noEmit`：通过。
+- `cargo test commands::cc_connect --lib`：49 项通过、0 项失败，覆盖旧配置默认值、`0/1440` 边界和 `1441` 拒绝路径。
+- `cargo test --lib`：562 项通过、0 项失败、1 项按环境要求忽略。
+- `npm run build`：通过，Vite 完成 6668 个模块转换；仅保留既有的大 chunk 警告。
+- 设置 `CLI_MANAGER_TEST_CC_CONNECT` 指向本机 cc-connect v1.4.1 后，受管配置通过真实 `config format` 校验；官方 `config example` 同时确认 `0` 表示禁用时限。
+- 未启动或停止用户安装目录中的 CLI-Manager/cc-connect，未向真实机器人发送消息；本次未生成安装包，也未 push。

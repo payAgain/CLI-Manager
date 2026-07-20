@@ -43,6 +43,8 @@ const VERSION_PROBE_TIMEOUT: Duration = Duration::from_secs(6);
 const CONFIG_FORMAT_TIMEOUT: Duration = Duration::from_secs(8);
 const CODEX_APP_SERVER_PROBE_TIMEOUT: Duration = Duration::from_secs(6);
 const LOCAL_PROXY_CONNECT_TIMEOUT: Duration = Duration::from_millis(250);
+const DEFAULT_MAX_TURN_TIME_MINS: u32 = 15;
+const MAX_TURN_TIME_MINS: u32 = 24 * 60;
 const LOCAL_PROXY_PORTS: [u16; 2] = [7890, 10808];
 const REMOTE_SWITCH_ARG_PREFIX: &str = "--cc-connect-switch=";
 const REMOTE_SWITCH_RESTART_DELAY: Duration = Duration::from_secs(5);
@@ -174,6 +176,8 @@ pub struct CcConnectProfile {
     pub platforms: Vec<CcConnectPlatformProfile>,
     #[serde(default)]
     pub yolo_enabled: bool,
+    #[serde(default = "default_max_turn_time_mins")]
+    pub max_turn_time_mins: u32,
     #[serde(default = "default_true")]
     pub proxy_enabled: bool,
     pub proxy_url: Option<String>,
@@ -188,6 +192,10 @@ pub struct CcConnectProfile {
 
 fn default_true() -> bool {
     true
+}
+
+fn default_max_turn_time_mins() -> u32 {
+    DEFAULT_MAX_TURN_TIME_MINS
 }
 
 #[derive(Debug, Deserialize)]
@@ -1137,7 +1145,7 @@ fn build_managed_config(
             CcConnectLanguage::En => "en",
         }
         .to_string(),
-        max_turn_time_mins: 15,
+        max_turn_time_mins: profile.max_turn_time_mins,
         queue: ManagedQueueConfig { max_depth: 2 },
         rate_limit: ManagedRateLimitConfig {
             max_messages: 10,
@@ -1931,6 +1939,11 @@ fn normalize_profile(
     mut profile: CcConnectProfile,
 ) -> Result<CcConnectProfile, String> {
     hydrate_profile_platforms(&mut profile);
+    if profile.max_turn_time_mins > MAX_TURN_TIME_MINS {
+        return Err(format!(
+            "max_turn_time_mins must be between 0 and {MAX_TURN_TIME_MINS}"
+        ));
+    }
     profile.project_id = profile.project_id.trim().to_string();
     profile.project_name = profile.project_name.trim().to_string();
     profile.project_path = profile.project_path.trim().to_string();
@@ -4554,6 +4567,7 @@ mod tests {
             allow_from: "123456789".to_string(),
             platforms: Vec::new(),
             yolo_enabled: false,
+            max_turn_time_mins: DEFAULT_MAX_TURN_TIME_MINS,
             proxy_enabled: true,
             proxy_url: None,
             logging_enabled: false,
@@ -4668,6 +4682,49 @@ mod tests {
         value.as_object_mut().unwrap().remove("yoloEnabled");
         let profile: CcConnectProfile = serde_json::from_value(value).unwrap();
         assert!(!profile.yolo_enabled);
+    }
+
+    #[test]
+    fn profile_without_max_turn_time_defaults_to_fifteen_minutes() {
+        let project = tempfile::tempdir().unwrap();
+        let mut value = serde_json::to_value(sample_profile(project.path())).unwrap();
+        value.as_object_mut().unwrap().remove("maxTurnTimeMins");
+
+        let profile: CcConnectProfile = serde_json::from_value(value).unwrap();
+
+        assert_eq!(profile.max_turn_time_mins, DEFAULT_MAX_TURN_TIME_MINS);
+    }
+
+    #[test]
+    fn managed_config_preserves_supported_turn_time_boundaries() {
+        let project = tempfile::tempdir().unwrap();
+        let mut profile = sample_profile(project.path());
+
+        for expected in [0, MAX_TURN_TIME_MINS] {
+            profile.max_turn_time_mins = expected;
+            let config = build_managed_config(
+                &profile,
+                Path::new(r"C:\Users\test\cli-manager-projects.txt"),
+                Path::new(r"C:\Users\test\cli-manager-switch.ps1"),
+            )
+            .unwrap();
+
+            assert_eq!(config.max_turn_time_mins, expected);
+        }
+    }
+
+    #[test]
+    fn profile_rejects_turn_time_above_maximum_before_io() {
+        let project = tempfile::tempdir().unwrap();
+        let mut profile = sample_profile(project.path());
+        profile.max_turn_time_mins = MAX_TURN_TIME_MINS + 1;
+
+        let error = normalize_profile(&CcConnectManager::new(), profile).unwrap_err();
+
+        assert_eq!(
+            error,
+            format!("max_turn_time_mins must be between 0 and {MAX_TURN_TIME_MINS}")
+        );
     }
 
     #[test]
@@ -4878,7 +4935,8 @@ mod tests {
     #[test]
     fn managed_config_is_safe() {
         let project = tempfile::tempdir().unwrap();
-        let profile = sample_profile(project.path());
+        let mut profile = sample_profile(project.path());
+        profile.max_turn_time_mins = 60;
         let raw = toml::to_string(
             &build_managed_config(
                 &profile,
@@ -4890,6 +4948,7 @@ mod tests {
         .unwrap();
         let value = toml::from_str::<toml::Value>(&raw).unwrap();
         assert_eq!(value["management"]["enabled"].as_bool(), Some(false));
+        assert_eq!(value["max_turn_time_mins"].as_integer(), Some(60));
         assert_eq!(value["bridge"]["enabled"].as_bool(), Some(false));
         assert_eq!(value["webhook"]["enabled"].as_bool(), Some(false));
         assert_eq!(
