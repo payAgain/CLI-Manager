@@ -133,6 +133,20 @@ function localPetName(pet: InstalledPet, language: DesktopPetConfigPayload["lang
   return language === "en-US" ? pet.manifest.name["en-US"] : pet.manifest.name["zh-CN"];
 }
 
+function distinctDisplayLabels(...values: Array<string | null | undefined>): string[] {
+  const seen = new Set<string>();
+  const labels: string[] = [];
+  for (const value of values) {
+    const label = value?.trim();
+    if (!label) continue;
+    const key = label.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    labels.push(label);
+  }
+  return labels;
+}
+
 function targetStatusLabel(config: DesktopPetConfigPayload, target: DesktopPetTarget): string {
   if (target.handoffPhase === "pending") return config.labels.handoffPending;
   if (target.handoffPhase === "cancelling") return config.labels.handoffCancelling;
@@ -437,7 +451,7 @@ export default function DesktopPetApp() {
   }, [config.settings.petId]);
 
   const detail = config.settings.showSessionName
-    ? [snapshot.projectName, snapshot.sessionTitle].filter(Boolean).join(" · ")
+    ? distinctDisplayLabels(snapshot.projectName, snapshot.sessionTitle).join(" · ")
     : "";
   const runningDetail = snapshot.runningCount > 1
     ? `${snapshot.runningCount} ${config.labels.runningCount}`
@@ -655,11 +669,9 @@ export default function DesktopPetApp() {
               </div>
             ) : null}
             {menuTargets.map((target, index) => {
-              const primary =
-                target.projectName ||
-                target.sessionTitle ||
-                `${config.labels.unnamedTask} ${index + 1}`;
-              const secondary = target.projectName && target.sessionTitle ? target.sessionTitle : null;
+              const identityLabels = distinctDisplayLabels(target.projectName, target.sessionTitle);
+              const primary = identityLabels[0] || `${config.labels.unnamedTask} ${index + 1}`;
+              const secondary = identityLabels[1] ?? null;
               const status = targetStatusLabel(config, target);
               return (
                 <button
@@ -678,7 +690,7 @@ export default function DesktopPetApp() {
                   onClick={() => (
                     targetMode === "handoff" ? requestHandoff(target) : openTarget(target)
                   )}
-                  title={[target.projectName, target.sessionTitle, status].filter(Boolean).join(" · ")}
+                  title={[...identityLabels, status].join(" · ")}
                 >
                   {target.handoffPhase ? (
                     <LockKeyhole className="desktop-pet-target-lock" size={14} aria-hidden="true" />
