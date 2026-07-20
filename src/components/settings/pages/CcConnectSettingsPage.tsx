@@ -36,7 +36,7 @@ import {
   Wifi,
 } from "lucide-react";
 import { toast } from "sonner";
-import { useI18n, type AppLanguage, type TranslationKey } from "../../../lib/i18n";
+import { getLanguageLocale, useI18n, type AppLanguage, type TranslationKey } from "../../../lib/i18n";
 import { useProjectStore } from "../../../stores/projectStore";
 import { useSettingsStore } from "../../../stores/settingsStore";
 import { ConfirmDialog } from "../../ConfirmDialog";
@@ -238,7 +238,7 @@ function normalizeWindowsExtendedPath(value: string) {
 
 function formatTimestamp(value: number | null, language: AppLanguage) {
   if (!value) return "—";
-  return new Intl.DateTimeFormat(language === "en-US" ? "en-GB" : "zh-CN", {
+  return new Intl.DateTimeFormat(getLanguageLocale(language, "en-GB"), {
     year: "numeric",
     month: "2-digit",
     day: "2-digit",

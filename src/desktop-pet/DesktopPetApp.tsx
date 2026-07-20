@@ -53,8 +53,9 @@ import {
   type DesktopPetSnapshot,
   type DesktopPetTarget,
   type InstalledPet,
+  localizedPetText,
 } from "../lib/desktopPet";
-import { translate } from "../lib/i18n";
+import { convertChineseForLanguage, getCurrentLanguage, translate } from "../lib/i18n";
 import { logWarn } from "../lib/logger";
 import type {
   CcConnectHandoffPlatformTarget,
@@ -63,8 +64,53 @@ import type {
 import { BUILTIN_DESKTOP_PET_ID } from "../stores/settingsStore";
 import "./desktopPet.css";
 
+function buildDesktopPetLabels(language: DesktopPetConfigPayload["language"]): DesktopPetConfigPayload["labels"] {
+  return {
+    openMain: translate(language, "desktopPet.actions.openMain"),
+    openSettings: translate(language, "desktopPet.actions.openSettings"),
+    size: translate(language, "desktopPet.settings.size"),
+    hide: translate(language, "desktopPet.actions.hide"),
+    idle: translate(language, "desktopPet.mood.idle"),
+    working: translate(language, "desktopPet.mood.working"),
+    waiting: translate(language, "desktopPet.mood.waiting"),
+    success: translate(language, "desktopPet.mood.success"),
+    error: translate(language, "desktopPet.mood.error"),
+    sleeping: translate(language, "desktopPet.mood.sleeping"),
+    runningCount: translate(language, "desktopPet.mood.runningCount"),
+    taskList: translate(language, "desktopPet.actions.taskList"),
+    currentTask: translate(language, "desktopPet.actions.currentTask"),
+    unnamedTask: translate(language, "desktopPet.actions.unnamedTask"),
+    openCurrent: translate(language, "desktopPet.actions.openCurrent"),
+    remoteHandoff: translate(language, "desktopPet.actions.remoteHandoff"),
+    cancelHandoff: translate(language, "desktopPet.actions.cancelHandoff"),
+    handoffPlatforms: translate(language, "desktopPet.actions.handoffPlatforms"),
+    handoffSessions: translate(language, "desktopPet.actions.handoffSessions"),
+    handoffBack: translate(language, "desktopPet.actions.handoffBack"),
+    platformReady: translate(language, "desktopPet.actions.platformReady"),
+    platformNotRunning: translate(language, "desktopPet.actions.platformNotRunning"),
+    platformCredentialsMissing: translate(
+      language,
+      "desktopPet.actions.platformCredentialsMissing"
+    ),
+    platformUserMissing: translate(language, "desktopPet.actions.platformUserMissing"),
+    platformSessionMissing: translate(language, "desktopPet.actions.platformSessionMissing"),
+    platformUnavailable: translate(language, "desktopPet.actions.platformUnavailable"),
+    platformTelegram: translate(language, "settings.ccConnect.platformTelegram"),
+    platformFeishu: translate(language, "settings.ccConnect.platformFeishu"),
+    platformWeixin: translate(language, "settings.ccConnect.platformWeixin"),
+    platformWecom: translate(language, "settings.ccConnect.platformWecom"),
+    handoffPending: translate(language, "remoteHandoff.overlay.pending"),
+    handoffCancelling: translate(language, "remoteHandoff.overlay.cancelling"),
+    handedOff: translate(language, "desktopPet.actions.handedOff"),
+    handoffRecoveryFailed: translate(language, "desktopPet.actions.handoffRecoveryFailed"),
+    noHandoffSessions: translate(language, "desktopPet.actions.noHandoffSessions"),
+  };
+}
+
+const DEFAULT_LANGUAGE = getCurrentLanguage();
+
 const DEFAULT_CONFIG: DesktopPetConfigPayload = {
-  language: "zh-CN",
+  language: DEFAULT_LANGUAGE,
   visible: false,
   settings: {
     enabled: true,
@@ -79,46 +125,7 @@ const DEFAULT_CONFIG: DesktopPetConfigPayload = {
     lockPosition: false,
     position: null,
   },
-  labels: {
-    openMain: translate("zh-CN", "desktopPet.actions.openMain"),
-    openSettings: translate("zh-CN", "desktopPet.actions.openSettings"),
-    size: translate("zh-CN", "desktopPet.settings.size"),
-    hide: translate("zh-CN", "desktopPet.actions.hide"),
-    idle: translate("zh-CN", "desktopPet.mood.idle"),
-    working: translate("zh-CN", "desktopPet.mood.working"),
-    waiting: translate("zh-CN", "desktopPet.mood.waiting"),
-    success: translate("zh-CN", "desktopPet.mood.success"),
-    error: translate("zh-CN", "desktopPet.mood.error"),
-    sleeping: translate("zh-CN", "desktopPet.mood.sleeping"),
-    runningCount: translate("zh-CN", "desktopPet.mood.runningCount"),
-    taskList: translate("zh-CN", "desktopPet.actions.taskList"),
-    currentTask: translate("zh-CN", "desktopPet.actions.currentTask"),
-    unnamedTask: translate("zh-CN", "desktopPet.actions.unnamedTask"),
-    openCurrent: translate("zh-CN", "desktopPet.actions.openCurrent"),
-    remoteHandoff: translate("zh-CN", "desktopPet.actions.remoteHandoff"),
-    cancelHandoff: translate("zh-CN", "desktopPet.actions.cancelHandoff"),
-    handoffPlatforms: translate("zh-CN", "desktopPet.actions.handoffPlatforms"),
-    handoffSessions: translate("zh-CN", "desktopPet.actions.handoffSessions"),
-    handoffBack: translate("zh-CN", "desktopPet.actions.handoffBack"),
-    platformReady: translate("zh-CN", "desktopPet.actions.platformReady"),
-    platformNotRunning: translate("zh-CN", "desktopPet.actions.platformNotRunning"),
-    platformCredentialsMissing: translate(
-      "zh-CN",
-      "desktopPet.actions.platformCredentialsMissing"
-    ),
-    platformUserMissing: translate("zh-CN", "desktopPet.actions.platformUserMissing"),
-    platformSessionMissing: translate("zh-CN", "desktopPet.actions.platformSessionMissing"),
-    platformUnavailable: translate("zh-CN", "desktopPet.actions.platformUnavailable"),
-    platformTelegram: translate("zh-CN", "settings.ccConnect.platformTelegram"),
-    platformFeishu: translate("zh-CN", "settings.ccConnect.platformFeishu"),
-    platformWeixin: translate("zh-CN", "settings.ccConnect.platformWeixin"),
-    platformWecom: translate("zh-CN", "settings.ccConnect.platformWecom"),
-    handoffPending: translate("zh-CN", "remoteHandoff.overlay.pending"),
-    handoffCancelling: translate("zh-CN", "remoteHandoff.overlay.cancelling"),
-    handedOff: translate("zh-CN", "desktopPet.actions.handedOff"),
-    handoffRecoveryFailed: translate("zh-CN", "desktopPet.actions.handoffRecoveryFailed"),
-    noHandoffSessions: translate("zh-CN", "desktopPet.actions.noHandoffSessions"),
-  },
+  labels: buildDesktopPetLabels(DEFAULT_LANGUAGE),
 };
 
 const DEFAULT_SNAPSHOT: DesktopPetSnapshot = {
@@ -136,12 +143,8 @@ const DEFAULT_SNAPSHOT: DesktopPetSnapshot = {
   handoffBusy: false,
 };
 
-function moodLabel(config: DesktopPetConfigPayload, mood: DesktopPetMood): string {
-  return config.labels[mood];
-}
-
-function localPetName(pet: InstalledPet, language: DesktopPetConfigPayload["language"]): string {
-  return language === "en-US" ? pet.manifest.name["en-US"] : pet.manifest.name["zh-CN"];
+function moodLabel(labels: DesktopPetConfigPayload["labels"], mood: DesktopPetMood): string {
+  return labels[mood];
 }
 
 function distinctDisplayLabels(...values: Array<string | null | undefined>): string[] {
@@ -158,13 +161,16 @@ function distinctDisplayLabels(...values: Array<string | null | undefined>): str
   return labels;
 }
 
-function targetStatusLabel(config: DesktopPetConfigPayload, target: DesktopPetTarget): string {
-  if (target.handoffPhase === "pending") return config.labels.handoffPending;
-  if (target.handoffPhase === "cancelling") return config.labels.handoffCancelling;
+function targetStatusLabel(
+  labels: DesktopPetConfigPayload["labels"],
+  target: DesktopPetTarget
+): string {
+  if (target.handoffPhase === "pending") return labels.handoffPending;
+  if (target.handoffPhase === "cancelling") return labels.handoffCancelling;
   if (target.handoffPhase === "recovery_failed") {
-    return config.labels.handoffRecoveryFailed;
+    return labels.handoffRecoveryFailed;
   }
-  if (target.handedOff) return config.labels.handedOff;
+  if (target.handedOff) return labels.handedOff;
   const mood: DesktopPetMood =
     target.status === "running"
       ? "working"
@@ -172,42 +178,42 @@ function targetStatusLabel(config: DesktopPetConfigPayload, target: DesktopPetTa
         ? "waiting"
         : target.status === "done"
           ? "success"
-          : target.status === "failed"
+        : target.status === "failed"
             ? "error"
             : "idle";
-  return moodLabel(config, mood);
+  return moodLabel(labels, mood);
 }
 
 function platformLabel(
-  config: DesktopPetConfigPayload,
+  labels: DesktopPetConfigPayload["labels"],
   platform: CcConnectPlatform
 ): string {
   return {
-    telegram: config.labels.platformTelegram,
-    feishu: config.labels.platformFeishu,
-    weixin: config.labels.platformWeixin,
-    wecom: config.labels.platformWecom,
+    telegram: labels.platformTelegram,
+    feishu: labels.platformFeishu,
+    weixin: labels.platformWeixin,
+    wecom: labels.platformWecom,
   }[platform];
 }
 
 function platformStatusLabel(
-  config: DesktopPetConfigPayload,
+  labels: DesktopPetConfigPayload["labels"],
   target: CcConnectHandoffPlatformTarget
 ): string {
-  if (target.ready) return config.labels.platformReady;
+  if (target.ready) return labels.platformReady;
   if (target.unavailableReason === "cc_connect_not_running") {
-    return config.labels.platformNotRunning;
+    return labels.platformNotRunning;
   }
   if (target.unavailableReason === "handoff_credentials_missing") {
-    return config.labels.platformCredentialsMissing;
+    return labels.platformCredentialsMissing;
   }
   if (target.unavailableReason === "handoff_platform_user_missing") {
-    return config.labels.platformUserMissing;
+    return labels.platformUserMissing;
   }
   if (target.unavailableReason === "handoff_platform_session_missing") {
-    return config.labels.platformSessionMissing;
+    return labels.platformSessionMissing;
   }
-  return config.labels.platformUnavailable;
+  return labels.platformUnavailable;
 }
 
 function PlatformIcon({ platform }: { platform: CcConnectPlatform }) {
@@ -570,11 +576,17 @@ export default function DesktopPetApp() {
     };
   }, [config.settings.petId]);
 
+  const labels = useMemo(() => buildDesktopPetLabels(config.language), [config.language]);
+  const localizeDisplayText = (text: string | null | undefined): string =>
+    text ? convertChineseForLanguage(config.language, text) : "";
   const detail = config.settings.showSessionName
-    ? distinctDisplayLabels(snapshot.projectName, snapshot.sessionTitle).join(" · ")
+    ? distinctDisplayLabels(
+        localizeDisplayText(snapshot.projectName),
+        localizeDisplayText(snapshot.sessionTitle)
+      ).join(" · ")
     : "";
   const runningDetail = snapshot.runningCount > 1
-    ? `${snapshot.runningCount} ${config.labels.runningCount}`
+    ? `${snapshot.runningCount} ${labels.runningCount}`
     : "";
   const stageSize = Math.round(144 * petScale);
   const renderingActive = config.visible && documentVisible;
@@ -798,12 +810,12 @@ export default function DesktopPetApp() {
           setMenuOpen(true);
         }
       }}
-      aria-label={moodLabel(config, displayMood)}
+      aria-label={moodLabel(labels, displayMood)}
     >
       <div className="desktop-pet-anchor">
         {config.settings.showStatus ? (
           <section className="desktop-pet-status" aria-live="polite">
-            <strong>{moodLabel(config, displayMood)}</strong>
+            <strong>{moodLabel(labels, displayMood)}</strong>
             {detail ? <span title={detail}>{detail}</span> : null}
             {runningDetail ? <small>{runningDetail}</small> : null}
           </section>
@@ -811,7 +823,7 @@ export default function DesktopPetApp() {
 
         <div
           className="desktop-pet-stage"
-          title={moodLabel(config, displayMood)}
+          title={moodLabel(labels, displayMood)}
           onPointerEnter={scheduleHoverOpen}
           onPointerLeave={() => {
             if (!menuOpenRef.current) clearHoverOpenTimer();
@@ -823,15 +835,15 @@ export default function DesktopPetApp() {
               mood={displayMood}
               width={stageSize}
               height={stageSize}
-              alt={localPetName(installedPet, config.language)}
+              alt={localizedPetText(installedPet.manifest.name, config.language)}
               animated={renderingActive}
               onError={() => setInstalledPet(null)}
             />
           ) : (
-            <CliCat className="desktop-pet-cat" ariaLabel={moodLabel(config, displayMood)} />
+            <CliCat className="desktop-pet-cat" ariaLabel={moodLabel(labels, displayMood)} />
           )}
           {snapshot.attentionCount > 0 ? (
-            <span className="desktop-pet-badge" aria-label={moodLabel(config, "waiting")}>!</span>
+            <span className="desktop-pet-badge" aria-label={moodLabel(labels, "waiting")}>!</span>
           ) : null}
         </div>
       </div>
@@ -843,10 +855,10 @@ export default function DesktopPetApp() {
           role="menu"
           aria-label={
             targetMode === "platforms"
-              ? config.labels.handoffPlatforms
+              ? labels.handoffPlatforms
               : targetMode === "handoff"
-                ? config.labels.handoffSessions
-                : config.labels.taskList
+                ? labels.handoffSessions
+                : labels.taskList
           }
         >
           {targetMode === "platforms" && handoffPlatforms.length > 0 ? (
@@ -855,8 +867,8 @@ export default function DesktopPetApp() {
                 <button
                   type="button"
                   role="menuitem"
-                  aria-label={config.labels.handoffBack}
-                  title={config.labels.handoffBack}
+                  aria-label={labels.handoffBack}
+                  title={labels.handoffBack}
                   onClick={() => {
                     setTargetMode("open");
                     setSelectedPlatform(null);
@@ -864,11 +876,11 @@ export default function DesktopPetApp() {
                 >
                   <ArrowLeft size={14} aria-hidden="true" />
                 </button>
-                <strong>{config.labels.handoffPlatforms}</strong>
+                <strong>{labels.handoffPlatforms}</strong>
               </div>
               {handoffPlatforms.map((platform, index) => {
-                const name = platformLabel(config, platform.platform);
-                const status = platformStatusLabel(config, platform);
+                const name = platformLabel(labels, platform.platform);
+                const status = platformStatusLabel(labels, platform);
                 return (
                   <button
                     key={platform.platform}
@@ -897,8 +909,8 @@ export default function DesktopPetApp() {
                 <button
                   type="button"
                   role="menuitem"
-                  aria-label={config.labels.handoffBack}
-                  title={config.labels.handoffBack}
+                  aria-label={labels.handoffBack}
+                  title={labels.handoffBack}
                   onClick={() => {
                     setTargetMode("platforms");
                     setSelectedPlatform(null);
@@ -908,16 +920,19 @@ export default function DesktopPetApp() {
                 </button>
                 <strong>
                   {selectedPlatform
-                    ? platformLabel(config, selectedPlatform)
-                    : config.labels.handoffSessions}
+                    ? platformLabel(labels, selectedPlatform)
+                    : labels.handoffSessions}
                 </strong>
               </div>
             ) : null}
             {menuTargets.map((target, index) => {
-              const identityLabels = distinctDisplayLabels(target.projectName, target.sessionTitle);
-              const primary = identityLabels[0] || `${config.labels.unnamedTask} ${index + 1}`;
+              const identityLabels = distinctDisplayLabels(
+                localizeDisplayText(target.projectName),
+                localizeDisplayText(target.sessionTitle)
+              );
+              const primary = identityLabels[0] || `${labels.unnamedTask} ${index + 1}`;
               const secondary = identityLabels[1] ?? null;
-              const status = targetStatusLabel(config, target);
+              const status = targetStatusLabel(labels, target);
               return (
                 <button
                   key={target.sessionId}
@@ -950,7 +965,7 @@ export default function DesktopPetApp() {
                     </small>
                   </span>
                   {target.active ? (
-                    <span className="desktop-pet-target-current">{config.labels.currentTask}</span>
+                    <span className="desktop-pet-target-current">{labels.currentTask}</span>
                   ) : null}
                 </button>
               );
@@ -964,7 +979,7 @@ export default function DesktopPetApp() {
               onClick={() => openTarget()}
             >
               <MonitorUp size={14} aria-hidden="true" />
-              <span>{config.labels.openCurrent}</span>
+              <span>{labels.openCurrent}</span>
             </button>
             <button
               type="button"
@@ -990,7 +1005,7 @@ export default function DesktopPetApp() {
               }}
             >
               <RadioTower size={14} aria-hidden="true" />
-              <span>{config.labels.remoteHandoff}</span>
+              <span>{labels.remoteHandoff}</span>
             </button>
             {snapshot.handoff ? (
               <button
@@ -1001,23 +1016,23 @@ export default function DesktopPetApp() {
                 onClick={cancelHandoff}
               >
                 <PauseCircle size={14} aria-hidden="true" />
-                <span>{config.labels.cancelHandoff}</span>
+                <span>{labels.cancelHandoff}</span>
               </button>
             ) : null}
             <button type="button" role="menuitem" onClick={openMainWindow}>
               <AppWindow size={14} aria-hidden="true" />
-              <span>{config.labels.openMain}</span>
+              <span>{labels.openMain}</span>
             </button>
             <div
               className="desktop-pet-size-control"
               role="group"
-              aria-label={config.labels.size}
+              aria-label={labels.size}
               data-pet-interactive
               onPointerEnter={clearHoverCloseTimer}
             >
               <div className="desktop-pet-size-control-header">
                 <Maximize2 size={13} aria-hidden="true" />
-                <span>{config.labels.size}</span>
+                <span>{labels.size}</span>
                 <output>{effectiveSize}%</output>
               </div>
               <input
@@ -1026,7 +1041,7 @@ export default function DesktopPetApp() {
                 max={DESKTOP_PET_SIZE_MAX_PERCENT}
                 step={DESKTOP_PET_SIZE_STEP_PERCENT}
                 value={effectiveSize}
-                aria-label={config.labels.size}
+                aria-label={labels.size}
                 aria-valuetext={`${effectiveSize}%`}
                 onPointerDown={(event) => {
                   event.stopPropagation();
@@ -1057,7 +1072,7 @@ export default function DesktopPetApp() {
               }}
             >
               <Settings size={14} aria-hidden="true" />
-              <span>{config.labels.openSettings}</span>
+              <span>{labels.openSettings}</span>
             </button>
             <button
               type="button"
@@ -1071,7 +1086,7 @@ export default function DesktopPetApp() {
               }}
             >
               <EyeOff size={14} aria-hidden="true" />
-              <span>{config.labels.hide}</span>
+              <span>{labels.hide}</span>
             </button>
           </div>
         </div>

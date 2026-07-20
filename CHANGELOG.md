@@ -2,7 +2,20 @@
 
 ## [TEMP]
 
+### 新增
+- 终端中的 HTTP/HTTPS、OSC 8、文件与目录链接支持悬停类型图标，并统一改为 `Ctrl + 单击`打开，普通单击不再误触。
+- 历史会话项目同步弹窗支持批量忽略和单项目快速忽略；批量操作需要二次确认，已忽略项目会持久化并在后续 Codex / Claude 扫描中不再提醒。
+
+### 调整
+- 设置页将“桌面宠物”移动到倒数第三，位于“开发者”上方。
+
 ### 修复
+- 修复 Claude Code 与 Codex 历史目录切换到 WSL 后，多个配置根的索引任务并发写入同一缓存数据库并触发 `database is locked`，导致历史刷新持续显示上次缓存结果的问题。
+- 修复终端 URL、OSC 8、文件和目录链接仅检查鼠标抬起事件的 `ctrlKey`，导致部分 WebView2 场景下 `Ctrl + 单击`无响应的问题；现由终端统一跟踪 Ctrl 按键状态，并在窗口失焦时重置。
+- 修复 WSL Codex 子任务发现被错误配置目录覆盖、将 `$HOME` 误拼成 `$HOME/sessions` 的问题；现在优先从当前 Hook 的父转录路径提取 `.codex/sessions`，仅在父路径不可用时才回退配置目录或 WSL HOME。
+- 修复 Codex 启动时 OSC 10/11 颜色响应超过探测窗口后泄漏到输入框的问题：本地 Windows/WSL 改由 Rust PTY 层即时回复，SSH 仅过滤不回复，前端与 Replay 不再产生 PTY 输入副作用，并支持主题颜色运行时同步。
+- 修复深色终端侧边面板中 Codex 来源徽章的 OpenAI 单色图标使用应用主题文字色，导致图标与黑色背景对比不足的问题。
+- 修复 WSL 默认 Shell 为 zsh 时 Codex rollout 通配符被提前展开、导致子任务执行期间始终发现失败的问题；子任务转录的 WSL 命令统一通过 `wsl.exe --exec` 传递原始参数，并覆盖 Claude/Codex 两类通配符回归测试。
 - 增强 WSL Codex 子任务转录诊断日志：记录 rollout 重试次数、累计耗时、后续间隔、停止原因、Hook 身份字段与最终内容源，并限制高频轮询仅在关键轮次落盘，便于排查“分屏已出现但文字延迟显示”。
 - 修复 WSL Codex 子任务分屏在长任务执行期间无法及时发现 rollout、接近结束时才一次性显示文字的问题；发现重试现在持续到订阅成功、子任务结束或分屏关闭，并统一兼容 `\\wsl.localhost`、`\\wsl$`、`\\?\\UNC\\wsl*` 与 Linux 路径，避免 Codex 配置路径已包含 `sessions` 时重复拼接目录。
 
@@ -12,14 +25,17 @@
 - **远程托管恢复大型 Codex 会话**：CLI-Manager 的 Codex 包装层新增 app-server 兼容代理，完整保留 Codex 已加载的历史上下文，同时将超过 cc-connect 10 MB 单行限制的 `thread/resume` 回复缩减为其实际消费的线程标识、目录、模型与推理强度字段。
 - **远程托管会话漂移保护**：活动托管强制恢复 handoff 中记录的原 Session ID；恢复失败或 ID 不一致时禁止 cc-connect 静默创建新线程。取消异常托管时可识别由原线程回退产生的后继 ID，安全清理 cc-connect 绑定且不删除任何 Codex rollout。
 
-## [V1.3.0] - 2026-07-17
+## [V1.3.0] - 2026-07-20
 
 ### 新增
+- **SSH Config 主机导入**：SSH 主机设置可从原生 Windows、Linux、macOS 的默认 `~/.ssh/config` 或用户选择的配置目录扫描具体 `Host` 别名，预览来源、跳过重复项、多选并批量导入到指定 SSH 分组，完成后提示成功、失败和重复跳过数量；支持递归 Include、通配符、BOM、CRLF/LF 和循环检测，目录或配置异常时整体失败且不产生部分数据。自定义目录通过机器本地 `config_file` 引用，连接测试、远程目录查询和 PTY/daemon 启动统一传递 `ssh -F`，该路径不进入同步、导出或普通日志；WSL 配置不在本次支持范围。
+- **繁体中文界面支持**：设置中的界面语言新增 `繁體中文`；`auto` 语言检测支持 `zh-TW`、`zh-HK`、`zh-MO` 与 `zh-Hant`。现有 `zh-CN` 文案通过 OpenCC 映射生成 `zh-TW`，覆盖设置、统计看板、历史会话、桌面宠物联动、关闭按钮两类弹框与常见提示文案；桌宠窗口中的状态、操作按钮、宠物名称与目标标题也会按 `zh-TW` 显示，并对少量简繁同形词做繁中术语覆写（例如桌宠状态“工作中”），同时保留英文文案与 24 小时制时间格式。
 - **cc-connect 微信平台**：远程连接新增微信个人号（原生 `weixin` ilink Token）与企业微信（原生 `wecom` WebSocket 智能机器人）配置；凭据继续存入 Windows 凭据管理器，托管 TOML 仅写环境变量占位符。
 - **cc-connect 微信扫码授权**：远程连接的微信配置新增应用内扫码授权按钮，直接运行已校验的 cc-connect 原生 `weixin setup` 流程；二维码在应用内显示并自动刷新，手机确认后自动导入 ilink Token 与允许用户，取消、关闭设置或退出应用时会终止授权进程并清理临时敏感文件。
 - **Codex 会话远程托管**：桌面宠物可从已停止的本地 Codex 会话中选择一项交给 cc-connect 继续处理；托管期间终端显示锁定蒙层，支持从桌面宠物或终端暂停远程任务并按原项目、工作目录与 Provider 恢复本地会话。
 
 ### 修复
+- SSH 主机编辑器的认证方式、跳板模式、跳板主机和 SSH Config 导入目标分组统一改用应用主题化下拉框，修复 Windows 深色主题下原生选项菜单显示为白底、文字对比异常的问题。
 - **cc-connect 远程任务排队与 Provider 修复**：启动受管 cc-connect 时通过进程级 Git 配置仅信任当前已登记项目，避免 Codex 的 MCP 服务因项目目录所有权检查卡在 `git rev-parse`；远程 Codex 按项目 `provider_overrides` 生成受校验的 `-c` 配置覆盖并注入仅存在于子进程环境中的 Provider 密钥，兼容不允许 `app-server` 使用 `--profile` 的新版 Codex CLI；启动前会运行同一包装器预检，避免消息阶段才出现 `initialize: EOF`。
 - **cc-connect 可执行文件选择修复**：手动选择或输入 cc-connect 原生程序后立即校验文件、版本与 SHA-256，并允许重新检测尚未保存的路径；Windows `\\?\` 扩展路径在界面显示和 profile 保存时统一转换为普通路径，已有配置自动兼容。
 - **WSL Hook 与 cc-switch 数据库环境兼容**：Claude/Codex Hook 配置目录与 cc-switch 数据库位置不再强制同环境；Windows 版可为 WSL CLI 配置同步 Windows 数据库，也可通过对应 WSL 发行版内的 SQLite 安全读取和事务更新 WSL 数据库，避免 UNC 直写造成锁与 WAL 风险。

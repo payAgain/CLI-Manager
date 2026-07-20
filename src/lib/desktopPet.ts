@@ -9,6 +9,12 @@ import {
   type CcConnectHandoffInfo,
   type CcConnectHandoffPlatformTarget,
 } from "./remoteHandoff";
+import {
+  convertChineseForLanguage,
+  isEnglishLanguage,
+  resolveLanguagePreference,
+  type AppLanguage,
+} from "./i18n";
 import type {
   SessionStatus,
   TabNotificationState,
@@ -142,7 +148,7 @@ export interface DesktopPetSnapshot {
 }
 
 export interface DesktopPetConfigPayload {
-  language: "zh-CN" | "en-US";
+  language: AppLanguage;
   visible: boolean;
   settings: DesktopPetSettings;
   labels: {
@@ -425,7 +431,10 @@ export function desktopPetScale(size: DesktopPetSettings["size"]): number {
 }
 
 export function localizedPetText(text: PetLocalizedText, language: LanguagePreference): string {
-  return language === "en-US" ? text["en-US"] : text["zh-CN"];
+  const resolvedLanguage = resolveLanguagePreference(language);
+  return isEnglishLanguage(resolvedLanguage)
+    ? text["en-US"]
+    : convertChineseForLanguage(resolvedLanguage, text["zh-CN"]);
 }
 
 export function joinPetAssetPath(baseDir: string, relativePath: string): string {
