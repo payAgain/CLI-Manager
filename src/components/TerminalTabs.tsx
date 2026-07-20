@@ -1396,8 +1396,6 @@ function PaneTabBar({
                   <ContextMenuItem onSelect={() => closeOtherPaneSessions(session.id, getAnchor())}>{t("terminal.tab.closeOthers")}</ContextMenuItem>
                   <ContextMenuItem onSelect={() => closePaneSessionsToLeft(session.id, getAnchor())}>{t("terminal.tab.closeLeft")}</ContextMenuItem>
                   <ContextMenuItem onSelect={() => closePaneSessionsToRight(session.id, getAnchor())}>{t("terminal.tab.closeRight")}</ContextMenuItem>
-                  <ContextMenuItem onSelect={onNewTab}>{t("terminal.toolbar.newTerminal")}</ContextMenuItem>
-                  <ContextMenuItem onSelect={() => onDuplicateSession(session)}>{t("terminal.tab.duplicate")}</ContextMenuItem>
                   {(() => {
                     const saveProject = session.projectId ? projectById.get(session.projectId) ?? null : null;
                     const canSave = canSaveSessionToSidebar(session, saveProject);
@@ -1412,10 +1410,12 @@ function PaneTabBar({
                         }}
                         title={!canSave ? t("saveSession.noSessionId") : undefined}
                       >
-                        {t("terminal.tab.saveToSidebar")}
+                        {t("terminal.tab.saveSession")}
                       </ContextMenuItem>
                     );
                   })()}
+                  <ContextMenuItem onSelect={onNewTab}>{t("terminal.toolbar.newTerminal")}</ContextMenuItem>
+                  <ContextMenuItem onSelect={() => onDuplicateSession(session)}>{t("terminal.tab.duplicate")}</ContextMenuItem>
                   {terminalBackgroundEnabled && terminalBackgroundImagePath && (
                     hiddenBackgroundSessionIds.has(session.id) ? (
                       <ContextMenuItem onSelect={() => onShowBackground(session.id)}>{t("terminal.tab.showBackground")}</ContextMenuItem>
@@ -4095,7 +4095,7 @@ export function TerminalTabs({
                                     }}
                                     title={!canSave ? t("saveSession.noSessionId") : undefined}
                                   >
-                                    {t("terminal.tab.saveToSidebar")}
+                                    {t("terminal.tab.saveSession")}
                                   </ContextMenuItem>
                                 );
                               })()}
