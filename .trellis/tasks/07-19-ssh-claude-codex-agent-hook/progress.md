@@ -11,9 +11,9 @@ This is the single execution tracker for the task. Research, product requirement
 | S05 | Reusable Agent bridge runtime | completed | one-bridge invariant, reconnect, cancellation, shutdown tests |
 | S06 | Remote history indexing and cache | completed | parser/index/catalog/cursor/offline tests |
 | S07 | Remote session resume | completed | preflight/ownership/cwd/config-root routing tests |
-| S08 | Read-only remote file panel | pending | confinement/read limits/provider routing tests |
-| S09 | Read-only remote Git panel | pending | porcelain/diff/repo identity/read-only boundary tests |
-| S10 | Stats, docs, security and release verification | pending | stats/performance/security/i18n/docs/full regression |
+| S08 | Read-only remote file panel | completed | confinement/read limits/provider routing tests |
+| S09 | Read-only remote Git panel | completed | porcelain/diff/repo identity/read-only boundary tests |
+| S10 | Stats, docs, security and release verification | completed | stats/performance/security/i18n/docs/full regression |
 
 ## Phase Checklists
 
