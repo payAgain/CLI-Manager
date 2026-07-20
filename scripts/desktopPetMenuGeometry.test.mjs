@@ -148,6 +148,42 @@ test("without monitor data the legacy left/above direction keeps an exact anchor
   assert.ok(Math.abs(geometry.y + geometry.anchorY * scaleFactor - collapsed.y) <= 1);
 });
 
+test("live size changes preserve the pet bottom-center anchor", () => {
+  const workArea = { x: 0, y: 0, width: 1920, height: 1040 };
+  const original = { x: 1600, y: 800, width: 190, height: 210 };
+  const originalCenter = original.x + original.width / 2;
+  const originalBottom = original.y + original.height;
+  const small = menu.resizeDesktopPetCollapsedWindowBounds(original, 1, 0.4, workArea);
+  const large = menu.resizeDesktopPetCollapsedWindowBounds(small, 1, 1.5, workArea);
+  const restored = menu.resizeDesktopPetCollapsedWindowBounds(large, 1, 1, workArea);
+
+  for (const bounds of [small, large, restored]) {
+    assert.ok(Math.abs(bounds.x + bounds.width / 2 - originalCenter) <= 1);
+    assert.ok(Math.abs(bounds.y + bounds.height - originalBottom) <= 1);
+  }
+  assert.deepEqual({ width: small.width, height: small.height }, { width: 76, height: 84 });
+  assert.deepEqual({ width: large.width, height: large.height }, { width: 285, height: 315 });
+  assert.deepEqual(
+    { width: restored.width, height: restored.height },
+    { width: original.width, height: original.height }
+  );
+});
+
+test("live size changes remain within negative-coordinate monitor work areas", () => {
+  const workArea = { x: -2560, y: -180, width: 2560, height: 1440 };
+  const collapsed = { x: -2554, y: -174, width: 190, height: 210 };
+  const resized = menu.resizeDesktopPetCollapsedWindowBounds(
+    collapsed,
+    1.25,
+    1.5,
+    workArea
+  );
+  assert.ok(resized.x >= workArea.x);
+  assert.ok(resized.y >= workArea.y);
+  assert.ok(resized.x + resized.width <= workArea.x + workArea.width);
+  assert.ok(resized.y + resized.height <= workArea.y + workArea.height);
+});
+
 test("latest async menu state replaces queued intermediate states", async () => {
   const calls = [];
   let releaseFirst;

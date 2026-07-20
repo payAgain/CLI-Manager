@@ -15,9 +15,11 @@ import type {
   TabStatusDetails,
 } from "../stores/terminalStore";
 import type { DesktopPetSettings, LanguagePreference } from "../stores/settingsStore";
+import { desktopPetScaleFromPercent } from "./desktopPetSize";
 
 export {
   calculateDesktopPetMenuWindowGeometry,
+  resizeDesktopPetCollapsedWindowBounds,
   createLatestAsyncTaskRunner,
   type DesktopPetMenuHorizontalPlacement,
   type DesktopPetMenuVerticalPlacement,
@@ -26,6 +28,13 @@ export {
   type LatestAsyncTaskContext,
   type LatestAsyncTaskRunner,
 } from "./desktopPetMenu";
+export {
+  DESKTOP_PET_SIZE_DEFAULT_PERCENT,
+  DESKTOP_PET_SIZE_MAX_PERCENT,
+  DESKTOP_PET_SIZE_MIN_PERCENT,
+  DESKTOP_PET_SIZE_STEP_PERCENT,
+  normalizeDesktopPetSizePercent,
+} from "./desktopPetSize";
 
 export const DESKTOP_PET_WINDOW_LABEL = "desktop-pet";
 export const DESKTOP_PET_CONFIG_EVENT = "desktop-pet-config";
@@ -35,6 +44,7 @@ export const DESKTOP_PET_OPEN_TARGET_EVENT = "desktop-pet-open-target";
 export const DESKTOP_PET_OPEN_SETTINGS_EVENT = "desktop-pet-open-settings";
 export const DESKTOP_PET_CLOSE_MENU_EVENT = "desktop-pet-close-menu";
 export const DESKTOP_PET_POSITION_EVENT = "desktop-pet-position";
+export const DESKTOP_PET_SIZE_CHANGE_EVENT = "desktop-pet-size-change";
 export const DESKTOP_PET_HANDOFF_START_EVENT = "remote-handoff-start-request";
 export const DESKTOP_PET_HANDOFF_CANCEL_EVENT = "remote-handoff-cancel-request";
 
@@ -138,6 +148,7 @@ export interface DesktopPetConfigPayload {
   labels: {
     openMain: string;
     openSettings: string;
+    size: string;
     hide: string;
     idle: string;
     working: string;
@@ -176,6 +187,10 @@ export interface DesktopPetConfigPayload {
 export interface DesktopPetPositionPayload {
   x: number;
   y: number;
+}
+
+export interface DesktopPetSizeChangePayload extends DesktopPetPositionPayload {
+  size: number;
 }
 
 export interface DesktopPetOpenTargetPayload {
@@ -406,9 +421,7 @@ export function deriveDesktopPetSnapshot(input: DeriveDesktopPetSnapshotInput): 
 }
 
 export function desktopPetScale(size: DesktopPetSettings["size"]): number {
-  if (size === "small") return 0.8;
-  if (size === "large") return 1.25;
-  return 1;
+  return desktopPetScaleFromPercent(size);
 }
 
 export function localizedPetText(text: PetLocalizedText, language: LanguagePreference): string {

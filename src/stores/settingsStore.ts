@@ -23,6 +23,18 @@ import {
   sanitizeThirdPartyHookTargets,
   type ThirdPartyHookTarget,
 } from "../lib/thirdPartyNotifications";
+import {
+  DESKTOP_PET_SIZE_DEFAULT_PERCENT,
+  normalizeDesktopPetSizePercent,
+  type DesktopPetSizePercent,
+} from "../lib/desktopPetSize";
+
+export {
+  DESKTOP_PET_SIZE_DEFAULT_PERCENT,
+  DESKTOP_PET_SIZE_MAX_PERCENT,
+  DESKTOP_PET_SIZE_MIN_PERCENT,
+  DESKTOP_PET_SIZE_STEP_PERCENT,
+} from "../lib/desktopPetSize";
 
 export type ThemeMode = "dark" | "light" | "system";
 export type LightThemePalette =
@@ -154,7 +166,7 @@ export type UnsplitBehavior = "merge" | "close";
 export type FileExplorerIgnoredPaths = Record<string, string[]>;
 export type LanguagePreference = "auto" | "zh-CN" | "en-US";
 export type BatchLaunchPaneDirection = "vertical" | "horizontal";
-export type DesktopPetSize = "small" | "medium" | "large";
+export type DesktopPetSize = DesktopPetSizePercent;
 export const DESKTOP_PET_WORK_BOUNCE_MIN_PX = 0;
 export const DESKTOP_PET_WORK_BOUNCE_MAX_PX = 5;
 
@@ -565,7 +577,7 @@ const DEFAULTS: Settings = {
     enabled: false,
     petId: BUILTIN_DESKTOP_PET_ID,
     alwaysOnTop: true,
-    size: "medium",
+    size: DESKTOP_PET_SIZE_DEFAULT_PERCENT,
     workingBounceEnabled: false,
     workingBounceDistancePx: 5,
     showStatus: true,
@@ -1004,9 +1016,7 @@ export function migrateDesktopPetSettings(value: unknown): DesktopPetSettings {
   const petId = typeof raw.petId === "string" && raw.petId.trim() && raw.petId.length <= 80
     ? raw.petId.trim()
     : defaults.petId;
-  const size: DesktopPetSize = raw.size === "small" || raw.size === "medium" || raw.size === "large"
-    ? raw.size
-    : defaults.size;
+  const size = normalizeDesktopPetSizePercent(raw.size, defaults.size);
   const workingBounceDistancePx = Math.round(clampNumber(
     raw.workingBounceDistancePx,
     DESKTOP_PET_WORK_BOUNCE_MIN_PX,

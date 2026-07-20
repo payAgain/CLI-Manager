@@ -10,14 +10,17 @@ import {
   DESKTOP_PET_OPEN_TARGET_EVENT,
   DESKTOP_PET_POSITION_EVENT,
   DESKTOP_PET_READY_EVENT,
+  DESKTOP_PET_SIZE_CHANGE_EVENT,
   DESKTOP_PET_SNAPSHOT_EVENT,
   DESKTOP_PET_WINDOW_LABEL,
   deriveDesktopPetSnapshot,
   desktopPetScale,
+  normalizeDesktopPetSizePercent,
   type BackgroundPetTask,
   type DesktopPetConfigPayload,
   type DesktopPetOpenTargetPayload,
   type DesktopPetPositionPayload,
+  type DesktopPetSizeChangePayload,
   type DesktopPetSnapshot,
 } from "../lib/desktopPet";
 import {
@@ -137,6 +140,7 @@ export function useDesktopPetCoordinator({
     labels: {
       openMain: t("desktopPet.actions.openMain"),
       openSettings: t("desktopPet.actions.openSettings"),
+      size: t("desktopPet.settings.size"),
       hide: t("desktopPet.actions.hide"),
       idle: t("desktopPet.mood.idle"),
       working: t("desktopPet.mood.working"),
@@ -190,11 +194,14 @@ export function useDesktopPetCoordinator({
   const onActivateSessionRef = useRef(onActivateSession);
   const onOpenSettingsRef = useRef(onOpenSettings);
   const updateSettingRef = useRef(updateSetting);
+  const petAppliedWindowConfigKeyRef = useRef<string | null>(null);
+  const petWindowVisibleRef = useRef(petWindowVisible);
   configPayloadRef.current = configPayload;
   publicSnapshotRef.current = publicSnapshot;
   onActivateSessionRef.current = onActivateSession;
   onOpenSettingsRef.current = onOpenSettings;
   updateSettingRef.current = updateSetting;
+  petWindowVisibleRef.current = petWindowVisible;
 
   const sendState = useCallback(async (force = false) => {
     const stats = deliveryStatsRef.current;
@@ -286,6 +293,17 @@ export function useDesktopPetCoordinator({
 
   useEffect(() => {
     if (!appReady || !settingsLoaded) return;
+    const windowConfigKey = desktopPetWindowConfigKey(
+      desktopPet.size,
+      desktopPet.position,
+      desktopPet.alwaysOnTop,
+      petWindowVisible
+    );
+    // Pet-side resize/drag already applied these exact native bounds.
+    if (petAppliedWindowConfigKeyRef.current === windowConfigKey) {
+      petAppliedWindowConfigKeyRef.current = null;
+      return;
+    }
     void (async () => {
       await emitTo(DESKTOP_PET_WINDOW_LABEL, DESKTOP_PET_CLOSE_MENU_EVENT).catch(() => {});
       await invoke("desktop_pet_window_sync", {
@@ -297,7 +315,14 @@ export function useDesktopPetCoordinator({
         },
       });
     })().catch((err) => logWarn("Failed to synchronize desktop pet window", err));
-  }, [appReady, desktopPet, petWindowVisible, settingsLoaded]);
+  }, [
+    appReady,
+    desktopPet.alwaysOnTop,
+    desktopPet.position,
+    desktopPet.size,
+    petWindowVisible,
+    settingsLoaded,
+  ]);
 
   useEffect(() => {
     if (!appReady || !settingsLoaded) return;
@@ -330,13 +355,79 @@ export function useDesktopPetCoordinator({
       if (current.lockPosition) return;
       const nextPosition = { x: Math.round(event.payload.x), y: Math.round(event.payload.y) };
       if (current.position?.x === nextPosition.x && current.position?.y === nextPosition.y) return;
-      void updateSettingRef.current("desktopPet", { ...current, position: nextPosition });
+      const key = desktopPetWindowConfigKey(
+        current.size,
+        nextPosition,
+        current.alwaysOnTop,
+        petWindowVisibleRef.current
+      );
+      petAppliedWindowConfigKeyRef.current = key;
+      void updateSettingRef.current("desktopPet", { ...current, position: nextPosition }).catch((err) => {
+        if (petAppliedWindowConfigKeyRef.current === key) {
+          petAppliedWindowConfigKeyRef.current = null;
+        }
+        logWarn("Failed to persist desktop pet position", err);
+      });
     });
+    const unlistenSizeChange = listen<DesktopPetSizeChangePayload>(
+      DESKTOP_PET_SIZE_CHANGE_EVENT,
+      (event) => {
+        if (
+          !Number.isFinite(event.payload.size)
+          || !Number.isFinite(event.payload.x)
+          || !Number.isFinite(event.payload.y)
+        ) {
+          return;
+        }
+        const current = useSettingsStore.getState().desktopPet;
+        const size = normalizeDesktopPetSizePercent(event.payload.size, current.size);
+        const position = {
+          x: Math.round(event.payload.x),
+          y: Math.round(event.payload.y),
+        };
+        if (
+          current.size === size
+          && current.position?.x === position.x
+          && current.position?.y === position.y
+        ) {
+          return;
+        }
+        const key = desktopPetWindowConfigKey(
+          size,
+          position,
+          current.alwaysOnTop,
+          petWindowVisibleRef.current
+        );
+        petAppliedWindowConfigKeyRef.current = key;
+        void updateSettingRef.current("desktopPet", { ...current, size, position }).catch((err) => {
+          if (petAppliedWindowConfigKeyRef.current === key) {
+            petAppliedWindowConfigKeyRef.current = null;
+          }
+          logWarn("Failed to persist desktop pet size", err);
+        });
+      }
+    );
     return () => {
       void unlistenReady.then((unlisten) => unlisten());
       void unlistenOpenTarget.then((unlisten) => unlisten());
       void unlistenOpenSettings.then((unlisten) => unlisten());
       void unlistenPosition.then((unlisten) => unlisten());
+      void unlistenSizeChange.then((unlisten) => unlisten());
     };
   }, [sendState]);
+}
+
+function desktopPetWindowConfigKey(
+  size: number,
+  position: { x: number; y: number } | null,
+  alwaysOnTop: boolean,
+  visible: boolean
+): string {
+  return [
+    size,
+    position?.x ?? "default",
+    position?.y ?? "default",
+    alwaysOnTop ? "top" : "normal",
+    visible ? "visible" : "hidden",
+  ].join(":");
 }

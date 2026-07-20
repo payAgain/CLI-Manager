@@ -399,3 +399,35 @@
 - `npm run build`：通过，Vite 完成 6673 个模块转换。
 - `git diff --check`：通过，仅输出仓库既有的 LF/CRLF 转换提示。
 - 本次未生成安装包，未启动/停止用户安装目录中的 CLI-Manager 或 cc-connect，也未 push。
+
+## 桌宠悬停菜单、尺寸调节与右键漂移修复（2026-07-20）
+
+### 根因陈述与发现清单
+
+- 漂移根因位于桌宠原生窗口移动事件与前端拖动状态的边界：菜单展开/收起通过 SetWindowPos 改变窗口坐标并触发 onMoved，旧拖动标记尚未清理时会把展开窗口左上角误持久化为宠物位置；修复在程序化窗口调整入口终止拖动跟踪并过滤预期移动事件，而不是在位置回显处兜底。
+- 已修改 DesktopPetApp / desktopPet.css：宠物悬停 200ms 展开菜单、离开 350ms 延迟收起，保留右键备用入口；菜单内加入 40%～150%、5% 步进的尺寸滑条，并在拖出窗口时保持指针捕获和正确提交。
+- 已修改 desktopPetMenu：实时缩放以折叠宠物窗口的底部中心为锚点，并约束在当前显示器工作区；异步菜单窗口任务继续只应用最新状态。
+- 已修改 useDesktopPetCoordinator / desktopPet.ts：新增桌宠尺寸事件，尺寸与对应位置原子持久化；仅跳过桌宠已经应用的完全相同窗口配置，显示/隐藏或置顶状态并发变化仍会同步。
+- 已修改 settingsStore / DesktopPetSettingsPage：尺寸设置改为数值百分比，并兼容迁移旧 small/medium/large 配置到 80%/100%/125%；设置页同步提供相同范围的滑条。
+- 已修改 Rust 桌宠窗口尺寸边界：原生窗口最小缩放从 75% 放宽到 40%，最大值保持 150%；中英文文案同步更新。
+- 已确认无需修改：宠物资源格式与下载/导入链路、状态推导、扇形会话卡片、远程托管协议、cc-connect 源码及平台适配。
+
+### 场景覆盖
+
+- 菜单交互：悬停打开、从宠物移动到菜单或会话卡片、离开延迟关闭、右键开关、Esc/设置变更关闭、滑条拖动期间离开窗口。
+- 窗口状态：屏幕四角、负坐标副屏、100%/125%/150% DPI、程序化展开/收起、用户拖动、锁定位置和主应用失焦。
+- 尺寸与兼容：40%、100%、150% 边界、5% 步进、旧三档配置迁移、菜单实时预览、设置页持久化和重启回显。
+- 会话状态：无会话、单会话、多会话、远程托管平台/会话二级菜单均复用同一悬停窗口状态机；PTY、WSL、Worktree 和 Hook 数据链路未改变。
+
+### 验证结果
+
+- .\node_modules\.bin\tsc.cmd --noEmit：通过。
+- node scripts\desktopPetSize.test.mjs：3 项通过，覆盖旧配置迁移、范围/步进归一化及原生缩放换算。
+- node scripts\desktopPetMenuGeometry.test.mjs：11 项通过，覆盖多 DPI 四角定位、负坐标副屏、尺寸锚点和异步菜单竞态。
+- cargo test --manifest-path src-tauri\Cargo.toml desktop_pet_window：2 项通过，覆盖 40%～150% 原生窗口边界及非法尺寸。
+- cargo check --manifest-path src-tauri\Cargo.toml：通过。
+- rustfmt --edition 2021 --check src-tauri\src\commands\desktop_pet.rs：通过；全仓 cargo fmt -- --check 仍受本分支既有的其他 Rust 文件格式差异影响。
+- npm run build：通过，Vite 完成 6675 个模块转换。
+- git diff --check：通过，仅输出仓库既有的 LF/CRLF 转换提示。
+- GitNexus CLI 仍因本机缺少 tree-sitter-kotlin 无法执行；已降级为 codebase-memory moderate 重建索引、变更影响检测、rg、源码、Git diff 和构建测试复核。
+- 本次未生成安装包，未启动/停止用户安装目录中的 CLI-Manager 或 cc-connect，也未 push。

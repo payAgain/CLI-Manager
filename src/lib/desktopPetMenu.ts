@@ -32,9 +32,52 @@ const DESKTOP_PET_MENU_CARD_STEP = 54;
 const DESKTOP_PET_MENU_CARD_BREATHING_ROOM = 12;
 const DESKTOP_PET_MENU_MAX_VISIBLE_TARGETS = 5;
 const DESKTOP_PET_MENU_VERTICAL_CHROME = 28;
+const DESKTOP_PET_WINDOW_BASE_WIDTH = 190;
+const DESKTOP_PET_WINDOW_BASE_HEIGHT = 210;
 
 function finiteInteger(value: number, fallback: number): number {
   return Number.isFinite(value) ? Math.round(value) : fallback;
+}
+
+function clampToRange(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), Math.max(min, max));
+}
+
+export function resizeDesktopPetCollapsedWindowBounds(
+  collapsed: DesktopPetWindowRect,
+  scaleFactor: number,
+  petScale: number,
+  workArea?: DesktopPetWindowRect | null
+): DesktopPetWindowRect {
+  const safeScaleFactor = Number.isFinite(scaleFactor) && scaleFactor > 0 ? scaleFactor : 1;
+  const safePetScale = Number.isFinite(petScale) && petScale > 0 ? petScale : 1;
+  const collapsedX = finiteInteger(collapsed.x, 0);
+  const collapsedY = finiteInteger(collapsed.y, 0);
+  const collapsedWidth = Math.max(1, finiteInteger(collapsed.width, 1));
+  const collapsedHeight = Math.max(1, finiteInteger(collapsed.height, 1));
+  const width = Math.max(
+    1,
+    Math.round(DESKTOP_PET_WINDOW_BASE_WIDTH * safeScaleFactor * safePetScale)
+  );
+  const height = Math.max(
+    1,
+    Math.round(DESKTOP_PET_WINDOW_BASE_HEIGHT * safeScaleFactor * safePetScale)
+  );
+  const anchorX = collapsedX + collapsedWidth / 2;
+  const anchorY = collapsedY + collapsedHeight;
+  let x = Math.round(anchorX - width / 2);
+  let y = Math.round(anchorY - height);
+
+  if (workArea) {
+    const workX = finiteInteger(workArea.x, x);
+    const workY = finiteInteger(workArea.y, y);
+    const workWidth = Math.max(0, finiteInteger(workArea.width, width));
+    const workHeight = Math.max(0, finiteInteger(workArea.height, height));
+    x = clampToRange(x, workX, workX + workWidth - width);
+    y = clampToRange(y, workY, workY + workHeight - height);
+  }
+
+  return { x, y, width, height };
 }
 
 function choosePlacement<TBefore, TAfter>(

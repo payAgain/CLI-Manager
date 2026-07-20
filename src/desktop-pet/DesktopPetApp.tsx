@@ -15,6 +15,7 @@ import {
   Building2,
   EyeOff,
   LockKeyhole,
+  Maximize2,
   MessageCircle,
   MessagesSquare,
   MonitorUp,
@@ -34,10 +35,16 @@ import {
   DESKTOP_PET_OPEN_TARGET_EVENT,
   DESKTOP_PET_POSITION_EVENT,
   DESKTOP_PET_READY_EVENT,
+  DESKTOP_PET_SIZE_CHANGE_EVENT,
   DESKTOP_PET_SNAPSHOT_EVENT,
+  DESKTOP_PET_SIZE_MAX_PERCENT,
+  DESKTOP_PET_SIZE_MIN_PERCENT,
+  DESKTOP_PET_SIZE_STEP_PERCENT,
   calculateDesktopPetMenuWindowGeometry,
   createLatestAsyncTaskRunner,
   desktopPetScale,
+  normalizeDesktopPetSizePercent,
+  resizeDesktopPetCollapsedWindowBounds,
   type DesktopPetConfigPayload,
   type DesktopPetMenuWindowGeometry,
   type DesktopPetMood,
@@ -63,7 +70,7 @@ const DEFAULT_CONFIG: DesktopPetConfigPayload = {
     enabled: true,
     petId: BUILTIN_DESKTOP_PET_ID,
     alwaysOnTop: true,
-    size: "medium",
+    size: 100,
     workingBounceEnabled: false,
     workingBounceDistancePx: 5,
     showStatus: true,
@@ -75,6 +82,7 @@ const DEFAULT_CONFIG: DesktopPetConfigPayload = {
   labels: {
     openMain: translate("zh-CN", "desktopPet.actions.openMain"),
     openSettings: translate("zh-CN", "desktopPet.actions.openSettings"),
+    size: translate("zh-CN", "desktopPet.settings.size"),
     hide: translate("zh-CN", "desktopPet.actions.hide"),
     idle: translate("zh-CN", "desktopPet.mood.idle"),
     working: translate("zh-CN", "desktopPet.mood.working"),
@@ -215,14 +223,19 @@ function PlatformIcon({ platform }: { platform: CcConnectPlatform }) {
 interface CollapsedPetWindowGeometry {
   bounds: DesktopPetWindowRect;
   scaleFactor: number;
+  petScale: number;
   workArea: DesktopPetWindowRect | null;
 }
 
 interface DesktopPetMenuWindowRequest {
   open: boolean;
+  petScale: number;
   secondaryItemCount: number;
   secondaryHeaderHeight: number;
 }
+
+const DESKTOP_PET_HOVER_OPEN_DELAY_MS = 200;
+const DESKTOP_PET_HOVER_CLOSE_DELAY_MS = 350;
 
 function setDesktopPetWindowBounds(bounds: DesktopPetWindowRect): Promise<void> {
   return invoke("desktop_pet_window_set_bounds", { bounds });
@@ -250,6 +263,7 @@ export default function DesktopPetApp() {
   const [targetMode, setTargetMode] = useState<"open" | "platforms" | "handoff">("open");
   const [selectedPlatform, setSelectedPlatform] = useState<CcConnectPlatform | null>(null);
   const [menuGeometry, setMenuGeometry] = useState<DesktopPetMenuWindowGeometry | null>(null);
+  const [previewSize, setPreviewSize] = useState<number | null>(null);
   const [documentVisible, setDocumentVisible] = useState(() => !document.hidden);
   const menuTargets = targetMode === "handoff"
     ? snapshot.targets.filter((target) => target.handoffEligible)
@@ -262,11 +276,61 @@ export default function DesktopPetApp() {
     ? handoffPlatforms.length
     : menuTargets.length;
   const secondaryHeaderHeight = targetMode === "open" ? 0 : 34;
+  const effectiveSize = previewSize ?? config.settings.size;
+  const petScale = desktopPetScale(effectiveSize);
   const moveTimerRef = useRef<number | null>(null);
   const dragResetTimerRef = useRef<number | null>(null);
   const userDraggingRef = useRef(false);
+  const lockPositionRef = useRef(config.settings.lockPosition);
+  const menuOpenRef = useRef(menuOpen);
+  const previewSizeRef = useRef<number | null>(previewSize);
+  const sizeAdjustingRef = useRef(false);
+  const closeAfterSizeAdjustmentRef = useRef(false);
+  const hoverOpenTimerRef = useRef<number | null>(null);
+  const hoverCloseTimerRef = useRef<number | null>(null);
+  const hoverSuppressedUntilLeaveRef = useRef(false);
+  const expectedProgrammaticPositionRef = useRef<{ x: number; y: number } | null>(null);
+  const pendingDragAfterMenuCloseRef = useRef(false);
+  const closeMenuRef = useRef<(suppressHover?: boolean) => void>(() => {});
   const collapsedWindowGeometryRef = useRef<CollapsedPetWindowGeometry | null>(null);
   const menuWindowTaskRef = useRef<LatestAsyncTaskRunner<DesktopPetMenuWindowRequest> | null>(null);
+  menuOpenRef.current = menuOpen;
+  previewSizeRef.current = previewSize;
+  lockPositionRef.current = config.settings.lockPosition;
+
+  const stopUserDragTracking = () => {
+    userDraggingRef.current = false;
+    if (dragResetTimerRef.current !== null) {
+      window.clearTimeout(dragResetTimerRef.current);
+      dragResetTimerRef.current = null;
+    }
+  };
+
+  const startNativeDragging = () => {
+    if (lockPositionRef.current) return;
+    expectedProgrammaticPositionRef.current = null;
+    if (moveTimerRef.current !== null) {
+      window.clearTimeout(moveTimerRef.current);
+      moveTimerRef.current = null;
+    }
+    stopUserDragTracking();
+    userDraggingRef.current = true;
+    dragResetTimerRef.current = window.setTimeout(() => {
+      userDraggingRef.current = false;
+      dragResetTimerRef.current = null;
+    }, 5000);
+    void getCurrentWindow().startDragging().catch(() => {
+      stopUserDragTracking();
+    });
+  };
+
+  const setManagedDesktopPetWindowBounds = (bounds: DesktopPetWindowRect) => {
+    // SetWindowPos emits onMoved too; never persist menu geometry as a user drag.
+    stopUserDragTracking();
+    expectedProgrammaticPositionRef.current = { x: bounds.x, y: bounds.y };
+    return setDesktopPetWindowBounds(bounds);
+  };
+
   if (!menuWindowTaskRef.current) {
     menuWindowTaskRef.current = createLatestAsyncTaskRunner<DesktopPetMenuWindowRequest>(
       async (request, context) => {
@@ -289,6 +353,7 @@ export default function DesktopPetApp() {
                   height: size.height,
                 },
                 scaleFactor,
+                petScale: request.petScale,
                 workArea: monitor
                   ? {
                       x: monitor.workArea.position.x,
@@ -311,7 +376,7 @@ export default function DesktopPetApp() {
             if (!context.isLatest()) return;
 
             setMenuGeometry(geometry);
-            await setDesktopPetWindowBounds({
+            await setManagedDesktopPetWindowBounds({
               x: geometry.x,
               y: geometry.y,
               width: geometry.physicalWidth,
@@ -320,7 +385,7 @@ export default function DesktopPetApp() {
           } catch (error) {
             if (context.isLatest()) {
               if (collapsed) {
-                await setDesktopPetWindowBounds(collapsed.bounds).catch(() => {});
+                await setManagedDesktopPetWindowBounds(collapsed.bounds).catch(() => {});
               }
               collapsedWindowGeometryRef.current = null;
               setMenuGeometry(null);
@@ -340,10 +405,14 @@ export default function DesktopPetApp() {
           return;
         }
 
-        await setDesktopPetWindowBounds(collapsed.bounds);
+        await setManagedDesktopPetWindowBounds(collapsed.bounds);
         if (!context.isLatest()) return;
         collapsedWindowGeometryRef.current = null;
         setMenuGeometry(null);
+        if (pendingDragAfterMenuCloseRef.current) {
+          pendingDragAfterMenuCloseRef.current = false;
+          startNativeDragging();
+        }
       },
       (error) => {
         logWarn("Failed to resize desktop pet menu window", error);
@@ -361,7 +430,13 @@ export default function DesktopPetApp() {
     document.addEventListener("visibilitychange", handleVisibilityChange);
     let disposed = false;
     const unlistenConfig = listen<DesktopPetConfigPayload>(DESKTOP_PET_CONFIG_EVENT, (event) => {
-      if (!disposed) setConfig(event.payload);
+      if (!disposed) {
+        setConfig(event.payload);
+        if (!sizeAdjustingRef.current) {
+          previewSizeRef.current = null;
+          setPreviewSize(null);
+        }
+      }
     });
     const unlistenSnapshot = listen<DesktopPetSnapshot>(DESKTOP_PET_SNAPSHOT_EVENT, (event) => {
       if (!disposed) {
@@ -373,13 +448,20 @@ export default function DesktopPetApp() {
     });
     const unlistenCloseMenu = listen(DESKTOP_PET_CLOSE_MENU_EVENT, () => {
       if (!disposed) {
-        setMenuOpen(false);
-        setTargetMode("open");
-        setSelectedPlatform(null);
+        closeMenuRef.current(true);
       }
     });
     const appWindow = getCurrentWindow();
     const unlistenMoved = appWindow.onMoved(({ payload }) => {
+      const expected = expectedProgrammaticPositionRef.current;
+      if (
+        expected
+        && Math.abs(payload.x - expected.x) <= 1
+        && Math.abs(payload.y - expected.y) <= 1
+      ) {
+        expectedProgrammaticPositionRef.current = null;
+        return;
+      }
       if (!userDraggingRef.current) return;
       if (moveTimerRef.current !== null) window.clearTimeout(moveTimerRef.current);
       moveTimerRef.current = window.setTimeout(() => {
@@ -397,6 +479,9 @@ export default function DesktopPetApp() {
       disposed = true;
       if (moveTimerRef.current !== null) window.clearTimeout(moveTimerRef.current);
       if (dragResetTimerRef.current !== null) window.clearTimeout(dragResetTimerRef.current);
+      if (hoverOpenTimerRef.current !== null) window.clearTimeout(hoverOpenTimerRef.current);
+      if (hoverCloseTimerRef.current !== null) window.clearTimeout(hoverCloseTimerRef.current);
+      menuWindowTaskRef.current?.dispose();
       document.removeEventListener("visibilitychange", handleVisibilityChange);
       void unlistenConfig.then((unlisten) => unlisten());
       void unlistenSnapshot.then((unlisten) => unlisten());
@@ -408,18 +493,17 @@ export default function DesktopPetApp() {
   useEffect(() => {
     menuWindowTaskRef.current?.schedule({
       open: menuOpen,
+      petScale,
       secondaryItemCount,
       secondaryHeaderHeight,
     });
-  }, [menuOpen, secondaryHeaderHeight, secondaryItemCount]);
+  }, [menuOpen, petScale, secondaryHeaderHeight, secondaryItemCount]);
 
   useEffect(() => {
     if (!menuOpen) return;
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
-        setMenuOpen(false);
-        setTargetMode("open");
-        setSelectedPlatform(null);
+        closeMenuRef.current(true);
       }
     };
     window.addEventListener("keydown", handleKeyDown);
@@ -428,9 +512,7 @@ export default function DesktopPetApp() {
 
   useEffect(() => {
     if (!config.settings.enabled) {
-      setMenuOpen(false);
-      setTargetMode("open");
-      setSelectedPlatform(null);
+      closeMenuRef.current(true);
     }
   }, [config.settings.enabled]);
 
@@ -494,10 +576,10 @@ export default function DesktopPetApp() {
   const runningDetail = snapshot.runningCount > 1
     ? `${snapshot.runningCount} ${config.labels.runningCount}`
     : "";
-  const petScale = desktopPetScale(config.settings.size);
   const stageSize = Math.round(144 * petScale);
   const renderingActive = config.visible && documentVisible;
   const rootStyle = {
+    "--pet-scale": petScale,
     "--pet-stage-size": `${stageSize}px`,
     "--pet-cat-width": `${Math.round(132 * petScale)}px`,
     "--pet-cat-height": `${Math.round(96 * petScale)}px`,
@@ -514,29 +596,134 @@ export default function DesktopPetApp() {
       : {}),
   } as CSSProperties;
 
-  const handlePointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (event.button !== 0 || config.settings.lockPosition || menuOpen) return;
-    const target = event.target as HTMLElement;
-    if (target.closest("button")) return;
-    userDraggingRef.current = true;
-    if (dragResetTimerRef.current !== null) window.clearTimeout(dragResetTimerRef.current);
-    dragResetTimerRef.current = window.setTimeout(() => {
-      userDraggingRef.current = false;
-      dragResetTimerRef.current = null;
-    }, 5000);
-    void getCurrentWindow().startDragging().catch(() => {
-      userDraggingRef.current = false;
-      if (dragResetTimerRef.current !== null) {
-        window.clearTimeout(dragResetTimerRef.current);
-        dragResetTimerRef.current = null;
-      }
-    });
+  const clearHoverOpenTimer = () => {
+    if (hoverOpenTimerRef.current === null) return;
+    window.clearTimeout(hoverOpenTimerRef.current);
+    hoverOpenTimerRef.current = null;
   };
 
-  const closeMenu = () => {
+  const clearHoverCloseTimer = () => {
+    if (hoverCloseTimerRef.current === null) return;
+    window.clearTimeout(hoverCloseTimerRef.current);
+    hoverCloseTimerRef.current = null;
+  };
+
+  const commitSizePreview = () => {
+    const size = previewSizeRef.current;
+    const shouldCloseAfterAdjustment = closeAfterSizeAdjustmentRef.current;
+    sizeAdjustingRef.current = false;
+    closeAfterSizeAdjustmentRef.current = false;
+    if (size !== null) {
+      const collapsed = collapsedWindowGeometryRef.current;
+      previewSizeRef.current = null;
+      setPreviewSize(null);
+      setConfig((current) => ({
+        ...current,
+        settings: { ...current.settings, size },
+      }));
+      if (collapsed) {
+        void emitTo("main", DESKTOP_PET_SIZE_CHANGE_EVENT, {
+          size,
+          x: collapsed.bounds.x,
+          y: collapsed.bounds.y,
+        }).catch((err) => logWarn("Failed to persist desktop pet size", err));
+      }
+    }
+    if (shouldCloseAfterAdjustment && menuOpenRef.current) {
+      clearHoverCloseTimer();
+      hoverCloseTimerRef.current = window.setTimeout(() => {
+        hoverCloseTimerRef.current = null;
+        closeMenuRef.current(false);
+      }, DESKTOP_PET_HOVER_CLOSE_DELAY_MS);
+    }
+  };
+
+  const closeMenu = (suppressHover = true) => {
+    clearHoverOpenTimer();
+    clearHoverCloseTimer();
+    closeAfterSizeAdjustmentRef.current = false;
+    commitSizePreview();
+    if (suppressHover) hoverSuppressedUntilLeaveRef.current = true;
     setMenuOpen(false);
     setTargetMode("open");
     setSelectedPlatform(null);
+  };
+  closeMenuRef.current = closeMenu;
+
+  const scheduleHoverOpen = () => {
+    clearHoverCloseTimer();
+    if (
+      hoverSuppressedUntilLeaveRef.current
+      || menuOpenRef.current
+      || userDraggingRef.current
+      || sizeAdjustingRef.current
+    ) {
+      return;
+    }
+    clearHoverOpenTimer();
+    hoverOpenTimerRef.current = window.setTimeout(() => {
+      hoverOpenTimerRef.current = null;
+      if (
+        hoverSuppressedUntilLeaveRef.current
+        || menuOpenRef.current
+        || userDraggingRef.current
+        || sizeAdjustingRef.current
+      ) {
+        return;
+      }
+      setTargetMode("open");
+      setSelectedPlatform(null);
+      setMenuOpen(true);
+    }, DESKTOP_PET_HOVER_OPEN_DELAY_MS);
+  };
+
+  const scheduleHoverClose = () => {
+    hoverSuppressedUntilLeaveRef.current = false;
+    clearHoverOpenTimer();
+    if (sizeAdjustingRef.current) {
+      closeAfterSizeAdjustmentRef.current = true;
+      return;
+    }
+    if (!menuOpenRef.current) return;
+    clearHoverCloseTimer();
+    hoverCloseTimerRef.current = window.setTimeout(() => {
+      hoverCloseTimerRef.current = null;
+      closeMenuRef.current(false);
+    }, DESKTOP_PET_HOVER_CLOSE_DELAY_MS);
+  };
+
+  const handleSizePreview = (value: number) => {
+    const size = normalizeDesktopPetSizePercent(value, effectiveSize);
+    const nextScale = desktopPetScale(size);
+    const collapsed = collapsedWindowGeometryRef.current;
+    if (collapsed && collapsed.petScale !== nextScale) {
+      collapsedWindowGeometryRef.current = {
+        ...collapsed,
+        bounds: resizeDesktopPetCollapsedWindowBounds(
+          collapsed.bounds,
+          collapsed.scaleFactor,
+          nextScale,
+          collapsed.workArea
+        ),
+        petScale: nextScale,
+      };
+    }
+    previewSizeRef.current = size;
+    setPreviewSize(size);
+  };
+
+  const handlePointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0 || config.settings.lockPosition) return;
+    const target = event.target as HTMLElement;
+    if (target.closest("button, input, [data-pet-interactive]")) return;
+    clearHoverOpenTimer();
+    clearHoverCloseTimer();
+    if (menuOpen) {
+      pendingDragAfterMenuCloseRef.current = true;
+      closeMenu(true);
+      return;
+    }
+    startNativeDragging();
   };
 
   const openTarget = (target?: DesktopPetTarget) => {
@@ -590,16 +777,22 @@ export default function DesktopPetApp() {
       data-menu-vertical={menuGeometry?.verticalPlacement}
       data-rendering-active={renderingActive ? "true" : "false"}
       style={rootStyle}
+      onPointerEnter={clearHoverCloseTimer}
+      onPointerLeave={scheduleHoverClose}
       onPointerDown={handlePointerDown}
       onDoubleClick={(event) => {
-        if ((event.target as HTMLElement).closest("button")) return;
+        if ((event.target as HTMLElement).closest("button, input, [data-pet-interactive]")) return;
+        clearHoverOpenTimer();
         openTarget();
       }}
       onContextMenu={(event) => {
         event.preventDefault();
+        clearHoverOpenTimer();
+        clearHoverCloseTimer();
         if (menuOpen) {
-          closeMenu();
+          closeMenu(true);
         } else {
+          hoverSuppressedUntilLeaveRef.current = false;
           setTargetMode("open");
           setSelectedPlatform(null);
           setMenuOpen(true);
@@ -616,7 +809,14 @@ export default function DesktopPetApp() {
           </section>
         ) : null}
 
-        <div className="desktop-pet-stage" title={moodLabel(config, displayMood)}>
+        <div
+          className="desktop-pet-stage"
+          title={moodLabel(config, displayMood)}
+          onPointerEnter={scheduleHoverOpen}
+          onPointerLeave={() => {
+            if (!menuOpenRef.current) clearHoverOpenTimer();
+          }}
+        >
           {installedPet ? (
             <PetArtwork
               pet={installedPet}
@@ -808,6 +1008,44 @@ export default function DesktopPetApp() {
               <AppWindow size={14} aria-hidden="true" />
               <span>{config.labels.openMain}</span>
             </button>
+            <div
+              className="desktop-pet-size-control"
+              role="group"
+              aria-label={config.labels.size}
+              data-pet-interactive
+              onPointerEnter={clearHoverCloseTimer}
+            >
+              <div className="desktop-pet-size-control-header">
+                <Maximize2 size={13} aria-hidden="true" />
+                <span>{config.labels.size}</span>
+                <output>{effectiveSize}%</output>
+              </div>
+              <input
+                type="range"
+                min={DESKTOP_PET_SIZE_MIN_PERCENT}
+                max={DESKTOP_PET_SIZE_MAX_PERCENT}
+                step={DESKTOP_PET_SIZE_STEP_PERCENT}
+                value={effectiveSize}
+                aria-label={config.labels.size}
+                aria-valuetext={`${effectiveSize}%`}
+                onPointerDown={(event) => {
+                  event.stopPropagation();
+                  sizeAdjustingRef.current = true;
+                  closeAfterSizeAdjustmentRef.current = false;
+                  clearHoverCloseTimer();
+                  event.currentTarget.setPointerCapture(event.pointerId);
+                }}
+                onPointerUp={(event) => {
+                  event.stopPropagation();
+                  commitSizePreview();
+                }}
+                onPointerCancel={commitSizePreview}
+                onLostPointerCapture={commitSizePreview}
+                onChange={(event) => handleSizePreview(Number(event.currentTarget.value))}
+                onKeyUp={commitSizePreview}
+                onBlur={commitSizePreview}
+              />
+            </div>
             <button
               type="button"
               role="menuitem"

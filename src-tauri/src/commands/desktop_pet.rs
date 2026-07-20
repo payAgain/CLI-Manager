@@ -18,6 +18,8 @@ const PET_SCHEMA_VERSION: u32 = 1;
 const PET_WINDOW_LABEL: &str = "desktop-pet";
 const PET_WINDOW_BASE_WIDTH: f64 = 190.0;
 const PET_WINDOW_BASE_HEIGHT: f64 = 210.0;
+const PET_WINDOW_MIN_SCALE: f64 = 0.4;
+const PET_WINDOW_MAX_SCALE: f64 = 1.5;
 const PET_WINDOW_MARGIN: i32 = 24;
 const MAX_CATALOG_ITEMS: usize = 200;
 const MAX_ARCHIVE_BYTES: usize = 25 * 1024 * 1024;
@@ -1139,7 +1141,7 @@ pub fn desktop_pet_uninstall(pet_id: String) -> Result<(), String> {
 }
 
 fn window_size(scale: f64) -> (f64, f64) {
-    let scale = scale.clamp(0.75, 1.5);
+    let scale = scale.clamp(PET_WINDOW_MIN_SCALE, PET_WINDOW_MAX_SCALE);
     (
         PET_WINDOW_BASE_WIDTH * scale,
         PET_WINDOW_BASE_HEIGHT * scale,
@@ -1334,6 +1336,15 @@ mod tests {
         bytes.extend_from_slice(&(payload.len() as u32).to_le_bytes());
         bytes.extend_from_slice(&payload);
         bytes
+    }
+
+    #[test]
+    fn desktop_pet_window_size_supports_the_full_user_scale_range() {
+        assert_eq!(window_size(0.1), (76.0, 84.0));
+        assert_eq!(window_size(0.4), (76.0, 84.0));
+        assert_eq!(window_size(1.0), (190.0, 210.0));
+        assert_eq!(window_size(1.5), (285.0, 315.0));
+        assert_eq!(window_size(2.0), (285.0, 315.0));
     }
 
     fn fake_png(width: u32, height: u32) -> Vec<u8> {
