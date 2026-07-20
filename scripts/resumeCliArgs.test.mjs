@@ -72,6 +72,8 @@ test("strips supported Codex and Claude resume fragments", () => {
     `resume --no-alt-screen ${OLD_ID}`,
     "resume --last",
     "resume --no-alt-screen --last",
+    "resume --all",
+    `resume --include-non-interactive ${OLD_ID}`,
     `--resume ${OLD_ID}`,
     `--resume=${OLD_ID}`,
     "--continue",
@@ -95,6 +97,31 @@ test("keeps ordinary CLI arguments around a removed resume fragment", () => {
     stripResumeCliArgs(`--model "o 3" --resume ${OLD_ID} --permission-mode plan`),
     '--model "o 3" --permission-mode plan',
   );
+});
+
+test("parses Codex resume options before the old session id", () => {
+  const cases = [
+    [`resume --model o3 ${OLD_ID}`, "--model o3"],
+    [
+      `resume --sandbox workspace-write ${OLD_ID}`,
+      "--sandbox workspace-write",
+    ],
+    ["resume --all", ""],
+    [`resume --include-non-interactive ${OLD_ID}`, ""],
+    [`resume -c model=o3 ${OLD_ID}`, "-c model=o3"],
+    [
+      `resume --profile provider-a --enable feature-x ${OLD_ID} "old prompt"`,
+      "--profile provider-a --enable feature-x",
+    ],
+    [
+      `resume ${OLD_ID} "old prompt" --model o3 --search`,
+      "--model o3 --search",
+    ],
+  ];
+
+  for (const [cliArgs, expected] of cases) {
+    assert.equal(stripResumeCliArgs(cliArgs), expected, cliArgs);
+  }
 });
 
 test("remote and history resume command construction never appends a second resume target", () => {

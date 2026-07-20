@@ -44,6 +44,82 @@ function isOptionToken(token: CliArgToken | undefined): boolean {
   return Boolean(token?.raw.startsWith("-"));
 }
 
+const CODEX_RESUME_SELECTION_OPTIONS = new Set([
+  "--all",
+  "--include-non-interactive",
+  "--last",
+  "--no-alt-screen",
+]);
+
+const CODEX_RESUME_VALUE_OPTIONS = new Set([
+  "-a",
+  "--add-dir",
+  "--ask-for-approval",
+  "-c",
+  "--cd",
+  "--config",
+  "--disable",
+  "--enable",
+  "-i",
+  "--image",
+  "--local-provider",
+  "-m",
+  "--model",
+  "-p",
+  "--profile",
+  "--remote",
+  "--remote-auth-token-env",
+  "-s",
+  "--sandbox",
+]);
+
+function optionName(token: CliArgToken): string {
+  const equalsIndex = token.normalized.indexOf("=");
+  return equalsIndex < 0
+    ? token.normalized
+    : token.normalized.slice(0, equalsIndex);
+}
+
+function takesSeparateOptionValue(token: CliArgToken): boolean {
+  if (token.raw.includes("=")) return false;
+  if (
+    token.raw.startsWith("-") &&
+    !token.raw.startsWith("--") &&
+    token.raw.length > 2
+  ) {
+    return false;
+  }
+  return CODEX_RESUME_VALUE_OPTIONS.has(optionName(token));
+}
+
+function stripCodexResumeTail(tokens: CliArgToken[], start: number): string[] {
+  const kept: string[] = [];
+
+  for (let index = start; index < tokens.length; index += 1) {
+    const token = tokens[index];
+    if (token.raw === "--") {
+      continue;
+    }
+
+    const name = optionName(token);
+    if (CODEX_RESUME_SELECTION_OPTIONS.has(name)) {
+      continue;
+    }
+    if (!isOptionToken(token)) {
+      // Positional arguments after resume are the old Session ID and prompt.
+      continue;
+    }
+
+    kept.push(token.raw);
+    if (takesSeparateOptionValue(token) && tokens[index + 1]) {
+      index += 1;
+      kept.push(tokens[index].raw);
+    }
+  }
+
+  return kept;
+}
+
 /**
  * Remove session-selection fragments from project CLI arguments before a
  * fresh resume command is constructed. Saved-session projects intentionally
@@ -70,10 +146,8 @@ export function stripResumeCliArgs(cliArgs: string | null | undefined): string {
     }
 
     if (token.normalized === "resume") {
-      if (tokens[index + 1]?.normalized === "--no-alt-screen") index += 1;
-      const target = tokens[index + 1];
-      if (target?.normalized === "--last" || !isOptionToken(target)) index += 1;
-      continue;
+      kept.push(...stripCodexResumeTail(tokens, index + 1));
+      break;
     }
 
     kept.push(token.raw);
