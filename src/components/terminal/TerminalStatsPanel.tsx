@@ -7,9 +7,11 @@ import { createPatch } from "diff";
 import type { HistoryFileChangeSummary, HistorySessionDetail, HistorySource, WorktreeRecord } from "../../lib/types";
 import {
   fetchLatestProjectSessionDetail,
+  fetchRemoteLatestProjectSessionDetail,
   fetchTodayProjectStatsMerged,
   type TodayProjectStats,
 } from "../../stores/historyStore";
+import { buildSshAgentHistoryContext, type SshAgentHistoryContext } from "../../lib/sshAgentHistory";
 import { useProjectStore } from "../../stores/projectStore";
 import { useTerminalStore } from "../../stores/terminalStore";
 import { useSettingsStore, type TerminalStatsCardKey } from "../../stores/settingsStore";
@@ -261,7 +263,7 @@ function useCurrentGitBranch(
   return branch;
 }
 
-function SessionInfoCard({ session, statsSession, projectName, projectPath, currentBranch, shell, sessionId, worktree, onSaveToSidebar, canSaveToSidebar }: {
+function SessionInfoCard({ session, statsSession, projectName, projectPath, currentBranch, shell, sessionId, worktree, onSaveToSidebar, canSaveToSidebar, canOpenFolder = true }: {
   session: HistorySessionDetail;
   statsSession: HistorySessionDetail | null;
   projectName: string;
@@ -272,6 +274,7 @@ function SessionInfoCard({ session, statsSession, projectName, projectPath, curr
   worktree: WorktreeRecord | null;
   onSaveToSidebar?: () => void;
   canSaveToSidebar?: boolean;
+  canOpenFolder?: boolean;
 }) {
   const { t } = useI18n();
   // 统计数据（消息/时长/角色分布）只认 hook 绑定的会话，未绑定时置空；
@@ -295,10 +298,11 @@ function SessionInfoCard({ session, statsSession, projectName, projectPath, curr
 
   // 双击打开项目文件夹
   const handleOpenFolder = useCallback(() => {
+    if (!canOpenFolder) return;
     void invoke("open_folder_in_explorer", { path: projectPath }).catch((err) => {
       console.error("Failed to open folder:", err);
     });
-  }, [projectPath]);
+  }, [canOpenFolder, projectPath]);
 
   const handleCopySessionId = useCallback(() => {
     void navigator.clipboard
@@ -322,8 +326,8 @@ function SessionInfoCard({ session, statsSession, projectName, projectPath, curr
         label={t("termStats.path")}
         value={truncatePath(projectPath, 3)}
         color={TERM.dim}
-        title={`${projectPath}\n\n${t("termStats.openFolderHint")}`}
-        onDoubleClick={handleOpenFolder}
+        title={canOpenFolder ? `${projectPath}\n\n${t("termStats.openFolderHint")}` : projectPath}
+        onDoubleClick={canOpenFolder ? handleOpenFolder : undefined}
       />
       {worktree && (
         <Row
@@ -426,6 +430,7 @@ export function TerminalStatsPanel({ activeSessionId, open, visible = true, embe
   const [diffFileChange, setDiffFileChange] = useState<HistoryFileChangeSummary | null>(null);
   const latestRef = useRef<HistorySessionDetail | null>(null);
   const lastPathRef = useRef<string | null>(null);
+  const remoteHistoryContextRef = useRef<SshAgentHistoryContext | null>(null);
 
   const terminalSession = useMemo(
     () => terminalSessions.find((session) => session.id === activeSessionId) ?? null,
@@ -441,9 +446,10 @@ export function TerminalStatsPanel({ activeSessionId, open, visible = true, embe
   const activeWorktree = terminalSession?.worktreeId
     ? worktrees.find((worktree) => worktree.id === terminalSession.worktreeId) ?? null
     : null;
+  const isSshProject = project?.environment_type === "ssh";
   const terminalProjectPath = resolveTerminalProjectPath(
     terminalSession?.cwd,
-    project?.path,
+    isSshProject ? project?.remote_path : project?.path,
     "unknown"
   );
   const lookupProjectPath = activeWorktree?.path || terminalProjectPath;
@@ -521,12 +527,31 @@ export function TerminalStatsPanel({ activeSessionId, open, visible = true, embe
       const prev = current
         ? { filePath: current.file_path, updatedAt: current.updated_at }
         : undefined;
-      const result = await fetchLatestProjectSessionDetail(
-        lookupProjectPath,
-        prev,
-        sourceFilter,
-        terminalSession?.cliSessionId
-      );
+      let result: HistorySessionDetail | "unchanged" | null;
+      try {
+        if (isSshProject && project) {
+          if (remoteHistoryContextRef.current?.launch.projectId !== project.id) {
+            remoteHistoryContextRef.current = await buildSshAgentHistoryContext(project);
+          }
+          const remote = await fetchRemoteLatestProjectSessionDetail(
+            remoteHistoryContextRef.current,
+            prev,
+            terminalSession?.cliSessionId,
+          );
+          remoteHistoryContextRef.current = remote.context;
+          result = remote.result;
+        } else {
+          remoteHistoryContextRef.current = null;
+          result = await fetchLatestProjectSessionDetail(
+            lookupProjectPath,
+            prev,
+            sourceFilter,
+            terminalSession?.cliSessionId
+          );
+        }
+      } catch {
+        result = prev ? "unchanged" : null;
+      }
       if (cancelled) return;
       if (result !== "unchanged") {
         latestRef.current = result;
@@ -547,7 +572,7 @@ export function TerminalStatsPanel({ activeSessionId, open, visible = true, embe
     };
     // activeSessionId 入依赖：切换 Tab 时立即重新核对最近会话（unchanged 时开销仅一次列表查询）
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeSessionId, displayProjectPath, lookupProjectPath, panelActive, pollTrigger, project?.path, refreshSeq, sourceFilter, terminalSession?.cliSessionId, terminalSession?.cwd, terminalSession?.projectId]);
+  }, [activeSessionId, displayProjectPath, isSshProject, lookupProjectPath, panelActive, pollTrigger, project, project?.path, refreshSeq, sourceFilter, terminalSession?.cliSessionId, terminalSession?.cwd, terminalSession?.projectId]);
 
   // 今日项目用量：会话数据变化时同步刷新（与终端 CLI 来源保持一致）
   // Issue #137：聚合主项目 + worktree 路径，主仓库 Tab 与 worktree Tab 看到同一套「今日项目」合计。
@@ -570,7 +595,7 @@ export function TerminalStatsPanel({ activeSessionId, open, visible = true, embe
     return () => {
       cancelled = true;
     };
-  }, [panelActive, sourceFilter, todayUsageScope]);
+  }, [isSshProject, latestSession?.updated_at, panelActive, sourceFilter, todayUsageScope]);
 
   // 空闲时数据轮询返回 unchanged 不会触发重渲染，需独立 tick 让头部相对时间文案随时间走字
   useEffect(() => {
@@ -600,7 +625,7 @@ export function TerminalStatsPanel({ activeSessionId, open, visible = true, embe
   // A6: 通过 pollTrigger 与会话数据轮询共用 10s 节拍
   const currentBranch = useCurrentGitBranch(
     lookupProjectPath,
-    panelActive,
+    panelActive && !isSshProject,
     latestSession?.branch ?? null,
     pollTrigger
   );
@@ -661,6 +686,7 @@ export function TerminalStatsPanel({ activeSessionId, open, visible = true, embe
             worktree={activeWorktree}
             onSaveToSidebar={hasBoundCliSessionId ? handleSaveToSidebar : undefined}
             canSaveToSidebar={canSaveToSidebar}
+            canOpenFolder={!isSshProject}
           />
         );
       case "tokenUsage":

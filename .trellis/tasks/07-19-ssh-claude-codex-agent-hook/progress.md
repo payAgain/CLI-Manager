@@ -196,10 +196,16 @@ Final evidence: Agent tests `51 passed`; Agent Clippy with `-D warnings`; focuse
 
 ### S10 Stats, docs, security and release verification
 
-- [ ] Integrate realtime Tab stats and historical usage with cache freshness/offline states.
-- [ ] Verify provider isolation, connection/resource targets, security matrix, and zh-CN/en-US UI.
-- [ ] Update README, `[TEMP]` changelog, feature inventory, code specs, and final test evidence.
+- [x] Integrate realtime SSH Tab session stats through a reused Agent history context and remote detail RPC; historical usage reuses the shared remote catalog stats path with stale/offline fallback.
+- [x] Verify provider isolation, connection/resource targets, security matrix, and zh-CN/en-US UI paths; SSH stats no longer call local Git or Explorer APIs.
+- [x] Update README, `[TEMP]` changelog, feature inventory, Agent contracts, and test evidence.
 - [ ] Run final change-scope audit and commit/archive the single task.
+
+#### S10 Root-Cause And Discovery Record
+
+- Root cause: terminal statistics used local history, local Git branch, and local Explorer assumptions even when the active session cwd was remote. The fix routes SSH session detail through one reusable Agent history context, keeps catalog stats as the offline source, and disables local-only branch/folder operations.
+- Discovery: TerminalStatsPanel session/detail/today-usage/branch hooks; historyStore remote sync/detail/catalog stats; Git store/provider capability routing; shared file/Git panels; protocol version/capability negotiation; bilingual i18n and release docs.
+- Review: confirmed remote path values remain opaque references, stats refreshes reuse the same bridge consumer, stale detail preserves the last snapshot on failure, and local/WSL code paths remain unchanged.
 
 ## Validation Gates
 

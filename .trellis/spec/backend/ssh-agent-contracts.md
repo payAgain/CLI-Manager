@@ -188,6 +188,7 @@ Frames use a four-byte big-endian length followed by UTF-8 JSON. The maximum fra
 - Good: the desktop disconnects, events spool under the bound Host/client namespace, and reconnect replays each event at most once before ACK deletion.
 - Good: four Host bridges are connected, a fifth waits without starting SSH, and closing one Host releases a permit for the waiting Host.
 - Good: an SSH project file panel reuses its Host bridge, lists only canonical-root descendants, skips symlinks, and reads bounded UTF-8 text or supported image data URLs.
+- Good: an SSH terminal stats panel reuses one history consumer for incremental detail and catalog usage facts, while stale/offline failures preserve the last bounded snapshot without local path fallback.
 - Bad: pass a remote absolute path to local `file_*`/Git commands, expose create/save/delete/move/external opener actions, or traverse more than the Agent file quotas.
 - Good: a replaced bridge briefly receives `bridge_already_active`, backs off, then takes ownership after the old Agent process removes its socket.
 - Base: a missing or malformed discovery record is reconstructed only after an explicit install; no page-open or probe action changes remote files.

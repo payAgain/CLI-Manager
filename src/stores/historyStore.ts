@@ -923,6 +923,41 @@ export async function fetchTodayProjectStatsMerged(
   return fetchTodayProjectStats(projectKey, source, null, uniquePaths);
 }
 
+export async function fetchRemoteLatestProjectSessionDetail(
+  context: SshAgentHistoryContext,
+  prev?: { filePath: string; updatedAt: number },
+  cliSessionId?: string | null,
+): Promise<{ context: SshAgentHistoryContext; result: HistorySessionDetail | "unchanged" | null }> {
+  const synced = await syncRemoteHistoryContext(context, { limit: SESSION_PAGE_FETCH_LIMIT });
+  if (!synced.sourceInstanceId) return { context: synced, result: null };
+  const summariesRaw = await invoke<unknown[]>("history_remote_list_cached", {
+    sourceInstanceId: synced.sourceInstanceId,
+    projectPath: synced.projectPaths[0] ?? null,
+    query: null,
+    limit: SESSION_PAGE_FETCH_LIMIT,
+    offset: 0,
+  });
+  const summaries = (summariesRaw ?? []).map((item) => normalizeSummary(item));
+  const requestedSessionId = cliSessionId?.trim() || null;
+  const summary = requestedSessionId
+    ? summaries.find((item) => item.session_id === requestedSessionId) ?? null
+    : summaries[0] ?? null;
+  if (!summary) return { context: synced, result: null };
+  if (prev && summary.file_path === prev.filePath && summary.updated_at === prev.updatedAt) {
+    return { context: synced, result: "unchanged" };
+  }
+  const detailRaw = await invoke<unknown>("history_remote_get_session", {
+    consumerId: synced.consumerId,
+    sshLaunch: synced.launch,
+    source: synced.source,
+    configuredConfigRoot: synced.configuredConfigRoot,
+    projectPaths: synced.projectPaths,
+    sourceInstanceId: synced.sourceInstanceId,
+    sourceSessionId: summary.session_id,
+  });
+  return { context: synced, result: normalizeDetail(detailRaw) };
+}
+
 function getHistoryPathCacheKey(): string {
   const { claudeConfigDir, codexConfigDir } = getHistoryPathArgsSync();
   return `${claudeConfigDir ?? "__default__"}|${codexConfigDir ?? "__default__"}`;

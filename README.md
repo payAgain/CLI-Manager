@@ -225,7 +225,7 @@ When developing across multiple projects, you may run into these problems:
 - **Read-only remote files and Git** - browse a confined lazy tree, search names or text, preview UTF-8 text and images, and inspect remote Git status, Diff, branches, and upstream freshness without passing remote paths to local filesystem or Git APIs
 - **Credential safety** - passwords use the operating system credential store; sync and export never include passwords, credentials, or private-key paths
 
-> Remote Hook status, read-only remote history, same-source remote resume, and the read-only file panel are available for Claude Code and Codex. Remote file writes, local Explorer/Finder actions, aggregate history analytics, Git panels, Worktree tools, external terminal launch, and remote resource monitoring are not available yet. SSH projects never scan or switch remote providers.
+> Remote Hook status, read-only remote history/resume, file and Git panels, realtime Tab stats, and catalog-backed usage analytics are available for Claude Code and Codex. Remote file/Git writes, local Explorer/Finder actions, Worktree tools, external terminal launch, and remote resource monitoring are not available. SSH projects never scan or switch remote providers.
 
 <p align="center">
 <img src="docs/img/ssh-settings.png" width="85%" alt="SSH host settings and connection diagnostics" />

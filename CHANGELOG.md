@@ -4,6 +4,7 @@
 
 ### SSH
 
+- SSH Claude/Codex 终端实时统计现复用同一 Agent history consumer 增量同步精确 session detail，并从现有远端 catalog 聚合今日项目用量；切换远端 Tab 不再调用本地 history、Git 分支或 Explorer API，断线时保留上次快照与缓存统计。
 - Agent bridge 协议升级到 `1.6`；SSH 项目文件面板新增只读远端浏览，通过复用 bridge 懒加载目录、搜索文件名或文本并预览 UTF-8 文本与图片；只读 Git 面板支持远端仓库、状态、Diff、分支和 upstream/ahead/behind/asOf。Agent 对路径、symlink、遍历、Diff 大小和 Git 外部扩展实施限制，UI/store 拒绝所有远程写入、网络、凭据、Worktree、外部 Explorer、external diff 与 textconv。
 - SSH Claude/Codex 项目现可在统一历史工作区按绑定项目读取远端会话：Agent 增量索引原生 JSONL，通过共享单写锁维护可重建派生索引；桌面端复用每主机 bridge，支持分页列表、全文搜索、按需详情/Diff、usage 摘要、删除 tombstone 与断线后的摘要缓存，不复制完整远端历史目录，也不把远端路径交给本地文件 API。
 - Agent bridge 协议升级到 `1.3`，详情使用 256 KiB payload 分块并保持 1 MiB frame 上限；桌面端校验 request ID、分块顺序、总数、聚合 64 MiB 上限和整次请求 deadline。远端来源身份稳定绑定 machine/user/source/config root，不随 Agent 重装变化。
