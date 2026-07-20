@@ -337,6 +337,28 @@ function ClaudeStatuslineEditor({
     setActiveLineIndex(targetLine);
   };
 
+  const warnCcSwitchSync = (next: StatuslineStatus) => {
+    if (next.ccSwitch && ["invalidDb", "unavailable", "syncFailed"].includes(next.ccSwitch.state)) {
+      toast.warning(t("settings.statusline.ccSwitchSyncWarning"), {
+        description: t("settings.statusline.ccSwitchSyncWarningDescription"),
+      });
+    }
+  };
+
+  const syncClaudeCommonConfigIfInstalled = async () => {
+    if (!status?.installed) return;
+    try {
+      const nextStatus = await invoke<StatuslineStatus>("statusline_sync_ccswitch", {
+        ccSwitchDbPath: ccSwitchDbPath ?? undefined,
+        refreshInterval: 10,
+      });
+      setStatus(nextStatus);
+      warnCcSwitchSync(nextStatus);
+    } catch (error) {
+      toast.warning(t("settings.statusline.ccSwitchSyncWarning"), { description: errorMessage(error) });
+    }
+  };
+
   const save = async () => {
     if (!settings) return;
     setWorking(true);
@@ -344,6 +366,7 @@ function ClaudeStatuslineEditor({
       if (!profiles.state) return;
       const saved = await profiles.save(profiles.state.activeProfileId, settings);
       applyProfileState(saved);
+      await syncClaudeCommonConfigIfInstalled();
       toast.success(t("settings.statusline.saved"));
     } catch (error) {
       toast.error(t("settings.statusline.saveFailed"), { description: errorMessage(error) });
@@ -370,11 +393,7 @@ function ClaudeStatuslineEditor({
         : await invoke<StatuslineStatus>("statusline_install", { refreshInterval: 10, ccSwitchDbPath: ccSwitchDbPath ?? undefined });
       setStatus(next);
       toast.success(t(status?.installed ? "settings.statusline.uninstalled" : "settings.statusline.installed"));
-      if (next.ccSwitch && ["invalidDb", "unavailable", "syncFailed"].includes(next.ccSwitch.state)) {
-        toast.warning(t("settings.statusline.ccSwitchSyncWarning"), {
-          description: t("settings.statusline.ccSwitchSyncWarningDescription"),
-        });
-      }
+      warnCcSwitchSync(next);
     } catch (error) {
       toast.error(t("settings.statusline.installFailed"), { description: errorMessage(error) });
     } finally { setWorking(false); }
@@ -416,12 +435,24 @@ function ClaudeStatuslineEditor({
           dirty={dirty}
           busy={working}
           onSave={save}
-          onCreate={async (name) => applyProfileState(await profiles.create(name, settings))}
-          onSwitch={async (profileId) => applyProfileState(await profiles.switchProfile(profileId))}
+          onCreate={async (name) => {
+            applyProfileState(await profiles.create(name, settings));
+            await syncClaudeCommonConfigIfInstalled();
+          }}
+          onSwitch={async (profileId) => {
+            applyProfileState(await profiles.switchProfile(profileId));
+            await syncClaudeCommonConfigIfInstalled();
+          }}
           onRename={async (profileId, name) => applyProfileState(await profiles.rename(profileId, name))}
-          onDuplicate={async (profileId, name) => applyProfileState(await profiles.duplicate(profileId, name))}
+          onDuplicate={async (profileId, name) => {
+            applyProfileState(await profiles.duplicate(profileId, name));
+            await syncClaudeCommonConfigIfInstalled();
+          }}
           onDelete={async (profileId) => applyProfileState(await profiles.remove(profileId))}
-          onCaptureExternal={async (name) => applyProfileState(await profiles.captureExternal(name))}
+          onCaptureExternal={async (name) => {
+            applyProfileState(await profiles.captureExternal(name));
+            await syncClaudeCommonConfigIfInstalled();
+          }}
         />
       </Card>
       <Card className="border border-border bg-surface-container-low" radius="lg" p="md">

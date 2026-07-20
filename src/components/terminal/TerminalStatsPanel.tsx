@@ -426,6 +426,7 @@ export function TerminalStatsPanel({ activeSessionId, open, visible = true, embe
   const [diffFileChange, setDiffFileChange] = useState<HistoryFileChangeSummary | null>(null);
   const latestRef = useRef<HistorySessionDetail | null>(null);
   const lastPathRef = useRef<string | null>(null);
+  const wasPanelActiveRef = useRef(false);
 
   const terminalSession = useMemo(
     () => terminalSessions.find((session) => session.id === activeSessionId) ?? null,
@@ -484,6 +485,18 @@ export function TerminalStatsPanel({ activeSessionId, open, visible = true, embe
     Boolean(terminalSession?.cliSessionId) &&
     latestSession?.session_id === terminalSession?.cliSessionId;
   const panelActive = open && visible;
+
+  // 首次打开侧栏时再触发一次刷新，避开面板激活与历史源初始化同帧完成导致的空态停留。
+  useEffect(() => {
+    if (!panelActive) {
+      wasPanelActiveRef.current = false;
+      return;
+    }
+    if (wasPanelActiveRef.current) return;
+    wasPanelActiveRef.current = true;
+    latestRef.current = null;
+    setRefreshSeq((prev) => prev + 1);
+  }, [panelActive]);
 
   // A6: 统一定时器调度 - 10s 主节拍同时触发会话数据轮询和 git 分支查询
   useEffect(() => {
