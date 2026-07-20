@@ -199,7 +199,7 @@ Final evidence: Agent tests `51 passed`; Agent Clippy with `-D warnings`; focuse
 - [x] Integrate realtime SSH Tab session stats through a reused Agent history context and remote detail RPC; historical usage reuses the shared remote catalog stats path with stale/offline fallback.
 - [x] Verify provider isolation, connection/resource targets, security matrix, and zh-CN/en-US UI paths; SSH stats no longer call local Git or Explorer APIs.
 - [x] Update README, `[TEMP]` changelog, feature inventory, Agent contracts, and test evidence.
-- [ ] Run final change-scope audit and commit/archive the single task.
+- [x] Run final change-scope audit and commit/archive the single task.
 
 #### S10 Root-Cause And Discovery Record
 
