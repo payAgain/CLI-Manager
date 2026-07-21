@@ -8421,8 +8421,11 @@ fn json_session_scan_result(
         .find_map(message_title_candidate);
     let model = messages
         .iter()
+        .rev()
         .filter_map(|message| message.model.clone())
         .find(|model| !is_synthetic_model(model));
+    // Pi/Grok 等 JSON 会话路径只解析消息行，会话级 usage 必须从消息 token 汇总。
+    let stats = session_stats_from_messages(&messages, model);
     (
         SessionSummaryScan {
             session_id: session_id
@@ -8434,7 +8437,7 @@ fn json_session_scan_result(
             first_message,
             branch: None,
         },
-        json_session_stats(model),
+        stats,
         if collect_messages {
             messages
         } else {
@@ -8443,12 +8446,97 @@ fn json_session_scan_result(
     )
 }
 
-fn json_session_stats(model: Option<String>) -> SessionStatsScan {
-    SessionStatsScan {
-        dominant_model: model.clone(),
-        current_model: model,
+fn session_stats_from_messages(
+    messages: &[HistoryMessage],
+    fallback_model: Option<String>,
+) -> SessionStatsScan {
+    let mut stats = SessionStatsScan {
+        dominant_model: fallback_model.clone(),
+        current_model: fallback_model.clone(),
         ..SessionStatsScan::default()
+    };
+    let mut model_hits: HashMap<String, usize> = HashMap::new();
+    let mut last_model = fallback_model;
+
+    for message in messages {
+        if let Some(model) = message
+            .model
+            .as_ref()
+            .filter(|model| !is_synthetic_model(model))
+        {
+            *model_hits.entry(model.clone()).or_insert(0) += 1;
+            last_model = Some(model.clone());
+        }
+
+        let usage = UsageTokenScan {
+            input_tokens: message.input_tokens.unwrap_or(0),
+            output_tokens: message.output_tokens.unwrap_or(0),
+            cache_read_tokens: message.cache_read_tokens.unwrap_or(0),
+            cache_creation_tokens: message.cache_creation_tokens.unwrap_or(0),
+            explicit_cost_usd: None,
+        };
+        if usage_total_tokens(usage) == 0 {
+            continue;
+        }
+
+        let attributed_model = message
+            .model
+            .clone()
+            .filter(|model| !is_synthetic_model(model))
+            .or_else(|| last_model.clone());
+        stats
+            .token_trend
+            .push(usage_trend_point(usage, attributed_model.clone()));
+
+        stats.input_tokens = stats.input_tokens.saturating_add(usage.input_tokens);
+        stats.output_tokens = stats.output_tokens.saturating_add(usage.output_tokens);
+        stats.cache_read_tokens = stats
+            .cache_read_tokens
+            .saturating_add(usage.cache_read_tokens);
+        stats.cache_creation_tokens = stats
+            .cache_creation_tokens
+            .saturating_add(usage.cache_creation_tokens);
+
+        let prompt_tokens = usage
+            .input_tokens
+            .saturating_add(usage.cache_read_tokens)
+            .saturating_add(usage.cache_creation_tokens);
+        if prompt_tokens > 0 {
+            stats.last_context_tokens = Some(prompt_tokens);
+        }
+
+        let cost = calculate_usage_cost(attributed_model.as_deref(), usage);
+        stats.total_cost_usd += cost.total_cost_usd;
+        stats.unpriced_tokens = stats.unpriced_tokens.saturating_add(cost.unpriced_tokens);
+
+        if let Some(model) = attributed_model {
+            let entry = stats.model_usage.entry(model).or_default();
+            entry.input_tokens = entry.input_tokens.saturating_add(usage.input_tokens);
+            entry.output_tokens = entry.output_tokens.saturating_add(usage.output_tokens);
+            entry.cache_read_tokens = entry
+                .cache_read_tokens
+                .saturating_add(usage.cache_read_tokens);
+            entry.cache_creation_tokens = entry
+                .cache_creation_tokens
+                .saturating_add(usage.cache_creation_tokens);
+            entry.total_cost_usd += cost.total_cost_usd;
+            entry.unpriced_tokens = entry.unpriced_tokens.saturating_add(cost.unpriced_tokens);
+        }
     }
+
+    if let Some(model) = model_hits
+        .into_iter()
+        .max_by(|(left_model, left_hits), (right_model, right_hits)| {
+            left_hits
+                .cmp(right_hits)
+                .then_with(|| right_model.cmp(left_model))
+        })
+        .map(|(model, _)| model)
+    {
+        stats.dominant_model = Some(model);
+    }
+    stats.current_model = last_model.or(stats.current_model);
+    stats
 }
 
 fn json_history_message(
@@ -10102,6 +10190,8 @@ fn extract_usage_tokens_from_value(value: &Value) -> UsageTokenScan {
         &[
             "input_tokens",
             "inputTokens",
+            // Pi Agent: message.usage.input / output / cacheRead / cacheWrite
+            "input",
             "prompt_tokens",
             "promptTokens",
             "input_token_count",
@@ -10109,11 +10199,12 @@ fn extract_usage_tokens_from_value(value: &Value) -> UsageTokenScan {
         ],
     )
     .unwrap_or(0);
-    let output = extract_u64_by_keys(
+    let mut output = extract_u64_by_keys(
         map,
         &[
             "output_tokens",
             "outputTokens",
+            "output",
             "completion_tokens",
             "completionTokens",
             "output_token_count",
@@ -10121,6 +10212,13 @@ fn extract_usage_tokens_from_value(value: &Value) -> UsageTokenScan {
         ],
     )
     .unwrap_or(0);
+    // Pi 把 reasoning 单独记账；归入 output，避免实时统计少计思考 token。
+    let reasoning = extract_u64_by_keys(
+        map,
+        &["reasoning", "reasoning_tokens", "reasoningTokens", "thinking_tokens"],
+    )
+    .unwrap_or(0);
+    output = output.saturating_add(reasoning);
     let cache_read = extract_u64_by_keys(
         map,
         &[
@@ -10128,6 +10226,7 @@ fn extract_usage_tokens_from_value(value: &Value) -> UsageTokenScan {
             "cacheReadTokens",
             "cache_read_input_tokens",
             "cacheReadInputTokens",
+            "cacheRead",
         ],
     )
     .unwrap_or(0);
@@ -10156,10 +10255,13 @@ fn extract_usage_tokens_from_value(value: &Value) -> UsageTokenScan {
             "cacheCreationTokens",
             "cache_creation_input_tokens",
             "cacheCreationInputTokens",
+            "cacheWrite",
+            "cache_write_tokens",
+            "cacheWriteTokens",
         ],
     )
     .unwrap_or(0);
-    let explicit_cost_usd = extract_f64_by_keys(
+    let mut explicit_cost_usd = extract_f64_by_keys(
         map,
         &[
             "total_cost_usd",
@@ -10173,6 +10275,23 @@ fn extract_usage_tokens_from_value(value: &Value) -> UsageTokenScan {
             "cost",
         ],
     );
+    // Pi usage.cost 是对象：{ input, output, cacheRead, cacheWrite, total }
+    if explicit_cost_usd.is_none() {
+        if let Some(cost_map) = map.get("cost").and_then(Value::as_object) {
+            explicit_cost_usd = extract_f64_by_keys(
+                cost_map,
+                &[
+                    "total",
+                    "total_cost_usd",
+                    "totalCostUsd",
+                    "totalCostUSD",
+                    "cost_usd",
+                    "costUsd",
+                    "costUSD",
+                ],
+            );
+        }
+    }
 
     if input == 0 && output == 0 && cache_read == 0 && cache_creation == 0 {
         if let Some(total) =
@@ -10642,53 +10761,12 @@ pub(crate) fn parse_message(value: &Value) -> Option<HistoryMessage> {
     }
     let timestamp = extract_timestamp(value);
 
-    // Extract token usage from the message
-    let usage = value
-        .get("usage")
-        .or_else(|| value.get("tokenCounts"))
-        .or_else(|| value.get("message").and_then(|m| m.get("usage")));
-    let input_tokens = usage
-        .and_then(|u| u.get("input_tokens"))
-        .and_then(Value::as_u64)
-        .or_else(|| {
-            usage
-                .and_then(|u| u.get("inputTokens"))
-                .and_then(Value::as_u64)
-        });
-    let output_tokens = usage
-        .and_then(|u| u.get("output_tokens"))
-        .and_then(Value::as_u64)
-        .or_else(|| {
-            usage
-                .and_then(|u| u.get("outputTokens"))
-                .and_then(Value::as_u64)
-        });
-    let cache_creation_tokens = usage
-        .and_then(|u| u.get("cache_creation_tokens"))
-        .and_then(Value::as_u64)
-        .or_else(|| {
-            usage
-                .and_then(|u| u.get("cacheCreationTokens"))
-                .and_then(Value::as_u64)
-        })
-        .or_else(|| {
-            usage
-                .and_then(|u| u.get("cache_creation_input_tokens"))
-                .and_then(Value::as_u64)
-        });
-    let cache_read_tokens = usage
-        .and_then(|u| u.get("cache_read_tokens"))
-        .and_then(Value::as_u64)
-        .or_else(|| {
-            usage
-                .and_then(|u| u.get("cacheReadTokens"))
-                .and_then(Value::as_u64)
-        })
-        .or_else(|| {
-            usage
-                .and_then(|u| u.get("cache_read_input_tokens"))
-                .and_then(Value::as_u64)
-        });
+    // 统一走 extract_usage_tokens：覆盖 Claude/Codex/Pi 等字段别名（含 Pi 的 input/output/cacheRead）。
+    let usage = extract_usage_tokens(value);
+    let input_tokens = positive_usage_token(usage.input_tokens);
+    let output_tokens = positive_usage_token(usage.output_tokens);
+    let cache_creation_tokens = positive_usage_token(usage.cache_creation_tokens);
+    let cache_read_tokens = positive_usage_token(usage.cache_read_tokens);
 
     Some(HistoryMessage {
         role,

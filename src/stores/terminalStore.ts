@@ -72,7 +72,7 @@ import {
 } from "./terminalWorkspan";
 
 export type SessionStatus = "running" | "exited" | "error";
-export type CliHookSource = "claude" | "codex";
+export type CliHookSource = "claude" | "codex" | "pi";
 export type CliHookEventName =
   | "SessionStart"
   | "UserPromptSubmit"
@@ -216,6 +216,7 @@ interface HookToolStatus {
 interface HookSettingsStatusPayload {
   claude: HookToolStatus;
   codex: HookToolStatus;
+  pi: HookToolStatus;
   claudeAutoRepaired?: boolean;
 }
 
@@ -261,6 +262,9 @@ interface TerminalStore {
   markAttentionInputHandled: (sessionId: string) => void;
   handleCliHookEvent: (payload: CliHookPayload) => string | null;
   handleShellRuntimeEvent: (payload: ShellRuntimePayload) => string | null;
+  /** 终端侧栏实时统计刷新序号：Hook 绑定 sessionId / 回合结束时递增，面板立即重拉。 */
+  statsPanelRefreshSeq: number;
+  bumpStatsPanelRefresh: () => void;
   reorderSessions: (fromId: string, toId: string) => void;
   moveSessionToPane: (sessionId: string, targetPaneId: string, beforeSessionId?: string) => void;
   splitSessionToPaneEdge: (sessionId: string, targetPaneId: string, edge: TerminalPaneDropEdge) => void;
@@ -1203,17 +1207,21 @@ function scheduleHookRunningTimeout(tabId: string, updatedAt: string) {
 
 async function shouldEnableHookEnv(): Promise<boolean> {
   const settings = useSettingsStore.getState();
-  if (!settings.claudeHookBridgeEnabled && !settings.codexHookBridgeEnabled) return false;
+  if (!settings.claudeHookBridgeEnabled && !settings.codexHookBridgeEnabled && !settings.piHookBridgeEnabled) {
+    return false;
+  }
   try {
     const status = await invoke<HookSettingsStatusPayload>("hook_settings_get_status", {
       selectedDir: settings.claudeHookConfigDir?.trim() || null,
       codexSelectedDir: settings.codexHookConfigDir?.trim() || null,
+      piSelectedDir: settings.piHookConfigDir?.trim() || null,
       ccSwitchDbPath: settings.ccSwitchDbPath ?? undefined,
       autoRepair: settings.claudeHookBridgeEnabled && settings.claudeHookAutoRepairKnownInstalled,
     });
     return (
       (settings.claudeHookBridgeEnabled && status.claude.status === "installed") ||
-      (settings.codexHookBridgeEnabled && status.codex.status === "installed")
+      (settings.codexHookBridgeEnabled && status.codex.status === "installed") ||
+      (settings.piHookBridgeEnabled && status.pi.status === "installed")
     );
   } catch (err) {
     logError("hook_settings_get_status failed while deciding terminal hook env", { err });
@@ -1380,6 +1388,11 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
   hiddenBackgroundSessionIds: new Set<string>(),
   daemonAttachPendingSessionIds: new Set<string>(),
   subagentTranscripts: {},
+  statsPanelRefreshSeq: 0,
+
+  bumpStatsPanelRefresh: () => set((state) => ({
+    statsPanelRefreshSeq: state.statsPanelRefreshSeq + 1,
+  })),
 
   updateSessionCwd: (sessionId, cwd) => set((state) => ({
     sessions: state.sessions.map((session) => (
@@ -1980,23 +1993,37 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     if (!get().sessions.some((session) => session.id === tabId)) return null;
     const cliSessionId = payload.sessionId?.trim();
     const cliReasoningEffort = payload.reasoningEffort?.trim();
+    let boundNewCliSessionId = false;
     if ((cliSessionId || cliReasoningEffort) && get().sessions.some((session) => session.id === rawTabId)) {
       set((state) => ({
-        sessions: state.sessions.map((session) =>
-          session.id === rawTabId
-            ? {
-                ...session,
-                ...(cliSessionId && session.cliSessionId !== cliSessionId ? { cliSessionId } : {}),
-                ...(cliReasoningEffort && session.cliReasoningEffort !== cliReasoningEffort
-                  ? { cliReasoningEffort }
-                  : {}),
-              }
-            : session
-        ),
+        sessions: state.sessions.map((session) => {
+          if (session.id !== rawTabId) return session;
+          const nextCliSessionId =
+            cliSessionId && session.cliSessionId !== cliSessionId ? cliSessionId : session.cliSessionId;
+          if (cliSessionId && session.cliSessionId !== cliSessionId) {
+            boundNewCliSessionId = true;
+          }
+          return {
+            ...session,
+            ...(nextCliSessionId !== session.cliSessionId ? { cliSessionId: nextCliSessionId } : {}),
+            ...(cliReasoningEffort && session.cliReasoningEffort !== cliReasoningEffort
+              ? { cliReasoningEffort }
+              : {}),
+          };
+        }),
       }));
     }
     const updatedAt = payload.timestamp ?? new Date().toISOString();
     const status = mapCliHookEvent(payload.event);
+    // SessionStart 绑定 id、回合结束/失败时立刻踢侧栏重拉用量，避免等 10s 轮询才「闪一下」出来。
+    if (
+      boundNewCliSessionId ||
+      payload.event === "Stop" ||
+      payload.event === "StopFailure" ||
+      payload.event === "UserPromptSubmit"
+    ) {
+      set((state) => ({ statsPanelRefreshSeq: state.statsPanelRefreshSeq + 1 }));
+    }
     if (!status) return tabId;
     // 乱序防御：各 hook 事件由独立进程上报，到达顺序不保证；丢弃比已记录
     // 状态更旧的事件（如 Stop 之后才迟到的 UserPromptSubmit）。
