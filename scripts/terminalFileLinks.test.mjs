@@ -28,6 +28,25 @@ test("absolute file links preserve line locations with diagnostic suffixes", () 
   assert.equal(match.columnNumber, 3);
 });
 
+test("relative file links strip trailing source symbols", () => {
+  const [match] = findTerminalRelativeFileLinks("src/components/TerminalTabs.tsx:handleToggleFilesPanel");
+  assert.equal(match.text, "src/components/TerminalTabs.tsx:handleToggleFilesPanel");
+  assert.equal(match.path, "src/components/TerminalTabs.tsx");
+});
+
+test("relative file links split Chinese enumeration separators", () => {
+  const matches = findTerminalRelativeFileLinks(
+    "src/components/files/FileExplorerSidebar.tsx:438、src/components/files/FileExplorerSidebar.tsx:1047",
+  );
+  assert.deepEqual(
+    matches.map(({ path, lineNumber }) => ({ path, lineNumber })),
+    [
+      { path: "src/components/files/FileExplorerSidebar.tsx", lineNumber: 438 },
+      { path: "src/components/files/FileExplorerSidebar.tsx", lineNumber: 1047 },
+    ],
+  );
+});
+
 test("string ranges map to xterm columns across wide cells", () => {
   const cells = [
     { chars: "根", width: 2 },

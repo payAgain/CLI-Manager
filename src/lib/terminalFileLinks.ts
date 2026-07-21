@@ -22,18 +22,22 @@ const ABSOLUTE_FILE_PATH_PATTERN = /(?:\/?[A-Za-z]:[\\/][^\s`"'<>|?*]+|\\\\[^\\/
 const TRAILING_PATH_PUNCTUATION = /[,.;:!?，。；：！？、)\]}）】》」』]+$/u;
 const WSL_UNC_ROOT_PATTERN = /^\\\\wsl(?:\.localhost|\$)\\([^\\/]+)(?:[\\/]|$)/iu;
 const SOURCE_LOCATION_PATTERN = /(?::(\d+)(?::(\d+))?(?::[^\s]*)?|\((\d+)(?:,(\d+))?\))$/u;
-const RELATIVE_FILE_PATH_PATTERN = /(?:\.{1,2}[\\/]|(?!@)[A-Za-z0-9_.-]+[\\/])[^\s`"'<>|?*]+/gu;
+const SOURCE_SYMBOL_PATTERN = /:[A-Za-z_$][A-Za-z0-9_$]*$/u;
+const RELATIVE_FILE_PATH_PATTERN = /(?:\.{1,2}[\\/]|(?!@)[A-Za-z0-9_.-]+[\\/])[^\s`"'<>|?*、]+/gu;
 const HTTP_URL_PATTERN = /https?:\/\/[^\s`"'<>]+/giu;
 
 function parsePathCandidate(value: string): Pick<TerminalFileLinkMatch, "text" | "path" | "lineNumber" | "columnNumber"> | null {
   let text = value;
   let location = SOURCE_LOCATION_PATTERN.exec(text);
+  let symbol = location ? null : SOURCE_SYMBOL_PATTERN.exec(text);
   if (!location) {
     text = text.replace(TRAILING_PATH_PUNCTUATION, "");
     location = SOURCE_LOCATION_PATTERN.exec(text);
+    symbol = location ? null : SOURCE_SYMBOL_PATTERN.exec(text);
   }
   if (!text) return null;
-  const path = location ? text.slice(0, -location[0].length) : text;
+  const suffix = location?.[0] ?? symbol?.[0] ?? "";
+  const path = suffix ? text.slice(0, -suffix.length) : text;
   if (!path) return null;
   const lineNumber = Number(location?.[1] ?? location?.[3]);
   const columnNumber = Number(location?.[2] ?? location?.[4]);

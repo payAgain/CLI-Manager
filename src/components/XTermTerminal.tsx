@@ -1077,7 +1077,7 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
         const relativeLinks = useSettingsStore.getState().terminalToolbarVisibility.files
           ? findTerminalRelativeFileLinks(line)
           : [];
-        const links: ILink[] = [...absoluteLinks, ...relativeLinks].flatMap((match) => {
+        const buildLinks = (matches: TerminalFileLinkMatch[]): ILink[] => matches.flatMap((match) => {
           if (!bufferLine) return [];
           const columns = terminalStringRangeToBufferColumns(bufferLine, match.startIndex, match.endIndex);
           if (!columns) return [];
@@ -1101,7 +1101,34 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
             decorations: { pointerCursor: true, underline: true },
           }];
         });
-        callback(links.length > 0 ? links : undefined);
+        if (relativeLinks.length === 0) {
+          const links = buildLinks(absoluteLinks);
+          callback(links.length > 0 ? links : undefined);
+          return;
+        }
+
+        void Promise.all(relativeLinks.map(async (match) => {
+          const context = getTerminalFileLinkContext(sessionId, match.path);
+          const relativePath = normalizeTerminalRelativePath(match.path);
+          if (!context.supportsFiles || !context.rootPath || !relativePath) return null;
+          const systemPath = resolveRelativeTerminalSystemPath(context.rootPath, relativePath);
+          const cachedKind = pathKindCache.get(systemPath);
+          if (cachedKind === "file" || cachedKind === "directory") return match;
+          try {
+            const kind = await invoke<TerminalPathKind>("file_get_path_kind", { path: systemPath });
+            if (kind !== "file" && kind !== "directory") return null;
+            pathKindCache.set(systemPath, kind);
+            return match;
+          } catch {
+            return null;
+          }
+        })).then((resolvedRelativeLinks) => {
+          const links = buildLinks([
+            ...absoluteLinks,
+            ...resolvedRelativeLinks.filter((match): match is TerminalFileLinkMatch => match !== null),
+          ]);
+          callback(links.length > 0 ? links : undefined);
+        });
       },
     }));
     terminal.loadAddon(fitAddon);
