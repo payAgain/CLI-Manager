@@ -55,6 +55,7 @@ import {
   TERMINAL_SIDE_PANEL_TAB_ORDER,
   type TerminalSidePanelTab,
 } from "./terminal/TerminalSidePanel";
+import { RemoteHandoffOverlay } from "./terminal/RemoteHandoffOverlay";
 import { WorktreeFinishDialog } from "./worktree/WorktreeFinishDialog";
 import { FileExplorerSidebar } from "./files/FileExplorerSidebar";
 import { openWindowsTerminal } from "../lib/externalTerminal";
@@ -1719,6 +1720,8 @@ function PaneLeafView({
                   isVisible={!historyActive && isLayoutVisible && session.id === effectivePaneActiveSessionId}
                 />
               </Suspense>
+            ) : session.remoteHandoff ? (
+              <RemoteHandoffOverlay session={session} />
             ) : (
               <XTermTerminal
                 sessionId={session.id}
@@ -2984,18 +2987,20 @@ export function TerminalTabs({
   const ensureStatsPanelAllowed = useCallback(async () => {
     try {
       const settings = useSettingsStore.getState();
-      const status = await invoke<{ claude: { status: string }; codex: { status: string } }>(
+      const status = await invoke<{ claude: { status: string }; codex: { status: string }; pi: { status: string } }>(
         "hook_settings_get_status",
         {
           selectedDir: settings.claudeHookConfigDir?.trim() || null,
           codexSelectedDir: settings.codexHookConfigDir?.trim() || null,
+          piSelectedDir: settings.piHookConfigDir?.trim() || null,
           ccSwitchDbPath: settings.ccSwitchDbPath ?? undefined,
           autoRepair: settings.claudeHookBridgeEnabled && settings.claudeHookAutoRepairKnownInstalled,
         }
       );
       const hasEnabledInstalledHook =
         (settings.claudeHookBridgeEnabled && status.claude.status === "installed") ||
-        (settings.codexHookBridgeEnabled && status.codex.status === "installed");
+        (settings.codexHookBridgeEnabled && status.codex.status === "installed") ||
+        (settings.piHookBridgeEnabled && status.pi.status === "installed");
       if (!hasEnabledInstalledHook) {
         toast.warning(t("notifications.stats.needHook"), {
           description: t("notifications.stats.needHookDescription"),

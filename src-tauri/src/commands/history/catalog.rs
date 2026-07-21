@@ -1094,8 +1094,11 @@ fn push_project_filter(builder: &mut QueryBuilder<'_, Sqlite>, project_path: &st
     }
     if let Some(basename) = basename {
         builder.push(
-            " OR (s.source = 'codex' AND s.cwd_normalized IS NULL AND lower(s.project_key) = ",
+            " OR (s.source IN ('codex', 'pi') AND s.cwd_normalized IS NULL AND lower(s.project_key) = ",
         );
+        builder.push_bind(basename.clone());
+        builder.push(")");
+        builder.push(" OR (s.source = 'pi' AND lower(s.project_key) = ");
         builder.push_bind(basename);
         builder.push(")");
     }

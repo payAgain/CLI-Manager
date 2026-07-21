@@ -1252,3 +1252,36 @@ Completed S06-S10 with remote history/cache and resume, read-only file and Git p
 ### Next Steps
 
 - None - task complete
+
+
+## Session 36: 移除历史上下文注入并修复同步与字体状态
+
+**Date**: 2026-07-21
+**Task**: 移除历史上下文注入并修复同步与字体状态
+**Branch**: `master`
+
+### Summary
+
+删除 Claude/Codex 历史上下文文件创建与注入；同步完成项目自动加入忽略列表并防止同步重入；统一终端字体规范化以兼容所有字体；更新 V1.3.0 文档与回归测试。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `627f85ea` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

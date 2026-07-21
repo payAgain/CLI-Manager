@@ -753,25 +753,33 @@ export async function fetchHistoryStatsPayload(options: FetchHistoryStatsOptions
 // source 非空时只匹配对应 CLI（claude/codex），供按终端工具区分的场景使用。
 // 传入 prev（上次结果的 file_path/updated_at）时，若最近会话未变化则返回 "unchanged"，
 // 跳过整个 jsonl 的重新解析，供轮询场景使用。
+// forceCatalogRefresh：Hook 刚绑定 sessionId / 用量仍为 0 时强制扫盘索引，避免 catalog TTL 导致侧栏空等再闪出。
 export async function fetchLatestProjectSessionDetail(
   projectPath: string,
   prev?: { filePath: string; updatedAt: number },
   source?: HistorySource | null,
-  cliSessionId?: string | null
+  cliSessionId?: string | null,
+  options?: { forceCatalogRefresh?: boolean }
 ): Promise<HistorySessionDetail | "unchanged" | null> {
   try {
+    const forceCatalogRefresh = Boolean(options?.forceCatalogRefresh);
     logInfo("history.realtime.lookup.start", {
       source: source ?? null,
       projectPath,
       cliSessionId: cliSessionId ?? null,
+      forceCatalogRefresh,
       previousFilePath: prev?.filePath ?? null,
       previousUpdatedAt: prev?.updatedAt ?? null,
     });
-    const loadSummary = async (query: string | null): Promise<HistorySessionSummary | null> => {
+    const pathArgs = await getHistoryPathArgs();
+    const loadSummary = async (
+      query: string | null,
+      scopedProjectPath: string | null
+    ): Promise<HistorySessionSummary | null> => {
       const summariesRaw = await invoke<unknown[]>("history_list_sessions", {
         source: source ?? null,
-        ...(await getHistoryPathArgs()),
-        projectPath,
+        ...pathArgs,
+        projectPath: scopedProjectPath,
         query,
         limit: 1,
         offset: 0,
@@ -779,7 +787,7 @@ export async function fetchLatestProjectSessionDetail(
       const summary = (summariesRaw ?? []).map((item) => normalizeSummary(item))[0] ?? null;
       logInfo("history.realtime.lookup.summary", {
         source: source ?? null,
-        projectPath,
+        projectPath: scopedProjectPath,
         query,
         cliSessionId: cliSessionId ?? null,
         found: Boolean(summary),
@@ -789,9 +797,36 @@ export async function fetchLatestProjectSessionDetail(
       });
       return summary;
     };
+
+    // 绑定了 CLI sessionId 时：先按项目过滤找，失败再仅按 sessionId 找（Pi 等 cwd/project_key 口径与 Claude 不同）。
+    // 仍 miss 时强制刷新 catalog 再试一次，避免新会话落盘后 10s TTL 内侧栏一直空白。
     const sessionQuery = cliSessionId?.trim() || null;
-    // Bound CLI sessions must never borrow another terminal's latest project session.
-    const summary = sessionQuery ? await loadSummary(sessionQuery) : await loadSummary(null);
+    const resolveBoundSummary = async (): Promise<HistorySessionSummary | null> => {
+      if (!sessionQuery) {
+        return loadSummary(null, projectPath);
+      }
+      let summary = await loadSummary(sessionQuery, projectPath);
+      if (summary?.session_id === sessionQuery) return summary;
+      summary = await loadSummary(sessionQuery, null);
+      if (summary?.session_id === sessionQuery) return summary;
+      if (!forceCatalogRefresh) return null;
+      try {
+        await invoke("history_refresh_index", { ...pathArgs, wait: true });
+      } catch (error) {
+        logWarn("history.realtime.lookup.refreshFailed", {
+          source: source ?? null,
+          projectPath,
+          cliSessionId: sessionQuery,
+          error: String(error),
+        });
+      }
+      summary = await loadSummary(sessionQuery, projectPath);
+      if (summary?.session_id === sessionQuery) return summary;
+      summary = await loadSummary(sessionQuery, null);
+      return summary?.session_id === sessionQuery ? summary : null;
+    };
+
+    const summary = await resolveBoundSummary();
     if (sessionQuery && summary?.session_id !== sessionQuery) {
       logWarn("history.realtime.lookup.sessionMismatch", {
         source: source ?? null,
@@ -818,12 +853,13 @@ export async function fetchLatestProjectSessionDetail(
       });
       return "unchanged";
     }
+    // aggregateSubtasks=false：实时侧栏优先走可快速返回的路径，避免大会话聚合拖慢首屏。
     const detailRaw = await invoke<unknown>("history_get_session", {
       filePath: summary.file_path,
-      ...(await getHistoryPathArgs()),
+      ...pathArgs,
       source: summary.source,
       projectKey: summary.project_key,
-      aggregateSubtasks: true,
+      aggregateSubtasks: false,
     });
     const detail = normalizeDetail(detailRaw);
     logInfo("history.realtime.lookup.detail", {
@@ -834,6 +870,8 @@ export async function fetchLatestProjectSessionDetail(
       sessionProjectKey: detail.project_key,
       sessionFilePath: detail.file_path,
       cwd: detail.cwd ?? null,
+      inputTokens: detail.usage?.input_tokens ?? 0,
+      outputTokens: detail.usage?.output_tokens ?? 0,
     });
     return detail;
   } catch (error) {

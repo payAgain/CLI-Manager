@@ -406,6 +406,10 @@ fn is_valid_payload(payload: &ClaudeHookRequest) -> bool {
                 | "SubagentStart"
                 | "SubagentStop"
         ),
+        "pi" => matches!(
+            payload.event.as_str(),
+            "SessionStart" | "UserPromptSubmit" | "Stop"
+        ),
         _ => false,
     }
 }
@@ -462,6 +466,7 @@ fn log_hook_payload_diagnostic(payload: &ClaudeHookRequest) {
 fn normalize_source(source: Option<&str>) -> &str {
     match source {
         Some("codex") => "codex",
+        Some("pi") => "pi",
         Some("claude") | None => "claude",
         _ => "",
     }

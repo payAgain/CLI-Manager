@@ -114,6 +114,10 @@ fn title_for(source: &str, event: &str) -> &'static str {
         ("codex", "SubagentStart") => "Codex CLI subagent started",
         ("codex", "SubagentStop") => "Codex CLI subagent done",
         ("codex", _) => "Codex CLI needs attention", // PermissionRequest
+        ("pi", "SessionStart") => "Pi Agent session started",
+        ("pi", "UserPromptSubmit") => "Pi Agent running",
+        ("pi", "Stop") => "Pi Agent done",
+        ("pi", _) => "Pi Agent needs attention",
         (_, "SessionStart") => "Claude Code session started",
         (_, "UserPromptSubmit") => "Claude Code running",
         (_, "Stop") => "Claude Code done",

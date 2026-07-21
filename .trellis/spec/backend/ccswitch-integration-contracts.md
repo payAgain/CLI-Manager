@@ -42,6 +42,16 @@ pub async fn ccswitch_list_providers(
   expected old value and replacement value; `BEGIN IMMEDIATE` plus the old-value check
   prevents overwriting a concurrent cc-switch update. Never expose arbitrary SQL through
   the Tauri boundary and never fall back to UNC writes.
+- **Common config write behavior**: User-triggered Hook/statusline operations write
+  local CLI config first, then best-effort write cc-switch common config automatically.
+  cc-switch common config is a shared snippet merged into all providers with "Apply
+  Common Config" enabled. If cc-switch is missing or unavailable, the local config
+  write remains the fallback and must still succeed.
+- **Allowed common config content**: write only CLI-Manager-owned shared Hook/statusline
+  state: Claude `hooks` commands and `statusLine`, Codex `[features].hooks`,
+  CLI-Manager-owned `[hooks.state.*]`, and Codex `[tui].status_line`. Do not write
+  secrets, base URLs, model-provider routing, generated project provider profiles, or
+  project-local state into cc-switch common config.
 - **Path resolution**: `None`/blank → default under `app.path().home_dir()`; custom path
   must pass extension allowlist (`.db`) and `is_file()` before any I/O.
 - **WSL path validation**: on Windows, validate WSL UNC database existence with
@@ -339,6 +349,16 @@ env_key = "CLI_MANAGER_CODEX_PROVIDER_<hash>_API_KEY"
   be returned to WebView, written to the generated profile, written to project
   files, or embedded in the startup command. PTY env injection is the only place
   the plaintext secret is applied.
+- **Managed cc-connect launch**: remote Codex sessions resolve the registered
+  project's `provider_overrides.codex.providerId` directly from the CLI-Manager
+  database, refresh the same generated profile in the real Codex home, and prepend
+  a CLI-Manager-owned `codex` wrapper to the cc-connect child process `PATH`. The
+  wrapper adds `--profile <profileName>` before `app-server`; `CODEX_HOME` and the
+  profile's secret env key are scoped to the managed process tree. This path must
+  not depend on a local terminal session having been opened first.
+- **Remote wrapper contents**: the wrapper may contain only environment-variable
+  names and command routing. It must never contain the Provider secret, modify
+  cc-connect source, or rewrite the user's base `config.toml` / `auth.json`.
 - **Unsafe TOML fallback**: if the raw TOML contains the resolved plaintext secret, do not
   copy it; fall back to the generated non-secret routing profile.
 - **Launch command**: for exact Codex projects with empty `startup_cmd`, the
