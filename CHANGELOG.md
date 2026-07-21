@@ -1,6 +1,6 @@
 # Changelog
 
-## [TEMP]
+## [V1.3.0] - 2026-07-20
 
 ### SSH
 
@@ -9,10 +9,6 @@
 - SSH Claude/Codex 项目现可在统一历史工作区按绑定项目读取远端会话：Agent 增量索引原生 JSONL，通过共享单写锁维护可重建派生索引；桌面端复用每主机 bridge，支持分页列表、全文搜索、按需详情/Diff、usage 摘要、删除 tombstone 与断线后的摘要缓存，不复制完整远端历史目录，也不把远端路径交给本地文件 API。
 - Agent bridge 协议升级到 `1.3`，详情使用 256 KiB payload 分块并保持 1 MiB frame 上限；桌面端校验 request ID、分块顺序、总数、聚合 64 MiB 上限和整次请求 deadline。远端来源身份稳定绑定 machine/user/source/config root，不随 Agent 重装变化。
 - Agent bridge 协议升级到 `1.4`，远端历史会话可在同一主机/用户/source/config root 上执行恢复前检查：重新确认原 JSONL、cwd 与 CLI 可用性，由 Rust 从结构化参数生成安全 resume 命令；同一客户端已有会话时直接跳转 Tab，其他 consumer 占用时阻止并发恢复，无匹配项目时可显式使用原远端目录创建 SSH terminal。
-
-## [V1.3.0] - 2026-07-20
-
-### SSH
 
 - SSH 主机新增 Claude/Codex“CLI 配置目录（Hook 与历史）”设置，SSH 项目可单独覆盖；新建、分屏、复制、恢复等统一启动链路会按“项目覆盖 -> 主机配置 -> CLI 原生默认”解析，并安全注入 `CLAUDE_CONFIG_DIR` 或 `CODEX_HOME`。自定义目录仅接受绝对 POSIX 路径或 `~/...`，保存配置不会安装 Agent 或修改远端 Hook。
 - 删除 SSH 主机时会先阻止活动终端和跳板机引用，再解除项目绑定；远端 Agent/Hook 不会被隐式卸载，已验证的远端集成身份保留为待重新绑定状态。
