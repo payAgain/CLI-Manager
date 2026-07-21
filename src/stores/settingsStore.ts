@@ -105,7 +105,7 @@ export type TerminalPanelWidthKey = "merged" | "stats" | "git" | "replay" | "fil
 export type TerminalPanelWidthSettings = Record<TerminalPanelWidthKey, number>;
 export type TerminalSettingsSectionKey = "behavior" | "shells" | "themes" | "background";
 export type TerminalSettingsSectionsExpanded = Record<TerminalSettingsSectionKey, boolean>;
-export type HookSettingsSectionKey = "toast" | "notifications" | "claude" | "codex";
+export type HookSettingsSectionKey = "toast" | "notifications" | "claude" | "codex" | "pi";
 export type HookSettingsSectionsExpanded = Record<HookSettingsSectionKey, boolean>;
 export const UI_FONT_SIZE_MIN = 11;
 export const UI_FONT_SIZE_MAX = 18;
@@ -142,12 +142,14 @@ export const HOOK_SETTINGS_SECTION_KEYS: readonly HookSettingsSectionKey[] = [
   "notifications",
   "claude",
   "codex",
+  "pi",
 ];
 export const HOOK_SETTINGS_SECTIONS_EXPANDED_DEFAULT: HookSettingsSectionsExpanded = {
   toast: false,
   notifications: false,
   claude: false,
   codex: false,
+  pi: false,
 };
 export type ShortcutAction =
   | "newTerminal"
@@ -384,6 +386,7 @@ export interface Settings {
   hookSubagentSplitViewEnabled: boolean;
   claudeHookBridgeEnabled: boolean;
   codexHookBridgeEnabled: boolean;
+  piHookBridgeEnabled: boolean;
   systemNotificationsEnabled: boolean;
   suppressSystemNotificationsWhenFocused: boolean;
   systemNotificationEvents: Record<HookEventType, boolean>;
@@ -400,6 +403,7 @@ export interface Settings {
   claudeHookAutoRepairKnownInstalled: boolean;
   claudeHookAutoRepairNoticeShown: boolean;
   codexHookConfigDir: string | null;
+  piHookConfigDir: string | null;
   /** cc-switch 数据库路径；null 表示使用默认路径 ~/.cc-switch/cc-switch.db */
   ccSwitchDbPath: string | null;
   /** Git 变更树分组模式：directory（按目录树） / module（按顶层目录模块） */
@@ -542,6 +546,7 @@ const DEFAULTS: Settings = {
   hookSubagentSplitViewEnabled: true,
   claudeHookBridgeEnabled: true,
   codexHookBridgeEnabled: true,
+  piHookBridgeEnabled: true,
   systemNotificationsEnabled: true,
   suppressSystemNotificationsWhenFocused: true,
   systemNotificationEvents: {
@@ -564,6 +569,7 @@ const DEFAULTS: Settings = {
   claudeHookAutoRepairKnownInstalled: false,
   claudeHookAutoRepairNoticeShown: false,
   codexHookConfigDir: null,
+  piHookConfigDir: null,
   ccSwitchDbPath: null,
   gitGroupBy: "directory",
   confirmBeforeClosingTerminalTab: false,
@@ -1337,6 +1343,10 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
       typeof entries.codexHookBridgeEnabled === "boolean"
         ? entries.codexHookBridgeEnabled
         : DEFAULTS.codexHookBridgeEnabled;
+    entries.piHookBridgeEnabled =
+      typeof entries.piHookBridgeEnabled === "boolean"
+        ? entries.piHookBridgeEnabled
+        : DEFAULTS.piHookBridgeEnabled;
     entries.systemNotificationsEnabled =
       typeof entries.systemNotificationsEnabled === "boolean"
         ? entries.systemNotificationsEnabled
@@ -1388,6 +1398,10 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
     entries.codexHookConfigDir =
       typeof entries.codexHookConfigDir === "string" && entries.codexHookConfigDir.trim()
         ? entries.codexHookConfigDir
+        : null;
+    entries.piHookConfigDir =
+      typeof entries.piHookConfigDir === "string" && entries.piHookConfigDir.trim()
+        ? entries.piHookConfigDir
         : null;
     entries.ccSwitchDbPath =
       typeof entries.ccSwitchDbPath === "string" && entries.ccSwitchDbPath.trim()

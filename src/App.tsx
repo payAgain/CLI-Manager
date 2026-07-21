@@ -128,6 +128,7 @@ function preloadSettingsModal(): void {
 interface HookSettingsStatusPayload {
   claude: { status: HookInstallStatus };
   codex: { status: HookInstallStatus };
+  pi: { status: HookInstallStatus };
   claudeAutoRepaired?: boolean;
 }
 
@@ -146,6 +147,7 @@ async function hasInstalledCliHook(): Promise<boolean> {
   const status = await invoke<HookSettingsStatusPayload>("hook_settings_get_status", {
     selectedDir: settings.claudeHookConfigDir?.trim() || null,
     codexSelectedDir: settings.codexHookConfigDir?.trim() || null,
+    piSelectedDir: settings.piHookConfigDir?.trim() || null,
     ccSwitchDbPath: settings.ccSwitchDbPath ?? undefined,
     autoRepair: settings.claudeHookBridgeEnabled && settings.claudeHookAutoRepairKnownInstalled,
   });
@@ -157,7 +159,8 @@ async function hasInstalledCliHook(): Promise<boolean> {
   }
   return (
     (settings.claudeHookBridgeEnabled && status.claude.status === "installed") ||
-    (settings.codexHookBridgeEnabled && status.codex.status === "installed")
+    (settings.codexHookBridgeEnabled && status.codex.status === "installed") ||
+    (settings.piHookBridgeEnabled && status.pi.status === "installed")
   );
 }
 
@@ -202,7 +205,9 @@ function getClaudeHookToastStyle(payload: CliHookPayload): ClaudeHookToastStyle 
 }
 
 function getCliHookSourceName(payload: CliHookPayload): string {
-  return payload.source === "codex" ? "Codex CLI" : "Claude Code";
+  if (payload.source === "codex") return "Codex CLI";
+  if (payload.source === "pi") return "Pi Agent";
+  return "Claude Code";
 }
 
 function getClaudeHookToastTitle(payload: CliHookPayload, tabTitle: string): string {
