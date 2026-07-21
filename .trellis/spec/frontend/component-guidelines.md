@@ -365,7 +365,7 @@ const detachPtyOutput = display.attachPtyOutput();
 
 ### Convention: Terminal focus requires active and visible layout state
 
-**What**: `XTermTerminal` may focus xterm only when the session is both globally active and currently visible. On Tab, Workspan, history-workspace, or split-pane transitions, defer `terminal.focus()` to the next animation frame after `display:block` layout takes effect.
+**What**: `XTermTerminal` may focus xterm only when the session is globally active, currently visible, and no visibility-restore mask is pending. On Tab, Workspan, history-workspace, or split-pane transitions, wait for the progressive restore mask to clear, then defer `terminal.focus()` to the next animation frame.
 
 **Why**: `isActive` can update before pane/workspan visibility. Synchronous focus against a hidden xterm helper textarea is lost when layout finishes, forcing the user to click again; focusing every visible split would instead steal input from the globally active pane.
 
@@ -373,11 +373,13 @@ const detachPtyOutput = display.attachPtyOutput();
 
 - Depend on both `isActive` and `isVisible`.
 - Blur when either value is false.
+- Include `visibilityRestorePending` in the focus effect dependencies so clearing the restore mask schedules a new focus attempt.
 - Re-check `terminalRef`, `isActiveRef`, and `isVisibleRef` inside the animation-frame callback.
+- Re-check `visibilityRestorePendingRef` inside the animation-frame callback so an older frame cannot focus a terminal that has entered another restore cycle.
 - Cancel the pending frame during effect cleanup.
 - A visible but inactive split pane renders live output but never takes keyboard or IME focus.
 
-**Tests**: Switch by mouse, keyboard, Workspan, and split pane; return from history and fullscreen; type immediately without clicking and confirm input reaches only the active visible terminal.
+**Tests**: Switch by mouse, keyboard, Workspan, and split pane; return from history and fullscreen; verify focus is applied only after the visibility-restore mask clears, then type immediately without clicking and confirm input reaches only the active visible terminal.
 
 ### Convention: Async terminal suggestions are scoped to one input attachment
 
