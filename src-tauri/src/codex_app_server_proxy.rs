@@ -1,3 +1,5 @@
+#[cfg(target_os = "windows")]
+use crate::shell_resolver::silent_command;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -11,6 +13,11 @@ pub const HELPER_SUBCOMMAND: &str = "__codex_app_server_proxy";
 pub(crate) const PROXY_EXECUTABLE_ENV: &str = "CLI_MANAGER_CODEX_APP_SERVER_PROXY";
 pub(crate) const EXPECTED_SESSION_ID_ENV: &str = "CLI_MANAGER_CODEX_EXPECTED_SESSION_ID";
 pub(crate) const CODEX_LAUNCHER_ENV: &str = "CLI_MANAGER_CODEX_LAUNCHER";
+pub(crate) const CODEX_BASE_URL_OVERRIDE_ENV: &str = "CLI_MANAGER_CODEX_BASE_URL_OVERRIDE";
+pub(crate) const CODEX_ENV_KEY_OVERRIDE_ENV: &str = "CLI_MANAGER_CODEX_ENV_KEY_OVERRIDE";
+pub(crate) const CODEX_MODEL_OVERRIDE_ENV: &str = "CLI_MANAGER_CODEX_MODEL_OVERRIDE";
+pub(crate) const CODEX_WIRE_API_OVERRIDE_ENV: &str = "CLI_MANAGER_CODEX_WIRE_API_OVERRIDE";
+pub(crate) const CODEX_REMOTE_PROVIDER_NAME: &str = "cli_manager_remote";
 
 // A resumed Codex thread can legitimately exceed cc-connect's 10 MB scanner limit.
 // Keep a finite ceiling so a broken child cannot exhaust the host process indefinitely.
@@ -79,7 +86,21 @@ pub fn is_helper_request(args: &[String]) -> bool {
 }
 
 pub fn run_helper_and_exit(args: &[String]) -> ! {
-    let exit_code = match run_proxy(args) {
+    let child_args = args
+        .get(2..)
+        .ok_or_else(|| "missing Codex app-server arguments".to_string());
+    exit_after_proxy(child_args.and_then(run_proxy))
+}
+
+pub fn run_shim_and_exit(args: &[String]) -> ! {
+    let child_args = args
+        .get(1..)
+        .ok_or_else(|| "missing Codex app-server arguments".to_string());
+    exit_after_proxy(child_args.and_then(run_proxy))
+}
+
+fn exit_after_proxy(result: Result<i32, String>) -> ! {
+    let exit_code = match result {
         Ok(code) => code,
         Err(err) => {
             eprintln!("CLI-Manager Codex app-server proxy: {err}");
@@ -89,10 +110,7 @@ pub fn run_helper_and_exit(args: &[String]) -> ! {
     std::process::exit(exit_code);
 }
 
-fn run_proxy(args: &[String]) -> Result<i32, String> {
-    let child_args = args
-        .get(2..)
-        .ok_or_else(|| "missing Codex app-server arguments".to_string())?;
+fn run_proxy(child_args: &[String]) -> Result<i32, String> {
     if !child_args.iter().any(|arg| arg == "app-server") {
         return Err("refusing to proxy a non app-server Codex command".to_string());
     }
@@ -105,8 +123,10 @@ fn run_proxy(args: &[String]) -> Result<i32, String> {
         .ok()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty());
+    let child_args =
+        build_codex_child_args(child_args, &CodexProviderOverrides::from_environment()?)?;
 
-    let mut command = codex_command(&launcher, child_args);
+    let mut command = codex_command(&launcher, &child_args);
     command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -149,6 +169,81 @@ fn run_proxy(args: &[String]) -> Result<i32, String> {
     Ok(status.code().unwrap_or(1))
 }
 
+#[derive(Debug, Default, PartialEq, Eq)]
+struct CodexProviderOverrides {
+    base_url: Option<String>,
+    env_key: Option<String>,
+    model: Option<String>,
+    wire_api: Option<String>,
+}
+
+impl CodexProviderOverrides {
+    fn from_environment() -> Result<Self, String> {
+        Ok(Self {
+            base_url: optional_unicode_env(CODEX_BASE_URL_OVERRIDE_ENV)?,
+            env_key: optional_unicode_env(CODEX_ENV_KEY_OVERRIDE_ENV)?,
+            model: optional_unicode_env(CODEX_MODEL_OVERRIDE_ENV)?,
+            wire_api: optional_unicode_env(CODEX_WIRE_API_OVERRIDE_ENV)?,
+        })
+    }
+
+    fn command_args(&self) -> Result<Vec<String>, String> {
+        let has_any = self.base_url.is_some()
+            || self.env_key.is_some()
+            || self.model.is_some()
+            || self.wire_api.is_some();
+        if !has_any {
+            return Ok(Vec::new());
+        }
+        let base_url = self
+            .base_url
+            .as_ref()
+            .ok_or_else(|| "Codex Provider base URL override is missing".to_string())?;
+        let env_key = self
+            .env_key
+            .as_ref()
+            .ok_or_else(|| "Codex Provider environment key override is missing".to_string())?;
+        let wire_api = self
+            .wire_api
+            .as_ref()
+            .ok_or_else(|| "Codex Provider wire API override is missing".to_string())?;
+        let mut args = vec![
+            "-c".to_string(),
+            format!("model_provider={CODEX_REMOTE_PROVIDER_NAME}"),
+            "-c".to_string(),
+            format!("model_providers.{CODEX_REMOTE_PROVIDER_NAME}.name=CLI-Manager remote"),
+            "-c".to_string(),
+            base_url.clone(),
+            "-c".to_string(),
+            env_key.clone(),
+            "-c".to_string(),
+            wire_api.clone(),
+        ];
+        if let Some(model) = self.model.as_ref() {
+            args.extend(["-c".to_string(), model.clone()]);
+        }
+        Ok(args)
+    }
+}
+
+fn optional_unicode_env(key: &str) -> Result<Option<String>, String> {
+    match env::var(key) {
+        Ok(value) if value.trim().is_empty() => Ok(None),
+        Ok(value) => Ok(Some(value)),
+        Err(env::VarError::NotPresent) => Ok(None),
+        Err(env::VarError::NotUnicode(_)) => Err(format!("{key} is not valid Unicode")),
+    }
+}
+
+fn build_codex_child_args(
+    child_args: &[String],
+    overrides: &CodexProviderOverrides,
+) -> Result<Vec<String>, String> {
+    let mut args = overrides.command_args()?;
+    args.extend_from_slice(child_args);
+    Ok(args)
+}
+
 #[cfg(target_os = "windows")]
 fn codex_command(launcher: &Path, args: &[String]) -> Command {
     let is_script = launcher
@@ -158,11 +253,11 @@ fn codex_command(launcher: &Path, args: &[String]) -> Command {
             value.eq_ignore_ascii_case("cmd") || value.eq_ignore_ascii_case("bat")
         });
     if is_script {
-        let mut command = Command::new("cmd.exe");
+        let mut command = silent_command("cmd.exe");
         command.args(["/d", "/c"]).arg(launcher).args(args);
         command
     } else {
-        let mut command = Command::new(launcher);
+        let mut command = silent_command(&launcher.to_string_lossy());
         command.args(args);
         command
     }
@@ -444,6 +539,78 @@ fn write_parent_line(output: &Arc<Mutex<io::Stdout>>, line: &[u8]) -> Result<(),
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn provider_overrides_are_inserted_before_app_server_without_secrets() {
+        let args = build_codex_child_args(
+            &[
+                "app-server".to_string(),
+                "--listen".to_string(),
+                "stdio://".to_string(),
+            ],
+            &CodexProviderOverrides {
+                base_url: Some(
+                    "model_providers.cli_manager_remote.base_url=https://provider.example.com/v1"
+                        .to_string(),
+                ),
+                env_key: Some(
+                    "model_providers.cli_manager_remote.env_key=CLI_MANAGER_CODEX_PROVIDER_API_KEY"
+                        .to_string(),
+                ),
+                model: Some("model=gpt-5.4".to_string()),
+                wire_api: Some("model_providers.cli_manager_remote.wire_api=responses".to_string()),
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            args,
+            vec![
+                "-c",
+                "model_provider=cli_manager_remote",
+                "-c",
+                "model_providers.cli_manager_remote.name=CLI-Manager remote",
+                "-c",
+                "model_providers.cli_manager_remote.base_url=https://provider.example.com/v1",
+                "-c",
+                "model_providers.cli_manager_remote.env_key=CLI_MANAGER_CODEX_PROVIDER_API_KEY",
+                "-c",
+                "model_providers.cli_manager_remote.wire_api=responses",
+                "-c",
+                "model=gpt-5.4",
+                "app-server",
+                "--listen",
+                "stdio://",
+            ]
+        );
+        assert!(!args.iter().any(|arg| arg.contains("sk-provider-secret")));
+    }
+
+    #[test]
+    fn app_server_arguments_pass_through_without_provider_overrides() {
+        let original = vec![
+            "app-server".to_string(),
+            "--listen".to_string(),
+            "stdio://".to_string(),
+        ];
+        assert_eq!(
+            build_codex_child_args(&original, &CodexProviderOverrides::default()).unwrap(),
+            original
+        );
+    }
+
+    #[test]
+    fn partial_provider_overrides_are_rejected() {
+        let error = CodexProviderOverrides {
+            base_url: Some(
+                "model_providers.cli_manager_remote.base_url=https://example.com".into(),
+            ),
+            ..CodexProviderOverrides::default()
+        }
+        .command_args()
+        .unwrap_err();
+        assert!(error.contains("environment key"));
+    }
 
     #[test]
     fn compacts_a_resume_response_larger_than_cc_connects_limit() {
