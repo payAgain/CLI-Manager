@@ -863,7 +863,8 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
 
   // Focus follows the single globally active tab. Keyboard, cursor and IME stay
   // bound to this; a visible-but-unfocused split pane renders but never steals
-  // focus.
+  // focus. Visibility restoration temporarily hides the xterm container, so
+  // wait for that mask to clear before focusing the helper textarea.
   useEffect(() => {
     isActiveRef.current = isActive;
     const terminal = terminalRef.current;
@@ -872,17 +873,19 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
       terminal.blur();
       return;
     }
+    if (visibilityRestorePending) return;
     const focusRaf = window.requestAnimationFrame(() => {
       if (
         terminalRef.current === terminal
         && isActiveRef.current
         && isVisibleRef.current
+        && !visibilityRestorePendingRef.current
       ) {
         terminal.focus();
       }
     });
     return () => window.cancelAnimationFrame(focusRaf);
-  }, [isActive, isVisible]);
+  }, [isActive, isVisible, visibilityRestorePending]);
 
   useEffect(() => {
     if (!containerRef.current) return;

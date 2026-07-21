@@ -44,6 +44,10 @@ type HistoryProjectTreeNode =
   | { type: "group"; group: Group; children: HistoryProjectTreeNode[] }
   | { type: "project"; project: Project };
 
+function historyProjectPath(project: Project): string {
+  return project.environment_type === "ssh" ? project.remote_path : project.path;
+}
+
 interface HistoryListPaneProps {
   historySidebarWidth: number;
   sidebarRef: RefObject<HTMLElement | null>;
@@ -380,7 +384,7 @@ export function HistoryListPane({
       return projects.find((project) => project.id === projectIdFilter) ?? null;
     }
     if (!projectPathFilter) return null;
-    return projects.find((project) => project.path === projectPathFilter) ?? null;
+    return projects.find((project) => historyProjectPath(project) === projectPathFilter) ?? null;
   }, [projectIdFilter, projectPathFilter, projects]);
   const selectedWorktree = useMemo(
     () => findWorktreeByPath(worktrees, scopedProjectPathFilter ?? projectPathFilter),
@@ -408,7 +412,7 @@ export function HistoryListPane({
   const selectedProjectMatch = useCallback((project: Project) => {
     if (projectIdFilter) return project.id === projectIdFilter;
     if (!projectPathFilter) return false;
-    return project.path === projectPathFilter;
+    return historyProjectPath(project) === projectPathFilter;
   }, [projectIdFilter, projectPathFilter]);
   const selectedAncestorGroupIds = useMemo(() => {
     if (!projectPathFilter && !projectIdFilter) return [] as string[];
@@ -637,6 +641,7 @@ export function HistoryListPane({
       );
     }
 
+    const projectPath = historyProjectPath(node.project);
     const selected = selectedProjectMatch(node.project);
     return (
       <button
@@ -644,13 +649,13 @@ export function HistoryListPane({
         ref={selected ? selectedProjectNodeRef : undefined}
         type="button"
         onClick={() => handleProjectFilterChange(
-          selected ? null : node.project.path,
+          selected ? null : projectPath,
           selected ? null : node.project.id,
         )}
         className="ui-tree-node ui-tree-project ui-focus-ring flex h-7 w-full items-center gap-1.5 rounded-lg pr-2 text-left text-[12px]"
         data-selected={selected ? "true" : "false"}
         style={{ paddingLeft }}
-        title={node.project.path}
+        title={projectPath}
       >
         <span className="ui-tree-leading-icon">
           <ProjectFilterIcon project={node.project} size={13} />
@@ -794,7 +799,7 @@ export function HistoryListPane({
                   type="button"
                   onClick={() => handleProjectFilterChange(null)}
                   className="ui-tree-node ui-tree-project ui-focus-ring flex h-7 w-full items-center gap-1.5 rounded-lg px-2 text-left text-[12px]"
-                  data-selected={!projectPathFilter ? "true" : "false"}
+                  data-selected={!projectPathFilter && !projectIdFilter ? "true" : "false"}
                 >
                   <Folder size={13} className="shrink-0" />
                   <span className="min-w-0 flex-1 truncate font-medium">{t("history.allProjects")}</span>
