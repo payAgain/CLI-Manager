@@ -145,6 +145,8 @@ const confirmed = window.confirm("Discard changes?");
 
 **Why**: System font names can contain spaces, commas, CJK characters, punctuation, or other characters that need CSS string serialization. If a raw persisted value or raw system-font option is injected directly, CSS can parse it differently from the intended family and some settings surfaces can keep rendering with the fallback font. For terminal fonts, generic fallbacks such as `monospace` must stay after the selected concrete family; otherwise xterm resolves the generic font first and the user's selected system/custom terminal font never appears.
 
+**Option matching contract**: Normalize the persisted current value, built-in options, and system options with the same context-specific normalizer. Terminal selectors pass `normalizeTerminalFontFamily` to `mergeFontFamilyOptions`; UI selectors keep the default `normalizeFontFamilyStack`. Serialize a discovered system font as one CSS family before appending fallbacks so a comma inside the family name is not treated as a stack separator.
+
 **Correct**:
 
 ```tsx
