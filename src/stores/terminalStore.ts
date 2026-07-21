@@ -16,7 +16,6 @@ import { getClaudeProviderOverride, getCodexProviderOverride, getProviderSwitchA
 import { useProjectStore } from "./projectStore";
 import { useSshHostStore } from "./sshHostStore";
 import { buildSshConnectionSpec, type SshConnectionSpecPayload } from "../lib/ssh";
-import { appendSyncedHistoryContextArg } from "../lib/syncedHistoryContext";
 import { translateCurrent } from "../lib/i18n";
 import { findProjectByPath, findWorktreeByPath, resolveProjectForProviderLaunch } from "../lib/terminalProject";
 import { terminalProcessManager } from "../terminal/core/TerminalProcessManager";
@@ -2019,7 +2018,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     const latestSession = sortedSessions[0];
     const cwd = latestSession?.cwd || group.cwd || project?.path;
     const shell = project?.shell && project.shell !== "powershell" ? project.shell : undefined;
-    const startupCmd = await appendSyncedHistoryContextArg(sourceTool(firstSession.source), sourceTool(firstSession.source), group, shell);
+    const startupCmd = sourceTool(firstSession.source);
     const envVars = project ? parseProjectEnvVars(project) : undefined;
     const launch = await createDetachedPtyProcess({
       projectId: project?.id,

@@ -134,6 +134,68 @@ if (useProjectStore.getState().projects.length > 0) {
 }
 ```
 
+## Scenario: User-Owned Synced Project Layout
+
+### 1. Scope / Trigger
+
+- Trigger: changing startup materialization of previously synced history projects, project grouping, or the persisted project ignore list.
+
+### 2. Signatures
+
+- Persisted store fields: `syncedSessions`, `ignoredProjectKeys`.
+- Store action: `externalSessionSyncStore.syncProjectCandidates(keys: string[])`.
+- Startup materialization: `ensureProjectsForSyncedSessions(sessions)`.
+
+### 3. Contracts
+
+- A successful project sync must merge each selected candidate's `project.key` into `ignoredProjectKeys` and persist it with the sync state.
+- `syncProjectCandidates` must return immediately while `syncingProjects` is already true. The dialog's disabled button is presentation feedback, not the concurrency boundary; the Store guard prevents rapid clicks or programmatic callers from starting a second write.
+- Loading existing `syncedSessions` must backfill their stable project keys into `ignoredProjectKeys` without scanning or deleting history files.
+- Startup materialization may create a missing project, but must not rename, move, or regroup an existing project based on its history source.
+- The user's saved project name and `group_id` are authoritative after the initial sync.
+- Removing automatic context injection must not create or update `.cli-manager/synced-history-context` files.
+
+### 4. Validation & Error Matrix
+
+- Selected project sync succeeds -> project key is persisted in the ignore list and is filtered from later scans.
+- Project sync is already running -> repeated invocation is a no-op; success or failure clears `syncingProjects` through the existing completion paths so a later deliberate retry remains available.
+- Existing synced state loads -> missing ignore keys are merged once; old files remain untouched.
+- Existing project is renamed or moved to the root -> startup leaves its name and group unchanged.
+- Missing project with synced history -> startup may recreate the initial project/group structure.
+- Any Claude/Codex launch path -> use the original command without hidden history-context arguments.
+
+### 5. Good/Base/Bad Cases
+
+- Good: user renames an imported project and moves it out of its folder; restart preserves both changes.
+- Base: first sync creates the expected project and group, then records the candidate key as ignored.
+- Good: an upgrade with old `syncedSessions` backfills ignore keys without touching the generated legacy files.
+- Bad: startup sees an ungrouped project and automatically renames it to `Claude` or `Codex`.
+- Bad: a new terminal writes a context Markdown file solely to inject prior conversation text.
+
+### 6. Tests Required
+
+- Static regression asserts the context module and launch references are absent.
+- Static regression asserts startup materialization contains no existing-project update and sync persists `ignoredProjectKeys`.
+- Type-check with `npx tsc --noEmit`.
+- Manual desktop check: rename/move an imported project, restart, sync again, and confirm layout remains user-owned and the project is not listed again.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```typescript
+await useProjectStore.getState().updateProject(existingProject.id, {
+  name: sourceLabel(group.source),
+  group_id: externalGroup.id,
+});
+```
+
+#### Correct
+
+```typescript
+if (existingProject && matchesProjectSource(existingProject, group.source)) continue;
+```
+
 ## Scenario: Resume History Session With Project CLI Arguments
 
 ### 1. Scope / Trigger
