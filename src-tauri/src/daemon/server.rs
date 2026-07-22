@@ -1694,11 +1694,25 @@ impl DaemonServer {
     }
 
     /// 返回 false 表示应结束该连接。
-    fn dispatch(&self, client_id: u64, frame: ClientFrame, writer: &Arc<ClientWriter>) -> bool {
+    fn dispatch(
+        self: &Arc<Self>,
+        client_id: u64,
+        frame: ClientFrame,
+        writer: &Arc<ClientWriter>,
+    ) -> bool {
         // 积压 hook 上报在首次 List 时补发（而非连接瞬间）：此时前端 webview
         // 的事件监听器已就绪（恢复流程先查会话列表），避免 re-emit 被丢。
         if matches!(frame, ClientFrame::List { .. }) {
             self.host.flush_hook_cache_to(writer);
+        }
+        if matches!(frame, ClientFrame::SshAgentRequest { .. }) {
+            let server = Arc::clone(self);
+            let writer = Arc::clone(writer);
+            std::thread::spawn(move || {
+                let reply = server.handle_frame(client_id, frame);
+                let _ = writer.send_frame(&reply);
+            });
+            return true;
         }
         let attach_session_id = match &frame {
             ClientFrame::Attach { session_id, .. } => Some(session_id.clone()),

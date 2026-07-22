@@ -18,6 +18,7 @@ import type {
   SshToolSource,
 } from "../../../lib/types";
 import { useI18n, type TranslationKey } from "../../../lib/i18n";
+import { useBackgroundOperationStore } from "../../../stores/backgroundOperationStore";
 import { useSshAgentIntegrationStore } from "../../../stores/sshAgentIntegrationStore";
 import { useProjectStore } from "../../../stores/projectStore";
 import { CliToolIcon } from "../../CliToolIcon";
@@ -89,6 +90,7 @@ const AGENT_CODE_KEYS: Record<string, TranslationKey> = {
   ssh_agent_artifact_size_mismatch: "settings.sshHosts.cliIntegration.agent.code.ssh_agent_artifact_size_mismatch",
   ssh_agent_bundled_resources_incomplete: "settings.sshHosts.cliIntegration.agent.code.ssh_agent_bundled_resources_incomplete",
   ssh_agent_bundled_resource_invalid: "settings.sshHosts.cliIntegration.agent.code.ssh_agent_bundled_resource_invalid",
+  ssh_agent_hook_metadata_busy: "settings.sshHosts.cliIntegration.agent.code.ssh_agent_hook_metadata_busy",
   agent_install_locked: "settings.sshHosts.cliIntegration.agent.code.agent_install_locked",
   agent_downgrade_forbidden: "settings.sshHosts.cliIntegration.agent.code.agent_downgrade_forbidden",
   agent_launcher_conflict: "settings.sshHosts.cliIntegration.agent.code.agent_launcher_conflict",
@@ -483,6 +485,14 @@ export function SshCliIntegrationDialog({ open, host, hosts, onOpenChange }: Pro
     scopeKind: "hostPrimary" | "projectOverride" = "hostPrimary",
   ) => {
     if (!host) return;
+    const operationId = `ssh-hook:${host.id}:${source}:${scopeKind}`;
+    useBackgroundOperationStore.getState().start({
+      id: operationId,
+      kind: "sshHook",
+      titleKey: "backgroundOperations.sshHook.title",
+      detailKey: "backgroundOperations.sshHook.loading",
+      contextLabel: `${host.name} · ${source}`,
+    });
     setHookOperation({ source, action: "inspect" });
     setHookErrors((current) => ({ ...current, [source]: "" }));
     try {
@@ -493,7 +503,9 @@ export function SshCliIntegrationDialog({ open, host, hosts, onOpenChange }: Pro
       if (scopeKind === "hostPrimary") {
         setHookReports((current) => ({ ...current, [source]: report }));
       }
+      useBackgroundOperationStore.getState().succeed(operationId);
     } catch (nextError) {
+      useBackgroundOperationStore.getState().fail(operationId, nextError);
       setHookErrors((current) => ({ ...current, [source]: agentErrorText(nextError) }));
     } finally {
       setHookOperation(null);
@@ -508,6 +520,15 @@ export function SshCliIntegrationDialog({ open, host, hosts, onOpenChange }: Pro
     expectedCanonicalRoot?: string,
     scopeKind: "hostPrimary" | "projectOverride" | "retainedRoot" = "hostPrimary",
   ) => {
+    if (!host) return;
+    const operationId = `ssh-hook:${host.id}:${source}:${scopeKind}`;
+    useBackgroundOperationStore.getState().start({
+      id: operationId,
+      kind: "sshHook",
+      titleKey: "backgroundOperations.sshHook.title",
+      detailKey: "backgroundOperations.sshHook.loading",
+      contextLabel: `${host.name} · ${source}`,
+    });
     setHookOperation({ source, action: "preview" });
     setHookErrors((current) => ({ ...current, [source]: "" }));
     try {
@@ -517,7 +538,9 @@ export function SshCliIntegrationDialog({ open, host, hosts, onOpenChange }: Pro
         expectedCanonicalRoot,
       });
       setHookPreview({ source, action, configuredRoot, integrationId, expectedCanonicalRoot, scopeKind, report });
+      useBackgroundOperationStore.getState().succeed(operationId);
     } catch (nextError) {
+      useBackgroundOperationStore.getState().fail(operationId, nextError);
       setHookErrors((current) => ({ ...current, [source]: agentErrorText(nextError) }));
     } finally {
       setHookOperation(null);
@@ -535,6 +558,14 @@ export function SshCliIntegrationDialog({ open, host, hosts, onOpenChange }: Pro
       scopeKind,
       report: preview,
     } = hookPreview;
+    const operationId = `ssh-hook:${host.id}:${source}:${scopeKind}`;
+    useBackgroundOperationStore.getState().start({
+      id: operationId,
+      kind: "sshHook",
+      titleKey: "backgroundOperations.sshHook.title",
+      detailKey: "backgroundOperations.sshHook.loading",
+      contextLabel: `${host.name} · ${source}`,
+    });
     setHookOperation({ source, action: "apply" });
     setHookErrors((current) => ({ ...current, [source]: "" }));
     try {
@@ -556,7 +587,9 @@ export function SshCliIntegrationDialog({ open, host, hosts, onOpenChange }: Pro
         setHookReports((current) => ({ ...current, [source]: report }));
       }
       setHookPreview(null);
+      useBackgroundOperationStore.getState().succeed(operationId);
     } catch (nextError) {
+      useBackgroundOperationStore.getState().fail(operationId, nextError);
       setHookErrors((current) => ({ ...current, [source]: agentErrorText(nextError) }));
     } finally {
       setHookOperation(null);

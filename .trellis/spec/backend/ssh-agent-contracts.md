@@ -4,7 +4,7 @@
 
 Apply this contract when changing `cli-manager-ssh-agent`, shared SSH transport generation, one-shot Agent probes, Agent installation metadata, bridge framing, or the SSH Host CLI Integration status UI.
 
-The delivered scope includes explicit one-shot probe/install lifecycle, remote Claude/Codex Hook configuration, the one-shot Hook runtime, remote history/resume RPCs, and one reusable daemon-owned protocol `1.6` bridge per active SSH Host. Protocol 1.5 file RPCs and protocol 1.6 Git RPCs are read-only; realtime/historical stats remain separate stages.
+The delivered scope includes explicit one-shot probe/install lifecycle, remote Claude/Codex Hook configuration, the one-shot Hook runtime, remote history/resume RPCs, and one reusable daemon-owned protocol `1.6` primary bridge per active SSH Host. Protocol 1.5 file RPCs and protocol 1.6 Git RPCs are read-only; realtime/historical stats remain separate stages.
 
 ### Agent Release Identity
 
@@ -128,14 +128,17 @@ Frames use a four-byte big-endian length followed by UTF-8 JSON. The maximum fra
 - Hook config requests use the Host/tool `configuredConfigRoot`; empty means `$HOME/.claude` or `$HOME/.codex`. Inspect and preview never create directories. Confirmed install may create only a missing native default root; a missing custom root is rejected.
 - Hook reports return the configured and canonical roots, `configRootHash`, actual canonical config files, fingerprints, change actions, Agent installation/machine identity, and an installation record. The desktop validates every field before persisting `hook_record_json`.
 - A later inspect refresh preserves the last validated `HookInstallationRecord` for the same canonical root until explicit uninstall. Host-primary and project-override rows that resolve to the same Host/source/canonical root mirror the same Hook report so one physical installation cannot appear installed in one scope and absent in another.
+- Local Hook report persistence uses one backend-owned SQLite connection and one bounded transaction. Frontend SQL pool calls must not split `BEGIN`, mutations, and `COMMIT` across separate invocations. A failed root rotation or mirror update rolls back every affected integration row.
 - Claude JSON and Codex JSON/TOML are parsed structurally. Install normalizes only exact Agent-owned duplicates in place; uninstall removes only the exact path/source/event/owner/installation command. Unknown events and third-party fields, array order, matchers, symlinks, TOML comments, and user-owned `features.hooks = true` remain intact.
 - Config writes hold a per-root lock, verify preview fingerprints and current symlink targets, journal original bytes/mode, atomically replace files, reread, and roll back safely. A stale or externally edited target returns a conflict instead of overwriting it.
 - Hook execution requires all reserved Host/client/project/Tab/bridge-epoch variables. Missing or invalid binding is a successful no-op. Runtime errors are swallowed by the `hook` CLI so Claude/Codex is never blocked.
+- The full 64-character Hook spool namespace remains the durable isolation key. Unix bridge socket and PID filenames use the same deterministic 96-bit shortened digest so bind and notify agree while the default fallback runtime path stays below the Linux `AF_UNIX` path limit.
 - Hook stdin is limited to 1 MiB and normalized through `hook-schema`. Prompt/message text is removed before spooling. Remote transcript paths remain opaque references and never become desktop-local paths.
 - Spool/socket namespace is `SHA-256(hostId, clientInstanceId, installationId)`. It is bounded by 24 hours, 10000 records, and 32 MiB; overflow emits a sequenced `gap`. A stale PID lock is recoverable, JSONL/meta divergence rebuilds monotonic sequence state, ACK removes only confirmed records, and reconnect dedup covers the full bounded spool.
 - Bridge hello requires Host/client/installation identity and reports remote machine identity. The desktop also validates every event against the live daemon session's Host/client/project/Tab/epoch/installation/source binding before routing it to the existing Hook sink.
 - SSH PTY launch injects Agent bridge identity only when the effective Host/source/configured root has a locally validated `installed` Hook report whose Agent installation and remote machine identities still match. Agent installation alone must not create a background Hook bridge.
 - The daemon owns one bridge entry per Host/client connection fingerprint while every PTY remains independent. Address, SSH user/config alias, auth, identity/credential reference, jump/proxy settings, Agent identity/path, ConnectTimeout, or KeepAlive changes replace the old bridge without holding the global registry lock during process shutdown.
+- File and Git requests reserve the existing primary bridge while it is connecting or connected and has no external request in flight. A slow history request may use one isolated read-only bridge instead of blocking file/Git. Bridge startup, authentication, handshake, and capacity failures are delivered immediately to queued consumers; a dropped response channel is never reported as a response timeout.
 - At most four bridge processes and two concurrent connect/reconnect handshakes run globally. A fifth active Host waits without opening SSH; releasing its last session cancels that wait. Probe/install one-shot processes do not consume a bridge permit.
 - Bridge stdout is consumed by a bounded 32-frame reader queue. Login banner plus preamble must complete within `min(ConnectTimeout + 10s, 60s)`; hello, ACK, ping, and ordinary responses have a 10-second bound. Timeout or disconnect kills/reaps the local SSH child before retry.
 - Bridge stderr is always drained but only the first 8 KiB is retained in memory for classification. Permission/passphrase/keyboard-interactive failures become `ssh_interactive_auth_required`; Host Key failures become `ssh_host_key_verification_required`; raw stderr is never persisted or logged.
@@ -200,6 +203,7 @@ Frames use a four-byte big-endian length followed by UTF-8 JSON. The maximum fra
 | Hook JSON/TOML is malformed or a managed event has an invalid shape | stable `hook_config_*_invalid` error; no write |
 | Preview fingerprint or symlink/root target changed | `hook_config_changed` / `hook_config_root_changed` |
 | Another live Hook config transaction owns the root lock | `hook_config_locked` |
+| Local Hook metadata remains write-locked after the bounded wait | `ssh_agent_hook_metadata_busy`; preserve all integration rows |
 | CLI-Manager marker belongs to another installation or placement | status `conflict` / `hook_config_owner_conflict` |
 | Spool JSONL was appended but meta is stale | rebuild count/bytes/next sequence before append |
 

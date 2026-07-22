@@ -8,6 +8,7 @@ import { buildSshAgentHistoryContext, type SshAgentHistoryContext } from "../lib
 import { ensureHistorySourceSettingsLoaded, getHistoryPathArgs, getHistoryPathArgsSync } from "../lib/historyPathArgs";
 import { useProjectStore } from "./projectStore";
 import { useSshAgentIntegrationStore } from "./sshAgentIntegrationStore";
+import { useBackgroundOperationStore } from "./backgroundOperationStore";
 import type {
   HistoryBackupStatus,
   HistoryEditAuditEntry,
@@ -1556,6 +1557,7 @@ let sessionListRequestSeq = 0;
 let sessionDetailRequestSeq = 0;
 let historyIndexListenerPromise: Promise<void> | null = null;
 let historyIndexReadyRefreshTimer: number | null = null;
+const remoteHistorySyncPromises = new Map<string, Promise<SshAgentHistoryContext>>();
 
 function isCurrentSessionListRequest(requestSeq: number, remoteConsumerId: string | null): boolean {
   if (requestSeq !== sessionListRequestSeq) return false;
@@ -1601,29 +1603,61 @@ async function syncRemoteHistoryContext(
   context: SshAgentHistoryContext,
   options: { reset?: boolean; limit?: number } = {},
 ): Promise<SshAgentHistoryContext> {
-  const result = await invoke<SshRemoteHistorySyncResult>("history_remote_sync", {
-    consumerId: context.consumerId,
-    sshLaunch: context.launch,
-    source: context.source,
-    configuredConfigRoot: context.configuredConfigRoot,
-    projectPaths: context.projectPaths,
-    sourceInstanceId: context.sourceInstanceId || null,
-    cursor: options.reset ? null : context.cursor || null,
-    limit: options.limit ?? SESSION_PAGE_FETCH_LIMIT,
-  });
-  await useSshAgentIntegrationStore.getState().recordHistorySource(
-    context.hostId,
+  const key = JSON.stringify([
+    context.consumerId,
+    context.source,
     context.configuredConfigRoot,
-    result,
-    context.scopeKind,
-  );
-  return {
-    ...context,
-    sourceInstanceId: result.sourceInstanceId,
-    cursor: result.cursor,
-    generation: result.generation,
-    hasMore: result.hasMore,
-  };
+    [...context.projectPaths].sort(),
+    options.reset === true,
+    options.reset ? "" : context.cursor,
+    options.limit ?? SESSION_PAGE_FETCH_LIMIT,
+  ]);
+  const existing = remoteHistorySyncPromises.get(key);
+  if (existing) return existing;
+  const operationId = `remote-history:${context.consumerId}`;
+  useBackgroundOperationStore.getState().start({
+    id: operationId,
+    kind: "remoteHistory",
+    titleKey: "backgroundOperations.remoteHistory.title",
+    detailKey: "backgroundOperations.remoteHistory.loading",
+    contextLabel: context.projectPaths[0] ?? context.configuredConfigRoot,
+    retry: () => { void syncRemoteHistoryContext(context, options).catch(() => undefined); },
+  });
+  const promise = (async () => {
+    try {
+      const result = await invoke<SshRemoteHistorySyncResult>("history_remote_sync", {
+        consumerId: context.consumerId,
+        sshLaunch: context.launch,
+        source: context.source,
+        configuredConfigRoot: context.configuredConfigRoot,
+        projectPaths: context.projectPaths,
+        sourceInstanceId: context.sourceInstanceId || null,
+        cursor: options.reset ? null : context.cursor || null,
+        limit: options.limit ?? SESSION_PAGE_FETCH_LIMIT,
+      });
+      await useSshAgentIntegrationStore.getState().recordHistorySource(
+        context.hostId,
+        context.configuredConfigRoot,
+        result,
+        context.scopeKind,
+      );
+      useBackgroundOperationStore.getState().succeed(operationId);
+      return {
+        ...context,
+        sourceInstanceId: result.sourceInstanceId,
+        cursor: result.cursor,
+        generation: result.generation,
+        hasMore: result.hasMore,
+      };
+    } catch (error) {
+      useBackgroundOperationStore.getState().fail(operationId, error);
+      throw error;
+    }
+  })().finally(() => {
+    if (remoteHistorySyncPromises.get(key) === promise) remoteHistorySyncPromises.delete(key);
+  });
+  remoteHistorySyncPromises.set(key, promise);
+  return promise;
 }
 
 export const useHistoryStore = create<HistoryStore>((set, get) => ({
