@@ -27,6 +27,7 @@ import { ConfirmDialog } from "./ConfirmDialog";
 import { buildHistorySessionChildMap, toGroupLabel, type TimeGroupLabel } from "./history/historyViewUtils";
 import { buildSessionProcessModel, type SessionProcessModel } from "./history/sessionEvents";
 import { HistoryResumeProjectDialog } from "./history/HistoryResumeProjectDialog";
+import { useAppConfirm } from "./ui/useAppConfirm";
 
 const SESSION_PAGE_SIZE = 20;
 const MESSAGE_PAGE_SIZE = 160;
@@ -223,6 +224,7 @@ function makeConvertedSessionKey(result: HistoryConversionResult): string {
 
 export function HistoryWorkspace({ active = true }: HistoryWorkspaceProps) {
   const { language, t } = useI18n();
+  const { confirm, confirmDialog } = useAppConfirm();
   const loadingSessions = useHistoryStore((s) => s.loadingSessions);
   const loadingMoreSessions = useHistoryStore((s) => s.loadingMoreSessions);
   const loadingSessionDetail = useHistoryStore((s) => s.loadingSessionDetail);
@@ -1128,12 +1130,13 @@ export function HistoryWorkspace({ active = true }: HistoryWorkspaceProps) {
         toast.error(t("history.toast.convertFailed"), { description: t("history.toast.convertUnsupported") });
         return;
       }
-      const confirmed = window.confirm(
-        t("history.convert.lossyConfirm", {
+      const confirmed = await confirm({
+        title: t(target === "claude" ? "history.detail.convertToClaude" : "history.detail.convertToCodex"),
+        message: t("history.convert.lossyConfirm", {
           source: historySourceLabel(session.source),
           target: historySourceLabel(target),
-        })
-      );
+        }),
+      });
       if (!confirmed) return;
 
       try {
@@ -1157,7 +1160,7 @@ export function HistoryWorkspace({ active = true }: HistoryWorkspaceProps) {
         toast.error(t("history.toast.convertFailed"), { description: String(err) });
       }
     },
-    [addConvertedSession, openSession, t]
+    [addConvertedSession, confirm, openSession, t]
   );
 
   const jumpToMessage = async (messageIndex: number) => {
@@ -1334,6 +1337,8 @@ export function HistoryWorkspace({ active = true }: HistoryWorkspaceProps) {
         />
       </section>
     </div>
+
+      {confirmDialog}
 
       <ConfirmDialog
         open={deleteIntent !== null}
