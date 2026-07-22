@@ -69,6 +69,7 @@ export const SETTING_BACKUP_POLICY = {
   terminalInputSuggestionCustomPrompt: "preferences",
   terminalInputSuggestionUsage: "excluded",
   terminalInputSuggestionLastTest: "excluded",
+  cliArgsHistory: "preferences",
   hookPopupNotificationsEnabled: "preferences",
   hookPopupAutoCloseEnabled: "preferences",
   hookPopupAutoCloseSeconds: "preferences",

@@ -28,6 +28,11 @@ import {
   normalizeDesktopPetSizePercent,
   type DesktopPetSizePercent,
 } from "../lib/desktopPetSize";
+import {
+  normalizeCliArgsHistory,
+  recordCliArgsUsage,
+  type CliArgsHistoryEntry,
+} from "../lib/cliArgsHistory";
 
 export {
   DESKTOP_PET_SIZE_DEFAULT_PERCENT,
@@ -382,6 +387,7 @@ export interface Settings {
   terminalInputSuggestionCustomPrompt: string;
   terminalInputSuggestionUsage: TerminalInputSuggestionUsageStats;
   terminalInputSuggestionLastTest: TerminalInputSuggestionModelTestResult | null;
+  cliArgsHistory: CliArgsHistoryEntry[];
   hookPopupNotificationsEnabled: boolean;
   hookPopupAutoCloseEnabled: boolean;
   hookPopupAutoCloseSeconds: number;
@@ -430,6 +436,7 @@ interface SettingsStore extends Settings {
   load: () => Promise<void>;
   update: <K extends keyof Settings>(key: K, value: Settings[K]) => Promise<void>;
   recordTerminalInputSuggestionUsage: (event: TerminalInputSuggestionAiAttempt | { accepted: true }) => void;
+  recordCliArgsHistory: (cliTool: string, cliArgs: string) => Promise<void>;
   setTheme: (mode: ThemeMode) => Promise<void>;
   setTerminalThemeMode: (mode: TerminalThemeMode) => Promise<void>;
   syncSystemTheme: () => void;
@@ -542,6 +549,7 @@ const DEFAULTS: Settings = {
   terminalInputSuggestionCustomPrompt: "",
   terminalInputSuggestionUsage: { ...DEFAULT_TERMINAL_INPUT_SUGGESTION_USAGE },
   terminalInputSuggestionLastTest: null,
+  cliArgsHistory: [],
   hookPopupNotificationsEnabled: true,
   hookPopupAutoCloseEnabled: true,
   hookPopupAutoCloseSeconds: 60,
@@ -1323,6 +1331,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
         : DEFAULTS.terminalInputSuggestionCustomPrompt;
     entries.terminalInputSuggestionUsage = migrateTerminalInputSuggestionUsage(entries.terminalInputSuggestionUsage);
     entries.terminalInputSuggestionLastTest = migrateTerminalInputSuggestionLastTest(entries.terminalInputSuggestionLastTest);
+    entries.cliArgsHistory = normalizeCliArgsHistory(entries.cliArgsHistory);
 
     entries.hookPopupNotificationsEnabled =
       typeof entries.hookPopupNotificationsEnabled === "boolean"
@@ -1518,6 +1527,13 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
         .then((s) => s.set("terminalInputSuggestionUsage", get().terminalInputSuggestionUsage))
         .catch(() => {});
     }, TERMINAL_INPUT_SUGGESTION_USAGE_SAVE_DELAY_MS);
+  },
+
+  recordCliArgsHistory: async (cliTool, cliArgs) => {
+    const next = recordCliArgsUsage(get().cliArgsHistory, cliTool, cliArgs);
+    const s = await getStore();
+    await s.set("cliArgsHistory", next);
+    set({ cliArgsHistory: next });
   },
 
   setTheme: async (mode) => {

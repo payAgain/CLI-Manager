@@ -346,26 +346,59 @@ enum ClientTransport {
     WebSocket(Mutex<WebSocket<TcpStream>>),
 }
 
+#[derive(Clone)]
+enum ClientWireFrame {
+    Daemon(DaemonFrame),
+    BinaryTerminal {
+        kind: u8,
+        session_id: String,
+        sequence: u64,
+        cols: u16,
+        rows: u16,
+        data: Vec<u8>,
+    },
+}
+
 impl ClientTransport {
-    fn send_frame(&self, frame: &DaemonFrame) -> Result<(), String> {
+    fn send_frame(&self, frame: &ClientWireFrame) -> Result<(), String> {
         match self {
-            Self::Ndjson(writer) => writer
-                .lock()
-                .map_err(|_| "writer poisoned".to_string())?
-                .write_all(encode_frame(frame).as_bytes())
-                .map_err(|err| err.to_string()),
+            Self::Ndjson(writer) => match frame {
+                ClientWireFrame::Daemon(frame) => writer
+                    .lock()
+                    .map_err(|_| "writer poisoned".to_string())?
+                    .write_all(encode_frame(frame).as_bytes())
+                    .map_err(|err| err.to_string()),
+                ClientWireFrame::BinaryTerminal { .. } => {
+                    Err("binary terminal frame is unavailable on ndjson transport".to_string())
+                }
+            },
             Self::WebSocket(socket) => {
                 let mut socket = socket
                     .lock()
                     .map_err(|_| "websocket writer poisoned".to_string())?;
                 match frame {
-                    DaemonFrame::Output {
+                    ClientWireFrame::BinaryTerminal {
+                        kind,
+                        session_id,
+                        sequence,
+                        cols,
+                        rows,
+                        data,
+                    } => {
+                        let binary = encode_binary_terminal_frame(
+                            *kind, session_id, *sequence, *cols, *rows, data,
+                        )?;
+                        socket
+                            .send(Message::Binary(binary.into()))
+                            .map_err(|err| err.to_string())
+                    }
+                    ClientWireFrame::Daemon(DaemonFrame::Output {
                         session_id,
                         sequence,
                         cols,
                         rows,
                         data_base64,
-                    } => {
+                    }) => {
                         let data = STANDARD
                             .decode(data_base64)
                             .map_err(|err| err.to_string())?;
@@ -381,64 +414,7 @@ impl ClientTransport {
                             .send(Message::Binary(binary.into()))
                             .map_err(|err| err.to_string())
                     }
-                    DaemonFrame::Attached {
-                        id,
-                        session_id,
-                        replay,
-                        latest_sequence,
-                        meta,
-                        replay_reset,
-                        replay_truncated,
-                        oldest_sequence,
-                        ..
-                    } => {
-                        if *replay_reset {
-                            let reset = encode_binary_terminal_frame(
-                                BINARY_KIND_REPLAY_RESET,
-                                session_id,
-                                0,
-                                replay.first().map(|entry| entry.cols).unwrap_or(80),
-                                replay.first().map(|entry| entry.rows).unwrap_or(24),
-                                &[],
-                            )?;
-                            socket
-                                .send(Message::Binary(reset.into()))
-                                .map_err(|err| err.to_string())?;
-                        }
-                        for entry in replay {
-                            let data = STANDARD
-                                .decode(&entry.data_base64)
-                                .map_err(|err| err.to_string())?;
-                            let binary = encode_binary_terminal_frame(
-                                BINARY_KIND_REPLAY,
-                                session_id,
-                                entry.sequence,
-                                entry.cols,
-                                entry.rows,
-                                &data,
-                            )?;
-                            socket
-                                .send(Message::Binary(binary.into()))
-                                .map_err(|err| err.to_string())?;
-                        }
-                        let control = DaemonFrame::Attached {
-                            id: *id,
-                            session_id: session_id.clone(),
-                            replay_base64: String::new(),
-                            replay: Vec::new(),
-                            latest_sequence: *latest_sequence,
-                            meta: meta.clone(),
-                            replay_reset: *replay_reset,
-                            replay_truncated: *replay_truncated,
-                            oldest_sequence: *oldest_sequence,
-                        };
-                        socket
-                            .send(Message::Text(
-                                encode_frame(&control).trim_end().to_string().into(),
-                            ))
-                            .map_err(|err| err.to_string())
-                    }
-                    _ => socket
+                    ClientWireFrame::Daemon(frame) => socket
                         .send(Message::Text(
                             encode_frame(frame).trim_end().to_string().into(),
                         ))
@@ -446,6 +422,10 @@ impl ClientTransport {
                 }
             }
         }
+    }
+
+    fn is_websocket(&self) -> bool {
+        matches!(self, Self::WebSocket(_))
     }
 
     fn close(&self) {
@@ -465,32 +445,89 @@ impl ClientTransport {
     }
 }
 
+fn websocket_attached_frames(frame: &DaemonFrame) -> Result<Vec<ClientWireFrame>, String> {
+    let DaemonFrame::Attached {
+        id,
+        session_id,
+        replay,
+        latest_sequence,
+        meta,
+        replay_reset,
+        replay_truncated,
+        oldest_sequence,
+        ..
+    } = frame
+    else {
+        return Err("expected attached frame".to_string());
+    };
+    let mut frames = Vec::with_capacity(replay.len() + 2);
+    if *replay_reset {
+        frames.push(ClientWireFrame::BinaryTerminal {
+            kind: BINARY_KIND_REPLAY_RESET,
+            session_id: session_id.clone(),
+            sequence: 0,
+            cols: replay.first().map(|entry| entry.cols).unwrap_or(80),
+            rows: replay.first().map(|entry| entry.rows).unwrap_or(24),
+            data: Vec::new(),
+        });
+    }
+    for entry in replay {
+        frames.push(ClientWireFrame::BinaryTerminal {
+            kind: BINARY_KIND_REPLAY,
+            session_id: session_id.clone(),
+            sequence: entry.sequence,
+            cols: entry.cols,
+            rows: entry.rows,
+            data: STANDARD
+                .decode(&entry.data_base64)
+                .map_err(|err| err.to_string())?,
+        });
+    }
+    frames.push(ClientWireFrame::Daemon(DaemonFrame::Attached {
+        id: *id,
+        session_id: session_id.clone(),
+        replay_base64: String::new(),
+        replay: Vec::new(),
+        latest_sequence: *latest_sequence,
+        meta: meta.clone(),
+        replay_reset: *replay_reset,
+        replay_truncated: *replay_truncated,
+        oldest_sequence: *oldest_sequence,
+    }));
+    Ok(frames)
+}
+
+struct QueuedOutputFrame {
+    frame: ClientWireFrame,
+    live_output_bytes: usize,
+}
+
 struct ClientWriterState {
-    control: VecDeque<DaemonFrame>,
-    output: VecDeque<DaemonFrame>,
+    control: VecDeque<ClientWireFrame>,
+    output: VecDeque<QueuedOutputFrame>,
     output_bytes: usize,
     closed: bool,
 }
 
 impl ClientWriterState {
-    fn pop_next(&mut self) -> Option<DaemonFrame> {
+    fn pop_next(&mut self) -> Option<ClientWireFrame> {
         if let Some(frame) = self.control.pop_front() {
             return Some(frame);
         }
-        let frame = self.output.pop_front()?;
-        self.output_bytes = self
-            .output_bytes
-            .saturating_sub(frame_payload_bytes(&frame));
-        Some(frame)
+        let queued = self.output.pop_front()?;
+        self.output_bytes = self.output_bytes.saturating_sub(queued.live_output_bytes);
+        Some(queued.frame)
     }
 }
 
 struct ClientWriter {
     shared: Arc<(Mutex<ClientWriterState>, Condvar)>,
+    websocket: bool,
 }
 
 impl ClientWriter {
     fn new(transport: ClientTransport) -> Arc<Self> {
+        let websocket = transport.is_websocket();
         let shared = Arc::new((
             Mutex::new(ClientWriterState {
                 control: VecDeque::new(),
@@ -530,18 +567,41 @@ impl ClientWriter {
             }
             transport.close();
         });
-        Arc::new(Self { shared })
+        Arc::new(Self { shared, websocket })
     }
 
     fn send_frame(&self, frame: &DaemonFrame) -> Result<(), String> {
+        if self.websocket && matches!(frame, DaemonFrame::Attached { .. }) {
+            return self.send_attached(frame);
+        }
+        let wire_frame = ClientWireFrame::Daemon(frame.clone());
         if matches!(frame, DaemonFrame::Output { .. }) {
-            self.send_output(frame)
+            self.send_output(wire_frame, frame_payload_bytes(frame))
         } else {
-            self.send_control(frame)
+            self.send_control(wire_frame)
         }
     }
 
-    fn send_control(&self, frame: &DaemonFrame) -> Result<(), String> {
+    fn send_attached(&self, frame: &DaemonFrame) -> Result<(), String> {
+        let frames = websocket_attached_frames(frame)?;
+        let (lock, changed) = &*self.shared;
+        let mut state = lock
+            .lock()
+            .map_err(|_| "client writer unavailable".to_string())?;
+        if state.closed {
+            return Err("client writer closed".to_string());
+        }
+        state
+            .output
+            .extend(frames.into_iter().map(|frame| QueuedOutputFrame {
+                frame,
+                live_output_bytes: 0,
+            }));
+        changed.notify_one();
+        Ok(())
+    }
+
+    fn send_control(&self, frame: ClientWireFrame) -> Result<(), String> {
         let (lock, changed) = &*self.shared;
         let mut state = lock
             .lock()
@@ -551,13 +611,12 @@ impl ClientWriter {
             changed.notify_all();
             return Err("client control queue full".to_string());
         }
-        state.control.push_back(frame.clone());
+        state.control.push_back(frame);
         changed.notify_one();
         Ok(())
     }
 
-    fn send_output(&self, frame: &DaemonFrame) -> Result<(), String> {
-        let bytes = frame_payload_bytes(frame);
+    fn send_output(&self, frame: ClientWireFrame, bytes: usize) -> Result<(), String> {
         let (lock, changed) = &*self.shared;
         let mut state = lock
             .lock()
@@ -569,7 +628,10 @@ impl ClientWriter {
             return Err("client output queue full".to_string());
         }
         state.output_bytes = state.output_bytes.saturating_add(bytes);
-        state.output.push_back(frame.clone());
+        state.output.push_back(QueuedOutputFrame {
+            frame,
+            live_output_bytes: bytes,
+        });
         changed.notify_one();
         Ok(())
     }
@@ -2246,6 +2308,92 @@ mod tests {
         assert_eq!(binary[1], BINARY_KIND_OUTPUT);
         assert_eq!(&binary[binary.len() - 5..], b"hello");
         server.join().unwrap();
+    }
+
+    #[test]
+    fn websocket_replay_allows_control_frames_to_preempt_between_entries() {
+        let session_id = "0e0f7b0a-1234-4c5d-9e8f-aabbccddeeff";
+        let meta = test_session(session_id, SessionBuffer::new(), 1)
+            .lock()
+            .unwrap()
+            .meta
+            .clone();
+        let attached = DaemonFrame::Attached {
+            id: 11,
+            session_id: session_id.to_string(),
+            replay_base64: String::new(),
+            replay: vec![
+                ReplayEntry {
+                    sequence: 1,
+                    cols: 80,
+                    rows: 24,
+                    data_base64: STANDARD.encode(b"first"),
+                },
+                ReplayEntry {
+                    sequence: 2,
+                    cols: 80,
+                    rows: 24,
+                    data_base64: STANDARD.encode(b"second"),
+                },
+            ],
+            latest_sequence: 2,
+            meta,
+            replay_reset: true,
+            replay_truncated: false,
+            oldest_sequence: 1,
+        };
+        let replay_frames = websocket_attached_frames(&attached).unwrap();
+        let mut state = ClientWriterState {
+            control: VecDeque::new(),
+            output: replay_frames
+                .into_iter()
+                .map(|frame| QueuedOutputFrame {
+                    frame,
+                    live_output_bytes: 0,
+                })
+                .collect(),
+            output_bytes: 0,
+            closed: false,
+        };
+
+        assert!(matches!(
+            state.pop_next(),
+            Some(ClientWireFrame::BinaryTerminal {
+                kind: BINARY_KIND_REPLAY_RESET,
+                ..
+            })
+        ));
+        state
+            .control
+            .push_back(ClientWireFrame::Daemon(DaemonFrame::Ok { id: 12 }));
+        assert!(matches!(
+            state.pop_next(),
+            Some(ClientWireFrame::Daemon(DaemonFrame::Ok { id: 12 }))
+        ));
+        assert!(matches!(
+            state.pop_next(),
+            Some(ClientWireFrame::BinaryTerminal {
+                kind: BINARY_KIND_REPLAY,
+                sequence: 1,
+                ..
+            })
+        ));
+        assert!(matches!(
+            state.pop_next(),
+            Some(ClientWireFrame::BinaryTerminal {
+                kind: BINARY_KIND_REPLAY,
+                sequence: 2,
+                ..
+            })
+        ));
+        assert!(matches!(
+            state.pop_next(),
+            Some(ClientWireFrame::Daemon(DaemonFrame::Attached {
+                id: 11,
+                replay,
+                ..
+            })) if replay.is_empty()
+        ));
     }
 
     #[test]
