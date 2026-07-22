@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::process::Command;
 use std::time::Duration;
-use tauri::{path::BaseDirectory, AppHandle, Manager};
+use tauri::{path::BaseDirectory, AppHandle, Emitter, Manager};
 use uuid::Uuid;
 
 use crate::shell_resolver::{output_with_timeout, silent_command};
@@ -634,6 +634,18 @@ pub struct SshAgentInstallPreview {
     install_path: String,
     current_version: String,
     distribution_source: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SshAgentInstallProgress {
+    phase: &'static str,
+    progress: u8,
+}
+
+fn emit_agent_install_progress(app: &AppHandle, host_id: &str, phase: &'static str, progress: u8) {
+    let event = format!("ssh-agent-install-progress-{}", host_id.trim());
+    let _ = app.emit(&event, SshAgentInstallProgress { phase, progress });
 }
 
 fn bundled_agent_release_dir(app: &AppHandle) -> Result<std::path::PathBuf, String> {
@@ -1617,6 +1629,7 @@ pub async fn ssh_agent_install(
     Uuid::parse_str(host_id.trim()).map_err(|_| "ssh_host_id_invalid".to_string())?;
     validate_spec(&spec)?;
     ensure_non_interactive(&spec)?;
+    emit_agent_install_progress(&app, &host_id, "resolvingRelease", 10);
     let bundled_root = bundled_agent_release_dir(&app)?;
     let release = fetch_verified_release(
         manifest_url.as_deref(),
@@ -1624,9 +1637,11 @@ pub async fn ssh_agent_install(
         Some(bundled_root.as_path()),
     )
     .await?;
+    emit_agent_install_progress(&app, &host_id, "detectingRemote", 35);
     let environment = detect_remote_agent_environment(&spec).await?;
     let install_root = validated_install_root(install_dir.as_deref(), &environment)?;
     let artifact = select_artifact(&release.manifest, &environment.target)?.clone();
+    emit_agent_install_progress(&app, &host_id, "downloadingArtifact", 55);
     let bytes = download_artifact(&release, &artifact, allow_http).await?;
     let script = build_agent_install_script(
         &environment,
@@ -1635,7 +1650,10 @@ pub async fn ssh_agent_install(
         &artifact.sha256,
         allow_downgrade,
     );
-    run_agent_operation(&spec, script, Some(bytes)).await
+    emit_agent_install_progress(&app, &host_id, "installingRemote", 75);
+    let result = run_agent_operation(&spec, script, Some(bytes)).await?;
+    emit_agent_install_progress(&app, &host_id, "completed", 100);
+    Ok(result)
 }
 
 #[tauri::command]

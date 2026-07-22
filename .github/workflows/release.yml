@@ -21,12 +21,14 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-unknown-linux-gnu
+          targets: x86_64-unknown-linux-gnu,aarch64-unknown-linux-gnu
+
+      - name: Setup Zig
+        uses: goto-bus-stop/setup-zig@v2
 
       - name: Install dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu
+          cargo install cargo-zigbuild --locked
           npm ci
 
       - name: Extract SSH Agent version
@@ -42,11 +44,24 @@ jobs:
           sh .github/scripts/test-install-ssh-agent.sh
 
       - name: Build Linux SSH Agent artifacts
-        env:
-          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
         run: |
-          cargo build --release --manifest-path src-tauri/ssh-agent/Cargo.toml --target x86_64-unknown-linux-gnu
-          cargo build --release --manifest-path src-tauri/ssh-agent/Cargo.toml --target aarch64-unknown-linux-gnu
+          cargo zigbuild --release --manifest-path src-tauri/ssh-agent/Cargo.toml --target x86_64-unknown-linux-gnu.2.17
+          cargo zigbuild --release --manifest-path src-tauri/ssh-agent/Cargo.toml --target aarch64-unknown-linux-gnu.2.17
+
+      - name: Verify SSH Agent GLIBC baseline
+        shell: bash
+        run: |
+          for binary in \
+            src-tauri/ssh-agent/target/x86_64-unknown-linux-gnu/release/cli-manager-ssh-agent \
+            src-tauri/ssh-agent/target/aarch64-unknown-linux-gnu/release/cli-manager-ssh-agent
+          do
+            MAX_GLIBC="$(readelf --version-info "$binary" | grep -oE 'GLIBC_[0-9]+(\.[0-9]+)*' | sed 's/^GLIBC_//' | sort -Vu | tail -1)"
+            test -n "$MAX_GLIBC"
+            test "$(printf '%s\n' 2.17 "$MAX_GLIBC" | sort -V | tail -1)" = "2.17" || {
+              echo "$binary requires GLIBC_$MAX_GLIBC; maximum supported version is GLIBC_2.17" >&2
+              exit 1
+            }
+          done
 
       - name: Build signed release manifest
         env:

@@ -144,6 +144,19 @@ fn validate_url(value: &str, allow_http: bool) -> Result<Url, String> {
     Ok(url)
 }
 
+fn validate_redirect_target(url: &Url, allow_http: bool) -> Result<(), String> {
+    if url.scheme() != "https" && !(allow_http && url.scheme() == "http") {
+        return Err("ssh_agent_release_https_required".to_string());
+    }
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err("ssh_agent_release_url_credentials_forbidden".to_string());
+    }
+    if url.host_str().is_none() || url.fragment().is_some() {
+        return Err("ssh_agent_release_url_invalid".to_string());
+    }
+    Ok(())
+}
+
 fn release_client(allow_http: bool) -> Result<Client, String> {
     Client::builder()
         .connect_timeout(Duration::from_secs(15))
@@ -152,8 +165,7 @@ fn release_client(allow_http: bool) -> Result<Client, String> {
             if attempt.previous().len() >= 3 {
                 return attempt.stop();
             }
-            let scheme = attempt.url().scheme();
-            if scheme == "https" || (allow_http && scheme == "http") {
+            if validate_redirect_target(attempt.url(), allow_http).is_ok() {
                 attempt.follow()
             } else {
                 attempt.stop()
@@ -286,8 +298,8 @@ pub async fn fetch_verified_release(
         client.get(signature_url).send()
     )
     .map_err(|error| format!("ssh_agent_release_download_failed:{error}"))?;
-    if validate_url(manifest_response.url().as_str(), allow_http).is_err()
-        || validate_url(signature_response.url().as_str(), allow_http).is_err()
+    if validate_redirect_target(manifest_response.url(), allow_http).is_err()
+        || validate_redirect_target(signature_response.url(), allow_http).is_err()
     {
         return Err("ssh_agent_release_redirect_forbidden".to_string());
     }
@@ -333,7 +345,7 @@ pub async fn download_artifact(
         .send()
         .await
         .map_err(|error| format!("ssh_agent_artifact_download_failed:{error}"))?;
-    if validate_url(response.url().as_str(), allow_http).is_err() {
+    if validate_redirect_target(response.url(), allow_http).is_err() {
         return Err("ssh_agent_release_redirect_forbidden".to_string());
     }
     let bytes = read_bounded(response, artifact.size as usize).await?;
@@ -358,10 +370,11 @@ fn verify_artifact_bytes(
 mod tests {
     use super::{
         bundled_artifact_file, bundled_release_presence, select_artifact, validate_manifest,
-        verify_artifact_bytes, verify_with_public_key, AgentReleaseArtifact, AgentReleaseManifest,
-        BUNDLED_ARTIFACT_FILES, BUNDLED_MANIFEST_FILE,
+        validate_redirect_target, verify_artifact_bytes, verify_with_public_key,
+        AgentReleaseArtifact, AgentReleaseManifest, BUNDLED_ARTIFACT_FILES, BUNDLED_MANIFEST_FILE,
     };
     use base64::Engine;
+    use reqwest::Url;
     use sha2::{Digest, Sha256};
     use std::fs;
 
@@ -424,6 +437,29 @@ mod tests {
             validate_manifest(&value, false).unwrap_err(),
             "ssh_agent_release_url_invalid"
         );
+    }
+
+    #[test]
+    fn redirect_targets_allow_https_queries_but_retain_transport_guards() {
+        let signed_cdn = Url::parse(
+            "https://release-assets.githubusercontent.com/asset?sig=temporary&jwt=temporary",
+        )
+        .unwrap();
+        validate_redirect_target(&signed_cdn, false).unwrap();
+
+        let credentials =
+            Url::parse("https://user:secret@example.com/asset?sig=temporary").unwrap();
+        assert_eq!(
+            validate_redirect_target(&credentials, false).unwrap_err(),
+            "ssh_agent_release_url_credentials_forbidden"
+        );
+
+        let insecure = Url::parse("http://example.com/asset?sig=temporary").unwrap();
+        assert_eq!(
+            validate_redirect_target(&insecure, false).unwrap_err(),
+            "ssh_agent_release_https_required"
+        );
+        validate_redirect_target(&insecure, true).unwrap();
     }
 
     #[test]

@@ -19,9 +19,16 @@ The delivered scope includes explicit one-shot probe/install lifecycle, remote C
 - Stable desktop releases bundle the signed Agent manifest, signature, and Linux x64/arm64
   binaries. Desktop installation uses that bundle first; only a completely absent bundle falls
   back to the stable desktop Release network manifest.
+- Linux x64 and arm64 release binaries target a GLIBC 2.17 ABI baseline. Both desktop and
+  independent Agent release workflows use the same build path and reject binaries whose maximum
+  referenced GLIBC symbol version is newer than 2.17.
 - The shell installer uses `ssh-agent-v<version>` for explicit versions, except legacy `1.3.0`,
   which resolves to its original `V1.3.0` desktop Release. An unavailable GitHub network cannot
   be repaired by the remote installer; the bundled desktop installation remains the offline path.
+- User-configured and signed-manifest URLs reject query strings, fragments, and credentials.
+  HTTPS redirect targets may contain CDN-generated temporary query signatures, but still require
+  a host, reject credentials/fragments, and remain bounded to three redirects. Manifest Minisign
+  and Agent SHA-256 verification remain mandatory after redirect resolution.
 
 ## 2. Signatures
 
@@ -163,6 +170,7 @@ Frames use a four-byte big-endian length followed by UTF-8 JSON. The maximum fra
 | Supported target has no usable HOME/XDG layout | status `corrupt`, code `home_directory_unavailable` |
 | Manifest signature, schema, protocol, URL, target, size, or SHA-256 is invalid | reject before upload |
 | Agent manifest version differs from Agent Cargo package version or an Agent Tag differs from `ssh-agent-v<version>` | fail the release workflow |
+| Linux Agent requires a GLIBC symbol newer than 2.17 | fail the release workflow |
 | Independent Agent prerelease changes GitHub desktop latest Release | fail the release workflow |
 | Concurrent install/upgrade holds the lock | `agent_install_locked` |
 | Incoming semantic version is lower without explicit approval | `agent_downgrade_forbidden` |
