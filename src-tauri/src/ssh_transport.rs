@@ -199,6 +199,10 @@ impl SshTransportSpec {
     fn append_connection_args(&self, args: &mut Vec<String>, one_shot: bool) {
         if !self.config_file.trim().is_empty() {
             args.extend(["-F".to_string(), self.config_file.trim().to_string()]);
+        } else if self.config_alias.trim().is_empty() && self.jump_target.trim().is_empty() {
+            // Direct address-based hosts are fully described by CLI-Manager. Do not let an
+            // unrelated or invalid ~/.ssh/config block otherwise valid direct connections.
+            args.extend(["-F".to_string(), "none".to_string()]);
         }
         args.extend([
             "-o".to_string(),
@@ -409,7 +413,45 @@ mod tests {
             .build_one_shot_launch("true".into(), SshOneShotOptions::default())
             .unwrap();
         assert!(!launch.args.iter().any(|arg| arg == "-p"));
+        assert!(!launch.args.iter().any(|arg| arg == "-F"));
         assert_eq!(launch.args[launch.args.len() - 2], "prod");
+    }
+
+    #[test]
+    fn explicit_address_connections_ignore_the_default_ssh_config() {
+        for mode in ["agent", "identity_file", "password_prompt", "interactive"] {
+            let mut value = spec(mode);
+            value.jump_target.clear();
+            for launch in [
+                value.build_interactive_launch("shell".into()).unwrap(),
+                value
+                    .build_one_shot_launch("true".into(), SshOneShotOptions::default())
+                    .unwrap(),
+            ] {
+                assert!(
+                    launch.args.windows(2).any(|pair| pair == ["-F", "none"]),
+                    "mode={mode} args={:?}",
+                    launch.args
+                );
+            }
+        }
+
+        let mut credential_args = Vec::new();
+        let mut credential = spec("credential_ref");
+        credential.jump_target.clear();
+        credential.append_connection_args(&mut credential_args, true);
+        assert!(credential_args
+            .windows(2)
+            .any(|pair| pair == ["-F", "none"]));
+    }
+
+    #[test]
+    fn config_alias_jump_keeps_the_default_ssh_config_enabled() {
+        let launch = spec("agent")
+            .build_interactive_launch("shell".into())
+            .unwrap();
+        assert!(!launch.args.iter().any(|arg| arg == "-F"));
+        assert!(launch.args.windows(2).any(|pair| pair == ["-J", "bastion"]));
     }
 
     #[test]

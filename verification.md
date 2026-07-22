@@ -515,3 +515,32 @@
 - `node --check`：新增 E2E 与 Universal 打包脚本语法检查通过。
 - `git diff --check`：通过，仅输出仓库既有的 LF/CRLF 转换提示。
 - 本次未生成安装包，未启动或停止用户安装目录中的 CLI-Manager/cc-connect，也未修改第三方 cc-connect 源码或二进制。
+
+## SSH 显式地址直连被默认 Config 权限阻断修复（2026-07-22）
+
+### 根因陈述与发现清单
+
+- 根因位于“CLI-Manager 结构化 SSH 配置 → 系统 OpenSSH 参数”的进程边界：显式地址主机已经由应用提供地址、端口和认证参数，但旧实现没有传递 `-F`，OpenSSH 仍会自动读取用户 `~/.ssh/config`；当该文件向其他用户/组开放写权限时，OpenSSH 在连接与密码认证前直接以 `Bad owner or permissions` 退出。
+- 本机证据：`C:\Users\lenovo\.ssh\config` 所有者正确，但继承了 `CodexSandboxUsers` 与另一个 SID 的 Modify 权限；裸 `ssh -G` 可稳定复现相同错误。目标 SSH 端口可达，使用 `-F none` 后能够完成协议握手并进入服务器提供的 `publickey,password` 认证阶段，确认服务器与网络不是本次失败点。
+- 修复落在共享 `SshTransportSpec::append_connection_args`：未指定自定义 Config、没有目标 Config 别名且未配置跳板路由的显式地址直连统一追加 `-F none`；交互终端和一次性诊断/Agent/Hook 请求自动复用，不在错误展示层增加重试或兜底。
+- 已修改：`ssh_transport.rs` 的共享参数生成及专项测试、`commands/ssh.rs` 的真实诊断命令参数断言、SSH 远程终端契约、CHANGELOG、功能清单和本验证记录。
+- 已确认无需修改：SSH 主机数据库 Schema、密码凭据存储与 AskPass broker、前端主机编辑器、系统 `~/.ssh/config` 文件及其 ACL、远端服务器配置、SSH Config 导入解析器。
+- GitNexus CLI 当前没有可用索引；codebase-memory 影响追踪将共享 SSH 参数入口标记为 CRITICAL。调用面覆盖交互终端、连接测试、远端 Agent/Hook、历史 bridge 与后台任务，因此修复严格限定在“显式地址、无自定义 Config 且未配置跳板路由”状态。
+
+### 场景覆盖
+
+- 显式地址直连：Agent、指定私钥、密码提示、凭据保存密码和 Keyboard-interactive 均追加 `-F none`；交互式 PTY 与一次性连接使用相同规则。
+- SSH Config 与跳板：存在目标 Config 别名或配置任意跳板路由时继续读取用户默认配置，不追加 `-F none`；选择自定义文件时继续使用 `-F <绝对路径>`。
+- 路由：端口、跳板机、HTTP/SOCKS5/自定义 ProxyCommand 参数构造未改变；`-F none` 只隔离未显式选择的默认配置。
+- 平台与状态：OpenSSH 的 `-F none` 在当前 Windows OpenSSH 9.5p2 实测可用，并为跨平台 OpenSSH 约定；窗口焦点、分屏、托盘、WSL、Worktree 与 Hook 是否安装不改变参数选择条件。
+
+### 验证结果
+
+- `cargo test --locked --manifest-path src-tauri/Cargo.toml ssh_transport::tests`：9 项通过，覆盖显式地址隔离、默认 Config 目标/跳板别名、自定义 Config、交互/一次性连接、认证和代理路由。
+- `cargo test --locked --manifest-path src-tauri/Cargo.toml ssh_launch::tests`：14 项通过，覆盖真实交互终端 Launch Plan。
+- `cargo test --locked --manifest-path src-tauri/Cargo.toml commands::ssh::tests`：27 项通过，覆盖连接诊断、密码/交互模式、Agent 与 Hook 命令。
+- `cargo check --locked --manifest-path src-tauri/Cargo.toml`：通过。
+- `rustfmt --edition 2021 --check src-tauri/src/ssh_transport.rs src-tauri/src/commands/ssh.rs`：通过。
+- `npm run build`：通过，Vite 完成 6688 个模块转换。
+- `ssh -F none` 对目标主机的无密码探测成功越过本机 Config ACL 检查并抵达认证阶段；为避免在命令记录中传播用户密码，本次未用自动化脚本提交明文密码。
+- 本次未修改用户 `~/.ssh/config` 权限、未写入远端文件，也未启动或停止用户安装目录中的 CLI-Manager。

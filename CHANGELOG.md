@@ -11,6 +11,7 @@
 - **新建终端 PTY 写入超时**：daemon 的 WebSocket writer 将 Attach Replay 拆为可调度帧，Replay 期间允许普通控制响应优先发送，避免大滚动缓冲区恢复时已执行的启动命令因确认响应延迟而误报 `PtyHost request timed out: write`。
 - **远程 Codex 托管启动链路**：Windows 改用随应用打包的 GUI 子系统原生代理启动 Codex app-server，避免连接、对话和停止托管时弹出命令窗口；恢复会话时严格校验目标 Session，并压缩超过 cc-connect 扫描上限的恢复响应。项目登记的 Provider 配置会强制注入远程 Codex，API Key 仅通过子进程环境变量传递，不进入命令行参数或日志。
 - **macOS Universal 辅助程序打包**：Universal 构建会同时合并 `cli-manager-daemon` 与 `cli-manager-codex-proxy` 的 Apple Silicon、Intel 产物，避免新增代理程序后 Universal 应用缺少对应架构二进制。
+- **SSH 显式地址直连**：未配置跳板机的手工地址连接不再读取无关的用户 `~/.ssh/config`，避免该文件 ACL/语法异常时在密码、Agent、私钥或交互认证前阻断连接；SSH Config 别名、跳板路由与用户明确选择的自定义配置文件继续按原逻辑生效。
 - 修复旧版历史索引数据库升级时，在补充 `scope_kind` 等字段之前提前创建依赖索引，导致刷新报错且会话无法打开的问题；现有索引数据会原地升级，无需用户手工删除缓存。
 - 修复 WebDAV 恢复、ZIP 导入及恢复回滚把 SQLite 事务拆分到连接池的多个连接上，可能触发 `database is locked` 的问题；数据库域恢复现由 Rust 在单连接事务中原子执行。
 - 修复 SSH Config 批量导入、主机/分组删除、CLI 配置目录保存及 Hook 集成记录把事务拆分到连接池不同连接，可能锁库或部分写入的问题；相关组合操作改由 Rust 单连接短事务执行，批量导入一次读取重复项，普通 SSH 操作不增加全局互斥。
