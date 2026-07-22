@@ -200,3 +200,72 @@ if (update) {
 ```json
 "permissions": ["updater:default", "process:allow-restart"]
 ```
+
+## Scenario: Target-scoped Tauri configuration features
+
+### 1. Scope / Trigger
+
+- Trigger: adding or moving a Tauri Cargo feature whose enablement must match a platform-specific `tauri.*.conf.json` value, such as `macos-private-api` / `app.macOSPrivateApi`.
+
+### 2. Signatures
+
+```toml
+[dependencies]
+tauri = { version = "2", features = ["tray-icon", "protocol-asset", "devtools"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+tauri = { version = "2", features = ["macos-private-api"] }
+```
+
+```json
+// src-tauri/tauri.macos.conf.json
+{ "app": { "macOSPrivateApi": true } }
+```
+
+### 3. Contracts
+
+- Configuration-sensitive Tauri features must be declared under the same Cargo target that owns the corresponding platform config.
+- Windows and Linux direct Cargo commands must not activate `macos-private-api`.
+- macOS builds must activate `macos-private-api` and keep `app.macOSPrivateApi = true`.
+- Tests must exercise the real Cargo invocation; do not inject a synthetic `TAURI_CONFIG` merely to suppress the consistency error.
+
+### 4. Validation & Error Matrix
+
+| Condition | Required behavior |
+|---|---|
+| `macos-private-api` is in common dependencies | Reject: Windows/Linux direct Cargo builds can fail Tauri feature/config consistency checks. |
+| macOS target feature is missing | Reject: macOS transparent/private-API window behavior loses its required Cargo capability. |
+| macOS feature exists but `macOSPrivateApi` is false/missing | Reject through the existing macOS window-controls verification. |
+| Common and target dependency declarations are correctly split | Windows/Linux resolve only common features; macOS additionally resolves `macos-private-api`. |
+
+### 5. Good / Base / Bad Cases
+
+- Good: Windows Codex proxy E2E calls `cargo build --locked` directly and succeeds without platform-config overrides.
+- Base: normal Tauri CLI builds continue merging the platform config and resolve the same target-specific feature set.
+- Bad: set `TAURI_CONFIG` inside one test to claim success while the manifest still enables a macOS-only feature globally.
+
+### 6. Tests Required
+
+- Inspect `cargo metadata --no-deps` and assert the common `tauri` dependency excludes `macos-private-api` while the macOS-target dependency includes it.
+- Run `npm run test:codex-proxy:e2e` on Windows.
+- Run `cargo check --locked --manifest-path src-tauri/Cargo.toml`.
+- Run `node scripts/verify-macos-window-controls.mjs`.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```toml
+[dependencies]
+tauri = { version = "2", features = ["macos-private-api"] }
+```
+
+#### Correct
+
+```toml
+[dependencies]
+tauri = { version = "2", features = ["tray-icon", "protocol-asset", "devtools"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+tauri = { version = "2", features = ["macos-private-api"] }
+```

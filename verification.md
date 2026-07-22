@@ -516,6 +516,32 @@
 - `git diff --check`：通过，仅输出仓库既有的 LF/CRLF 转换提示。
 - 本次未生成安装包，未启动或停止用户安装目录中的 CLI-Manager/cc-connect，也未修改第三方 cc-connect 源码或二进制。
 
+## PR #165 跨平台 Tauri Feature 隔离（2026-07-22）
+
+### 根因与发现清单
+
+- 根因位于 Cargo 目标依赖与 Tauri 平台配置边界：通用 `tauri` 依赖在 Windows/Linux 也启用了 `macos-private-api`，但对应的 `app.macOSPrivateApi = true` 只存在于 `tauri.macos.conf.json`；绕过 Tauri CLI 直接运行 Cargo 时，`tauri-build` 因 feature/config 不一致而终止。
+- 修复落在依赖声明源头：通用依赖只保留跨平台 feature，`macos-private-api` 移入现有 macOS target dependency；未在 E2E 中注入 `TAURI_CONFIG` 或增加错误兜底。
+- 已修改：`src-tauri/Cargo.toml`、Tauri 发布契约、CHANGELOG 与本验证记录。
+- 已复核但未修改：`tauri.macos.conf.json` 继续启用私有 API；`verify-macos-window-controls.mjs` 可识别目标依赖；Windows proxy E2E 与 Release Workflow 继续使用真实直接 Cargo 构建作为回归门。
+- `Cargo.lock` 无需更新；依赖包与版本未变化，仅调整既有 Tauri feature 的目标归属。
+- GitNexus MCP 与项目本地 runner 均不可用，按仓库规则降级使用契约、Cargo metadata、关键词交叉引用和 Git diff 检查。
+
+### 场景覆盖
+
+- Windows/Linux：不解析 `macos-private-api`，直接 `cargo build/check` 不再与 macOS 配置发生冲突。
+- macOS：目标依赖继续启用 `macos-private-api`，并与 `tauri.macos.conf.json` 保持一致。
+- Tauri CLI 与直接 Cargo：常规平台配置合并链保持不变；不经 Tauri CLI 的 proxy E2E 也可构建。
+- 窗口焦点、分屏、托盘、WSL、Worktree 与 Hook 状态不参与 Cargo feature 解析，确认与本修复无关。
+
+### 验证结果
+
+- Cargo metadata：通用 `tauri` feature 为 `tray-icon`、`protocol-asset`、`devtools`；macOS target 单独包含 `macos-private-api`。
+- `node scripts/verify-macos-window-controls.mjs`：通过。
+- `npm run test:codex-proxy:e2e`：通过，3 组真实 Windows proxy 检查全部成功。
+- `cargo check --locked --manifest-path src-tauri/Cargo.toml`：通过。
+- `git diff --check`：通过。
+
 ## SSH 显式地址直连被默认 Config 权限阻断修复（2026-07-22）
 
 ### 根因陈述与发现清单
