@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::process::Command;
 use std::time::Duration;
+use tauri::{path::BaseDirectory, AppHandle, Manager};
 use uuid::Uuid;
 
 use crate::shell_resolver::{output_with_timeout, silent_command};
@@ -12,6 +13,8 @@ use crate::ssh_transport::{
     format_remote_home_path, posix_quote, validate_remote_home_path, SshOneShotOptions,
     SshRemoteHomePathError, SshTransportLaunch, SshTransportSpec,
 };
+
+const SSH_AGENT_RESOURCE_ROOT: &str = "resources/ssh-agent";
 
 const AGENT_PROBE_MAGIC: &str = "CLI_MANAGER_SSH_AGENT_PROBE/1";
 const AGENT_ENV_MAGIC: &str = "CLI_MANAGER_SSH_AGENT_ENV/1";
@@ -630,6 +633,13 @@ pub struct SshAgentInstallPreview {
     install_root: String,
     install_path: String,
     current_version: String,
+    distribution_source: String,
+}
+
+fn bundled_agent_release_dir(app: &AppHandle) -> Result<std::path::PathBuf, String> {
+    app.path()
+        .resolve(SSH_AGENT_RESOURCE_ROOT, BaseDirectory::Resource)
+        .map_err(|error| format!("ssh_agent_bundled_resource_resolve_failed:{error}"))
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1554,6 +1564,7 @@ pub async fn ssh_agent_probe(
 
 #[tauri::command]
 pub async fn ssh_agent_install_preview(
+    app: AppHandle,
     host_id: String,
     spec: SshConnectionSpec,
     manifest_url: Option<String>,
@@ -1564,10 +1575,17 @@ pub async fn ssh_agent_install_preview(
     Uuid::parse_str(host_id.trim()).map_err(|_| "ssh_host_id_invalid".to_string())?;
     validate_spec(&spec)?;
     ensure_non_interactive(&spec)?;
-    let release = fetch_verified_release(manifest_url.as_deref(), allow_http).await?;
+    let bundled_root = bundled_agent_release_dir(&app)?;
+    let release = fetch_verified_release(
+        manifest_url.as_deref(),
+        allow_http,
+        Some(bundled_root.as_path()),
+    )
+    .await?;
     let environment = detect_remote_agent_environment(&spec).await?;
     let install_root = validated_install_root(install_dir.as_deref(), &environment)?;
     let artifact = select_artifact(&release.manifest, &environment.target)?.clone();
+    let distribution_source = release.distribution_source().to_string();
     Ok(SshAgentInstallPreview {
         action: install_action(current_version.as_deref(), &release.manifest.version),
         manifest_url: release.manifest_url,
@@ -1582,11 +1600,13 @@ pub async fn ssh_agent_install_preview(
         install_root,
         install_path: environment.install_path,
         current_version: current_version.unwrap_or_default(),
+        distribution_source,
     })
 }
 
 #[tauri::command]
 pub async fn ssh_agent_install(
+    app: AppHandle,
     host_id: String,
     spec: SshConnectionSpec,
     manifest_url: Option<String>,
@@ -1597,11 +1617,17 @@ pub async fn ssh_agent_install(
     Uuid::parse_str(host_id.trim()).map_err(|_| "ssh_host_id_invalid".to_string())?;
     validate_spec(&spec)?;
     ensure_non_interactive(&spec)?;
-    let release = fetch_verified_release(manifest_url.as_deref(), allow_http).await?;
+    let bundled_root = bundled_agent_release_dir(&app)?;
+    let release = fetch_verified_release(
+        manifest_url.as_deref(),
+        allow_http,
+        Some(bundled_root.as_path()),
+    )
+    .await?;
     let environment = detect_remote_agent_environment(&spec).await?;
     let install_root = validated_install_root(install_dir.as_deref(), &environment)?;
     let artifact = select_artifact(&release.manifest, &environment.target)?.clone();
-    let bytes = download_artifact(&artifact, allow_http).await?;
+    let bytes = download_artifact(&release, &artifact, allow_http).await?;
     let script = build_agent_install_script(
         &environment,
         &install_root,

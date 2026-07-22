@@ -8,6 +8,7 @@ import type { HistoryFileChangeSummary, HistorySessionDetail, HistorySource, Wor
 import {
   fetchLatestProjectSessionDetail,
   fetchRemoteLatestProjectSessionDetail,
+  fetchRemoteTodayProjectStats,
   fetchTodayProjectStatsMerged,
   type TodayProjectStats,
 } from "../../stores/historyStore";
@@ -615,19 +616,34 @@ export function TerminalStatsPanel({ activeSessionId, open, visible = true, embe
     }
     let cancelled = false;
     setLoadingToday(true);
-    void fetchTodayProjectStatsMerged(
-      todayUsageScope.projectKey,
-      sourceFilter,
-      todayUsageScope.projectPaths
-    ).then((result) => {
-      if (cancelled) return;
-      setTodayStats(result);
-      setLoadingToday(false);
-    });
+    const loadTodayStats = async () => {
+      try {
+        if (isSshProject && project) {
+          if (remoteHistoryContextRef.current?.launch.projectId !== project.id) {
+            remoteHistoryContextRef.current = await buildSshAgentHistoryContext(project);
+          }
+          const remote = await fetchRemoteTodayProjectStats(remoteHistoryContextRef.current);
+          remoteHistoryContextRef.current = remote.context;
+          if (!cancelled) setTodayStats(remote.result);
+        } else {
+          const result = await fetchTodayProjectStatsMerged(
+            todayUsageScope.projectKey,
+            sourceFilter,
+            todayUsageScope.projectPaths
+          );
+          if (!cancelled) setTodayStats(result);
+        }
+      } catch {
+        if (!cancelled) setTodayStats(null);
+      } finally {
+        if (!cancelled) setLoadingToday(false);
+      }
+    };
+    void loadTodayStats();
     return () => {
       cancelled = true;
     };
-  }, [isSshProject, latestSession?.updated_at, panelActive, sourceFilter, todayUsageScope]);
+  }, [isSshProject, latestSession?.updated_at, panelActive, project, sourceFilter, todayUsageScope]);
 
   // 空闲时数据轮询返回 unchanged 不会触发重渲染，需独立 tick 让头部相对时间文案随时间走字
   useEffect(() => {

@@ -38,6 +38,21 @@ interface Props {
 }
 
 const SOURCES: SshToolSource[] = ["claude", "codex"];
+const OFFICIAL_AGENT_MANIFEST_PATH = /^\/dark-hxx\/CLI-Manager\/releases\/(?:latest\/download|download\/[^/]+)\/ssh-agent-release-manifest\.json$/;
+
+function savedManifestInput(value: string | null | undefined): string {
+  const trimmed = value?.trim() ?? "";
+  if (!trimmed) return "";
+  try {
+    const url = new URL(trimmed);
+    return url.hostname === "github.com" && OFFICIAL_AGENT_MANIFEST_PATH.test(url.pathname)
+      ? ""
+      : trimmed;
+  } catch {
+    return trimmed;
+  }
+}
+
 const AGENT_STATUS_KEYS: Record<string, TranslationKey> = {
   notChecked: "settings.sshHosts.cliIntegration.agent.status.notChecked",
   installed: "settings.sshHosts.cliIntegration.agent.status.installed",
@@ -71,6 +86,8 @@ const AGENT_CODE_KEYS: Record<string, TranslationKey> = {
   ssh_agent_release_target_missing: "settings.sshHosts.cliIntegration.agent.code.ssh_agent_release_target_missing",
   ssh_agent_artifact_sha256_mismatch: "settings.sshHosts.cliIntegration.agent.code.ssh_agent_artifact_sha256_mismatch",
   ssh_agent_artifact_size_mismatch: "settings.sshHosts.cliIntegration.agent.code.ssh_agent_artifact_size_mismatch",
+  ssh_agent_bundled_resources_incomplete: "settings.sshHosts.cliIntegration.agent.code.ssh_agent_bundled_resources_incomplete",
+  ssh_agent_bundled_resource_invalid: "settings.sshHosts.cliIntegration.agent.code.ssh_agent_bundled_resource_invalid",
   agent_install_locked: "settings.sshHosts.cliIntegration.agent.code.agent_install_locked",
   agent_downgrade_forbidden: "settings.sshHosts.cliIntegration.agent.code.agent_downgrade_forbidden",
   agent_launcher_conflict: "settings.sshHosts.cliIntegration.agent.code.agent_launcher_conflict",
@@ -218,7 +235,7 @@ export function SshCliIntegrationDialog({ open, host, hosts, onOpenChange }: Pro
   useEffect(() => {
     if (!open) return;
     setAgentInstallDir(installation?.install_root ?? "");
-    setAgentManifestUrl(installation?.manifest_url ?? "");
+    setAgentManifestUrl(savedManifestInput(installation?.manifest_url));
   }, [installation?.host_id, installation?.install_root, installation?.manifest_url, open]);
 
   const agentErrorText = (value: unknown) => {
@@ -823,6 +840,7 @@ export function SshCliIntegrationDialog({ open, host, hosts, onOpenChange }: Pro
               <div><span className="text-text-muted">{t("settings.sshHosts.cliIntegration.agent.versionLabel")}</span><div>{installPreview.version}</div></div>
               <div><span className="text-text-muted">{t("settings.sshHosts.cliIntegration.agent.targetLabel")}</span><div>{installPreview.target}</div></div>
               <div><span className="text-text-muted">{t("settings.sshHosts.cliIntegration.agent.size")}</span><div>{(installPreview.artifactSize / 1024 / 1024).toFixed(1)} MB</div></div>
+              <div><span className="text-text-muted">{t("settings.sshHosts.cliIntegration.agent.distributionSource")}</span><div>{t(`settings.sshHosts.cliIntegration.agent.distributionSource.${installPreview.distributionSource}` as TranslationKey)}</div></div>
               <div className="sm:col-span-2"><span className="text-text-muted">{t("settings.sshHosts.cliIntegration.agent.installRoot")}</span><div className="break-all font-mono text-xs">{installPreview.installRoot}</div></div>
               <div className="sm:col-span-2"><span className="text-text-muted">SHA-256</span><div className="break-all font-mono text-xs">{installPreview.artifactSha256}</div></div>
               <div className="sm:col-span-2"><span className="text-text-muted">Manifest</span><div className="break-all font-mono text-xs">{installPreview.manifestUrl}</div></div>

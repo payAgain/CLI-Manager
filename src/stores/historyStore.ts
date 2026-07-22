@@ -305,6 +305,7 @@ function normalizeSummary(raw: unknown): HistorySessionSummary {
       ? remoteIdentityRaw as HistorySessionSummary["remote_identity"]
       : null,
     read_only: rec.read_only === true || rec.readOnly === true,
+    usage: normalizeSessionUsage(rec.usage),
   };
 }
 
@@ -959,6 +960,43 @@ export async function fetchTodayProjectStatsMerged(
     return fetchTodayProjectStats(projectKey, source, null);
   }
   return fetchTodayProjectStats(projectKey, source, null, uniquePaths);
+}
+
+export async function fetchRemoteTodayProjectStats(
+  context: SshAgentHistoryContext,
+): Promise<{ context: SshAgentHistoryContext; result: TodayProjectStats | null }> {
+  const synced = await syncRemoteHistoryContext(context, { limit: 200 });
+  const todayStart = new Date();
+  todayStart.setHours(0, 0, 0, 0);
+  const raw = await invoke<unknown>("history_get_stats", {
+    source: synced.source,
+    ...(await getHistoryPathArgs()),
+    projectKey: null,
+    projectPath: null,
+    projectPaths: synced.projectPaths,
+    rangeDays: null,
+    startAt: todayStart.getTime(),
+    endAt: Date.now(),
+    force: true,
+  });
+  const stats = normalizeStats(raw);
+  return {
+    context: synced,
+    result: {
+      sessions: stats.total_sessions,
+      totalTokens:
+        stats.total_input_tokens +
+        stats.total_output_tokens +
+        stats.total_cache_read_tokens +
+        stats.total_cache_creation_tokens,
+      totalCostUsd: stats.total_cost_usd,
+      inputTokens: stats.total_input_tokens,
+      outputTokens: stats.total_output_tokens,
+      cacheReadTokens: stats.total_cache_read_tokens,
+      cacheCreationTokens: stats.total_cache_creation_tokens,
+      unpricedTokens: stats.total_unpriced_tokens,
+    },
+  };
 }
 
 export async function fetchRemoteLatestProjectSessionDetail(

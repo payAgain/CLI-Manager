@@ -132,6 +132,7 @@ export interface SshAgentInstallPreview {
   installRoot: string;
   installPath: string;
   currentVersion: string;
+  distributionSource: "bundled" | "remote";
 }
 
 export interface SshAgentOperationResult {
@@ -572,6 +573,7 @@ export interface HistorySessionSummary {
   as_of?: number | null;
   remote_identity?: HistoryRemoteIdentity | null;
   read_only?: boolean;
+  usage?: HistorySessionUsage;
 }
 
 export interface HistoryMessage {

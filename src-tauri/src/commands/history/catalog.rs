@@ -2660,7 +2660,7 @@ pub(super) async fn list_remote_cached(
         "SELECT hs.source_session_id, i.source_id, hs.project_key, hs.cwd, hs.title,
                 hs.branch, hs.created_at, hs.updated_at, hs.message_count,
                 hs.input_tokens, hs.output_tokens, hs.cache_read_tokens,
-                hs.cache_creation_tokens, hs.dominant_model, hs.current_model,
+                hs.cache_creation_tokens, hs.total_cost_usd, hs.dominant_model, hs.current_model,
                 hs.parser_version, hs.last_seen_generation, hs.raw_pointers_json,
                 hs.materialization_level, hs.freshness_state,
                 COALESCE(hs.as_of, i.as_of) AS as_of, i.remote_identity_json
@@ -2753,6 +2753,7 @@ pub(super) async fn list_remote_cached(
                 "outputTokens": row.try_get::<i64, _>("output_tokens").map_err(|err| err.to_string())?,
                 "cacheReadTokens": row.try_get::<i64, _>("cache_read_tokens").map_err(|err| err.to_string())?,
                 "cacheCreationTokens": row.try_get::<i64, _>("cache_creation_tokens").map_err(|err| err.to_string())?,
+                "totalCostUsd": row.try_get::<f64, _>("total_cost_usd").map_err(|err| err.to_string())?,
                 "dominantModel": row.try_get::<Option<String>, _>("dominant_model").map_err(|err| err.to_string())?,
                 "currentModel": row.try_get::<Option<String>, _>("current_model").map_err(|err| err.to_string())?,
             },
