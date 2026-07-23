@@ -1417,3 +1417,36 @@ Completed S06-S10 with remote history/cache and resume, read-only file and Git p
 ### Next Steps
 
 - None - task complete
+
+
+## Session 41: 修复 Worktree 创建并发与错误诊断
+
+**Date**: 2026-07-23
+**Task**: 修复 Worktree 创建并发与错误诊断
+**Branch**: `master`
+
+### Summary
+
+修复同名 Worktree 创建并发撞路径、Git checkout 错误截断和未处理 Promise；补齐中英文提示、Worktree 合约及 V1.3.1 变更记录。用户已确认修复成功。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `a140aaef` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

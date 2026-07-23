@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 40
-- **Last Active**: 2026-07-22
+- **Total Sessions**: 41
+- **Last Active**: 2026-07-23
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~1419 | Active |
+| `journal-1.md` | ~1452 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 41 | 2026-07-23 | 修复 Worktree 创建并发与错误诊断 | `a140aaef` | `master` |
 | 40 | 2026-07-22 | 修复 PR #165 跨平台 Tauri Feature 配置 | `0c723c3c` | `pr-165-targeted-tauri-feature` |
 | 39 | 2026-07-22 | 统一 CLI-Manager 版本号为 1.3.1 | `13825454` | `master` |
 | 38 | 2026-07-21 | 修复终端 Tab 切换自动聚焦 | `27b71e60` | `master` |
