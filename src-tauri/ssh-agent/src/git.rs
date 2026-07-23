@@ -245,9 +245,10 @@ fn validate_relative(value: &str, allow_empty: bool) -> Result<String, String> {
         || invalid_text(value)
         || value.contains('\\')
         || Path::new(value).is_absolute()
-        || value
-            .split('/')
-            .any(|part| part.is_empty() || part == "." || part == "..")
+        || (!value.is_empty()
+            && value
+                .split('/')
+                .any(|part| part.is_empty() || part == "." || part == ".."))
     {
         return Err("remote_git_path_invalid".to_string());
     }
@@ -1466,6 +1467,8 @@ mod tests {
     #[test]
     fn paths_reject_traversal_and_windows_separators() {
         assert!(validate_relative("src/lib.rs", false).is_ok());
+        assert!(validate_relative("", true).is_ok());
+        assert!(validate_relative("", false).is_err());
         assert!(validate_relative("../secret", false).is_err());
         assert!(validate_relative("C:\\secret", false).is_err());
         assert!(validate_relative("bad\0path", false).is_err());

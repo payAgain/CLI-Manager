@@ -242,6 +242,7 @@ Frames use a four-byte big-endian length followed by UTF-8 JSON. The maximum fra
 | Git capability `gitFull` is absent | `ssh_agent_capability_missing:gitFull`; do not downgrade to read-only or local Git |
 | Untracked Git diff target is a symlink or directory | `remote_git_symlink_rejected`; do not follow or read the target |
 | Git path list exceeds count or aggregate byte bound | `remote_git_paths_invalid` |
+| Root repository uses `repoPath == ""` | accept it only for repository resolution; file paths still require a non-empty relative path |
 | SSH Git context is pending, missing, or stale | `ssh_agent_context_unavailable`; do not invoke any local `git_*` command |
 
 ## 5. Good / Base / Bad Cases
@@ -265,7 +266,9 @@ Frames use a four-byte big-endian length followed by UTF-8 JSON. The maximum fra
 - Bad: issue `BEGIN IMMEDIATE`, updates, and `COMMIT` as separate `tauri-plugin-sql` calls and assume the pool preserves connection affinity.
 - Bad: pass a remote absolute path to local `file_*`/Git commands, expose create/save/delete/move/external opener actions, or traverse more than the Agent file quotas.
 - Good: while an SSH project is still building its Agent context, Git actions fail closed; once ready, `rootPath` equals the launch plan and only the dedicated Git lane is used.
+- Good: Agent repository validation allows the empty `repoPath` that identifies the configured root repository, while `validate_file_path` continues to reject an empty file path.
 - Bad: let a missing SSH context make `createGitTransport` silently choose the local transport, or allow a symlinked untracked file to be read by `fs::read`.
+- Bad: validate an allowed-empty `repoPath` with the same non-empty path-segment check as file paths; the root repository then fails every Git read with `remote_git_path_invalid`.
 - Good: a replaced bridge briefly receives `bridge_already_active`, backs off, then takes ownership after the old Agent process removes its socket.
 - Base: a missing or malformed discovery record is reconstructed only after an explicit install; no page-open or probe action changes remote files.
 - Base: Claude/Codex launched from an ordinary SSH shell has no binding variables; the installed Hook exits successfully without writing spool data.
@@ -294,6 +297,7 @@ Frames use a four-byte big-endian length followed by UTF-8 JSON. The maximum fra
 - Assert protocol minor 4 resume capability and protocol minor 5 remote-file capability, structured Claude/Codex args, source/cwd validation, ownership claim/release, and implicit SSH Config username handling.
 - Assert remote file root/path confinement, symlink escape rejection, binary refusal, 1 MiB text and 5 MiB image limits, the exact 12,000,000-pixel boundary, video refusal, directory/search/visited limits, image data URLs, and UI/store read-only routing.
 - Assert protocol minor 7 and `gitFull`, dedicated Git-lane serialization and identity isolation, exact launch-root binding, strict per-RPC payloads, full Git mutation/network operations, write timeout/no-retry result-unknown handling, path/branch/patch validation, untracked symlink rejection, and SSH-pending fail-closed transport selection.
+- Assert `validate_relative("", true)` succeeds for the root repository, while `validate_relative("", false)` and empty file paths remain rejected.
 - Assert manifest tampering, duplicate/unknown targets, HTTP opt-in, query/fragment rejection, target selection, size/SHA-256 mismatch, and bounded downloads.
 - Assert install path quoting, strict operation markers/metadata, semantic version actions, lock conflicts, default/custom roots, corrupt/missing discovery recovery, promote rollback, distinct previous versions, and transactional uninstall.
 - Assert Claude/Codex exact-owner merge, duplicate normalization, unknown-event preservation, invalid JSON/TOML refusal, user-owned Codex feature/comment preservation, symlink target change refusal, fingerprint conflict, journal rollback, and Agent uninstall blocking.
