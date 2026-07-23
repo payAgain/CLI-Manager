@@ -1384,3 +1384,36 @@ Completed S06-S10 with remote history/cache and resume, read-only file and Git p
 ### Next Steps
 
 - None - task complete
+
+
+## Session 40: 完成 SSH 远程 Git 全功能面板
+
+**Date**: 2026-07-23
+**Task**: 完成 SSH 远程 Git 全功能面板
+**Branch**: `feat/ssh-agent`
+
+### Summary
+
+统一 SSH 与本地 Git 面板，发布 Agent 0.1.3，并修复根仓库路径及未跟踪目录采集问题。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `c6c7626e` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
