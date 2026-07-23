@@ -1450,3 +1450,36 @@ Completed S06-S10 with remote history/cache and resume, read-only file and Git p
 ### Next Steps
 
 - None - task complete
+
+
+## Session 42: 修复 WebDAV 远程项目恢复字段
+
+**Date**: 2026-07-23
+**Task**: 修复 WebDAV 远程项目恢复字段
+**Branch**: `master`
+
+### Summary
+
+WebDAV 工作区快照现同步可移植 SSH 主机分组、主机档案及项目绑定；恢复保持远程路径和主机绑定，严格排除凭据与本机路径，并补齐事务回归测试和同步契约。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `4be60cce` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
