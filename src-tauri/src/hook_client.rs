@@ -1,15 +1,18 @@
-// 隐藏子命令 `__hook` 的实现：作为 Claude/Codex 的 hook 命令被高频调用。
+// 隐藏子命令 `__hook` 的实现：作为 Claude/Codex/Grok 的 hook 命令被高频调用。
 // 取代旧版 PowerShell 脚本，做到 Windows / macOS / Linux 跨平台一致。
 //
-// 流程：读取注入的回调环境变量 + stdin 事件 JSON，向本地通知服务
-// POST 一条事件，然后无条件退出。任何缺失/失败都静默 exit(0)，绝不打断 CLI。
+// 流程：读取回调环境变量（或回退到 daemon 发现文件）+ stdin 事件 JSON，
+// 向本地通知服务 POST 一条事件，然后无条件退出。任何缺失/失败都静默 exit(0)，绝不打断 CLI。
 use std::env;
+use std::fs;
 use std::io::{Read, Write};
 use std::net::TcpStream;
+use std::path::PathBuf;
 use std::process::exit;
 use std::time::Duration;
 
 use cli_manager_hook_schema::{non_empty_trimmed, normalize_hook_input};
+use serde::Deserialize;
 use serde_json::{json, Value};
 
 /// `main` 在初始化 Tauri runtime 之前调用本函数并退出，因此这里
@@ -21,10 +24,11 @@ pub fn run_and_exit(source: &str, event: &str) -> ! {
 }
 
 fn try_notify(source: &str, event: &str) -> Option<()> {
-    // 三个回调环境变量由 PTY 注入（claude_hook::apply_env）。缺任一即未启用回调，直接退出。
-    let tab_id = non_empty_env("CLI_MANAGER_TAB_ID")?;
-    let port = non_empty_env("CLI_MANAGER_NOTIFY_PORT")?;
-    let token = non_empty_env("CLI_MANAGER_NOTIFY_TOKEN")?;
+    // Prefer PTY-injected env (tab binding). Fall back to daemon discovery so
+    // Grok/Claude started without CLI_MANAGER_* still can reach notifications.
+    let notify = resolve_notify_target()?;
+    let tab_id = non_empty_env("CLI_MANAGER_TAB_ID")
+        .unwrap_or_else(|| format!("external:{source}"));
 
     let mut stdin_raw = String::new();
     let _ = std::io::stdin().read_to_string(&mut stdin_raw);
@@ -34,6 +38,17 @@ fn try_notify(source: &str, event: &str) -> Option<()> {
     }
 
     let normalized = normalize_hook_input(event, &hook_input)?;
+    // Prefer explicit env tab id; if external, include session id for uniqueness.
+    let tab_id = if tab_id.starts_with("external:") {
+        normalized
+            .session_id
+            .as_deref()
+            .map(|session| format!("external:{source}:{session}"))
+            .unwrap_or(tab_id)
+    } else {
+        tab_id
+    };
+
     let reasoning_effort = normalized
         .reasoning_effort
         .or_else(|| non_empty_env("CLAUDE_EFFORT").and_then(|value| non_empty_trimmed(&value)));
@@ -65,7 +80,55 @@ fn try_notify(source: &str, event: &str) -> Option<()> {
     });
     let body = serde_json::to_vec(&payload).ok()?;
 
-    post(&port, &token, &body)
+    post(&notify.port, &notify.token, &body)
+}
+
+struct NotifyTarget {
+    port: String,
+    token: String,
+}
+
+fn resolve_notify_target() -> Option<NotifyTarget> {
+    if let (Some(port), Some(token)) = (
+        non_empty_env("CLI_MANAGER_NOTIFY_PORT"),
+        non_empty_env("CLI_MANAGER_NOTIFY_TOKEN"),
+    ) {
+        return Some(NotifyTarget { port, token });
+    }
+
+    // Grok/external CLI often does not inherit PTY-injected env into hook children.
+    // Fall back to the same discovery files the app/daemon use.
+    let data_dir = crate::app_paths::cli_manager_data_dir().ok()?;
+    for name in ["daemon.dev.json", "daemon.json"] {
+        if let Some(target) = read_daemon_notify_target(&data_dir.join(name)) {
+            return Some(target);
+        }
+    }
+    None
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DaemonInfoLite {
+    hook_port: u16,
+    token: String,
+    #[serde(default)]
+    pid: u32,
+}
+
+fn read_daemon_notify_target(path: &PathBuf) -> Option<NotifyTarget> {
+    let raw = fs::read_to_string(path).ok()?;
+    let info: DaemonInfoLite = serde_json::from_str(&raw).ok()?;
+    if info.hook_port == 0 || info.token.trim().is_empty() {
+        return None;
+    }
+    if info.pid != 0 && !crate::daemon::discovery::is_pid_alive(info.pid) {
+        return None;
+    }
+    Some(NotifyTarget {
+        port: info.hook_port.to_string(),
+        token: info.token,
+    })
 }
 
 fn post(port: &str, token: &str, body: &[u8]) -> Option<()> {
@@ -98,12 +161,23 @@ fn non_empty_env(key: &str) -> Option<String> {
 }
 
 fn should_suppress_codex_permission_request(source: &str, event: &str, hook_input: &Value) -> bool {
-    source == "codex"
-        && event == "PermissionRequest"
-        && matches!(
+    if event != "PermissionRequest" {
+        return false;
+    }
+    match source {
+        "codex" => matches!(
             hook_input.get("permission_mode").and_then(Value::as_str),
             Some("dontAsk" | "bypassPermissions")
-        )
+        ),
+        "grok" => {
+            hook_input
+                .get("permissionMode")
+                .or_else(|| hook_input.get("permission_mode"))
+                .and_then(Value::as_str)
+                == Some("bypassPermissions")
+        }
+        _ => false,
+    }
 }
 /// 与旧 PowerShell 脚本保持一致的标题文案；前端在缺省时会自行兜底（App.tsx）。
 fn title_for(source: &str, event: &str) -> &'static str {
@@ -118,6 +192,17 @@ fn title_for(source: &str, event: &str) -> &'static str {
         ("pi", "UserPromptSubmit") => "Pi Agent running",
         ("pi", "Stop") => "Pi Agent done",
         ("pi", _) => "Pi Agent needs attention",
+        ("grok", "SessionStart") => "Grok Build session started",
+        ("grok", "UserPromptSubmit") => "Grok Build running",
+        ("grok", "Stop") => "Grok Build done",
+        ("grok", "StopFailure") => "Grok Build failed",
+        ("grok", "SubagentStart") => "Grok Build subagent started",
+        ("grok", "SubagentStop") => "Grok Build subagent done",
+        ("grok", "AgentToolStart") => "Grok Build Agent tool started",
+        ("grok", "AgentToolStop") => "Grok Build Agent tool done",
+        ("grok", "ToolStart") => "Grok Build tool started",
+        ("grok", "ToolStop") => "Grok Build tool done",
+        ("grok", _) => "Grok Build needs attention",
         (_, "SessionStart") => "Claude Code session started",
         (_, "UserPromptSubmit") => "Claude Code running",
         (_, "Stop") => "Claude Code done",
@@ -208,5 +293,25 @@ mod tests {
         assert!(!should_suppress_codex_permission_request(
             "codex", "Stop", &bypass
         ));
+    }
+
+    #[test]
+    fn suppresses_only_bypassed_grok_permission_request() {
+        assert!(should_suppress_codex_permission_request(
+            "grok",
+            "PermissionRequest",
+            &json!({ "permissionMode": "bypassPermissions" })
+        ));
+        for input in [
+            json!({ "permissionMode": "auto" }),
+            json!({ "permissionMode": "default" }),
+            json!({}),
+        ] {
+            assert!(!should_suppress_codex_permission_request(
+                "grok",
+                "PermissionRequest",
+                &input
+            ));
+        }
     }
 }

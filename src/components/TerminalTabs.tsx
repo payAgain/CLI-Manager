@@ -2997,12 +2997,18 @@ export function TerminalTabs({
   const ensureStatsPanelAllowed = useCallback(async () => {
     try {
       const settings = useSettingsStore.getState();
-      const status = await invoke<{ claude: { status: string }; codex: { status: string }; pi: { status: string } }>(
+      const status = await invoke<{
+        claude: { status: string };
+        codex: { status: string };
+        pi: { status: string };
+        grok: { status: string };
+      }>(
         "hook_settings_get_status",
         {
           selectedDir: settings.claudeHookConfigDir?.trim() || null,
           codexSelectedDir: settings.codexHookConfigDir?.trim() || null,
           piSelectedDir: settings.piHookConfigDir?.trim() || null,
+          grokSelectedDir: settings.grokHookConfigDir?.trim() || null,
           ccSwitchDbPath: settings.ccSwitchDbPath ?? undefined,
           autoRepair: settings.claudeHookBridgeEnabled && settings.claudeHookAutoRepairKnownInstalled,
         }
@@ -3010,7 +3016,8 @@ export function TerminalTabs({
       const hasEnabledInstalledHook =
         (settings.claudeHookBridgeEnabled && status.claude.status === "installed") ||
         (settings.codexHookBridgeEnabled && status.codex.status === "installed") ||
-        (settings.piHookBridgeEnabled && status.pi.status === "installed");
+        (settings.piHookBridgeEnabled && status.pi.status === "installed") ||
+        (settings.grokHookBridgeEnabled && status.grok.status === "installed");
       if (!hasEnabledInstalledHook) {
         toast.warning(t("notifications.stats.needHook"), {
           description: t("notifications.stats.needHookDescription"),
