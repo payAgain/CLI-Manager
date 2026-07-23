@@ -18,6 +18,7 @@
 - **Windows Tauri 开发启动**：`npm run tauri dev` 会先构建随远程 Codex 托管使用的原生 app-server proxy，并同步 Tauri/Cargo runner 区域指定的 Rust target、release/profile 与 target-dir；第二个 `--` 后的应用参数不会影响 proxy 构建，避免开发版运行时缺少或读取错误目录的代理程序。
 - **SSH 显式地址直连**：未配置跳板机的手工地址连接在私钥、密码、凭据引用和交互认证模式下不再读取无关的用户 `~/.ssh/config`，避免该文件 ACL/语法异常在认证前阻断连接；Agent 与 SSH Config 模式继续读取默认配置，以保留 `IdentityAgent` 和 `Host *` 等设置。Config 别名、跳板路由与用户明确选择的自定义配置文件继续按原逻辑生效。
 - **后台探测进程树回收**：外部命令探测在 Windows 使用 Job Object、macOS/Linux 使用独立进程组；超时、等待失败或启动器提前退出时都会回收所属后代进程，避免真实 Codex 等后代继续运行或持有输出管道导致后台残留和等待卡死。
+- **Worktree 创建失败诊断与防重入**：阻止同一项目同一任务名的自动、手动和分屏 Worktree 创建并发撞路径；Git 检出失败会保留最终错误信息，前端改为双语可读提示，不再产生未处理 Promise。
 - 修复在终端 Tab 右键重命名普通项目 Tab 时，误把项目名称和同项目所有已打开 Tab 一起改名的问题；现在 Tab 重命名只作用于当前终端会话。
 - 修复旧版历史索引数据库升级时，在补充 `scope_kind` 等字段之前提前创建依赖索引，导致刷新报错且会话无法打开的问题；现有索引数据会原地升级，无需用户手工删除缓存。
 - 修复 WebDAV 恢复、ZIP 导入及恢复回滚把 SQLite 事务拆分到连接池的多个连接上，可能触发 `database is locked` 的问题；数据库域恢复现由 Rust 在单连接事务中原子执行。
