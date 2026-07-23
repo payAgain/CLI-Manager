@@ -120,6 +120,8 @@ return (
   - `initialContent`: existing complete JSONL lines already present before tail startup. The frontend must append this immediately; the backend tail starts after the consumed offset to avoid duplicate output.
 - `SubagentStart` and `SubagentStop` must be installed/uninstalled together for each source. Claude `PreToolUse`/`PostToolUse` Agent/Task fallback hooks must be installed/uninstalled with the Claude subagent hooks.
 - Stop routing priority: match by `agentId`; if missing, close only when exactly one transcript pane belongs to the parent `tabId`.
+- Codex child completion must not depend exclusively on `SubagentStop`: a complete child rollout JSONL record with `type=event_msg` and `payload.type=task_complete|turn_aborted` is a fallback stop signal for that transcript key. Malformed/incomplete lines are ignored until a later complete append, and repeated Hook/rollout stop signals are idempotent.
+- When Hook auto-close is enabled, sub-agent transcript panes use `hookPopupAutoCloseSeconds`; when disabled, retain the existing source-specific fallback delay.
 - Transcript rendering performance contract:
   - Backend transcript tail emits complete JSONL lines only; the frontend may parse appended suffixes incrementally when `resetSeq` is unchanged and `content.length` only grows.
   - Frontend increments `resetSeq` whenever `reset=true` or content is front-trimmed. A `resetSeq` change is the only signal that consumers must discard parse cache and rebuild from the retained tail.
@@ -137,6 +139,7 @@ return (
 - WSL Codex discovery receives a config path that is neither Linux absolute, WSL UNC, nor convertible Windows absolute -> return `invalid_wsl_codex_config_dir` and keep the pane pending/degraded.
 - Child transcript already has complete lines at subscribe time -> backend returns them in `initialContent` and starts tailing from that offset; an incomplete final line must wait for completion before emit.
 - Missing or ambiguous stop target -> frontend does nothing; it must not guess and close multiple child panes.
+- Malformed, incomplete, or non-terminal Codex rollout JSONL -> keep the pane active and wait for a later append or Hook stop.
 - `appendSubagentTranscript` receives an unknown key -> ignore it; multi-window broadcasts must not create stray transcript state.
 - Appended transcript content exceeds the retention cap -> retain the latest tail, increment `truncatedBytes`, emit the existing OOM diagnostic, and increment `resetSeq` so view caches rebuild safely.
 
@@ -152,12 +155,14 @@ return (
 - Good: Codex runs in WSL with `cwd=/mnt/c/repo` and no custom `CODEX_HOME`; discovery prefers the parent rollout's sessions root, otherwise scans `$HOME/.codex/sessions` inside the reported distro and returns the matched rollout as WSL UNC for tailing.
 - Base: Claude `SubagentStart` includes `agent_transcript_path`; frontend uses it unchanged.
 - Good: `SubagentStop` includes `agent_id`; frontend marks the pane ended and closes it after the grace delay.
+- Good: a Codex child rollout appends `task_complete` or `turn_aborted` without a matching `SubagentStop`; only that pane is marked ended and closes after the configured delay.
 - Good: a hidden child transcript pane receives 1MB of JSONL append traffic; the store retains content, but the hidden view does not re-parse or re-render until it becomes visible.
 - Good: a child transcript grows past the rendered row cap; the UI renders the newest rows plus an omitted-count marker instead of thousands of DOM nodes.
 - Good: Claude hook stdin includes `effort.level = "high"`; the bridge emits `reasoningEffort: "high"` and the current terminal's stats card shows the effort even when the JSONL history usage lacks `reasoning_effort`.
 - Bad: `SubagentStop` calls `finishSubagentTranscript` before awaiting the late child transcript subscription; the pane can close with empty output.
 - Bad: A new hook event is installed but not added to the bridge whitelist; the hook silently posts but the bridge rejects it.
 - Bad: `SubagentStop` has no `agent_id` while multiple child panes share one parent; frontend must not close all of them.
+- Bad: searching raw transcript text for `task_complete` and closing a pane when the phrase only appears inside an assistant message.
 - Bad: deriving Claude effort from the model name or global settings when the current hook payload/env has no effort; concurrent sessions can use different `/effort` values.
 - Bad: parsing the full retained transcript and re-rendering every Markdown message on every 250ms tail append; this blocks terminal typing and tab switching.
 
@@ -174,6 +179,7 @@ return (
 - Rust unit test: `hook_client` extracts `reasoningEffort` from Claude `effort.level`.
 - TypeScript type-check must pass after `CliHookPayload` field changes.
 - Frontend regression test or manual profiling: while a child transcript is hidden and appends continue, React render count/CPU for `SubagentTranscriptView` should not grow with append frequency; when shown again, it catches up from retained content.
+- Frontend regression test: valid Codex `task_complete`/`turn_aborted` records finish only the matching pane; malformed JSON, ordinary messages containing those words, and duplicate stop signals do not trigger extra closes.
 
 ### 7. Wrong vs Correct
 
@@ -206,6 +212,21 @@ invoke("codex_subagent_transcript_discover", {
   wslDistroName,
   parentTranscriptPath,
 });
+```
+
+#### Wrong
+
+```ts
+if (content.includes("task_complete")) finishSubagentTranscript(payload);
+```
+
+#### Correct
+
+```ts
+const record = JSON.parse(completeJsonlLine);
+if (record.type === "event_msg" && ["task_complete", "turn_aborted"].includes(record.payload?.type)) {
+  finishMatchingTranscriptOnce(sessionId);
+}
 ```
 
 #### Wrong

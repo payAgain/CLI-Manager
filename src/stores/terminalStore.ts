@@ -423,6 +423,21 @@ const SUBAGENT_DIRECTORY_DISCOVERY_TTL_MS = 15000;
 const PTY_ORPHAN_RECONCILE_INTERVAL_MS = 30_000;
 const TERMINAL_STORE_IN_TAURI = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
+function hasCodexTerminalEvent(content: string): boolean {
+  for (const line of content.split("\n")) {
+    if (!line.trim()) continue;
+    try {
+      const record = JSON.parse(line) as { type?: string; payload?: { type?: string } };
+      if (record.type === "event_msg" && (record.payload?.type === "task_complete" || record.payload?.type === "turn_aborted")) {
+        return true;
+      }
+    } catch {
+      // 尾部可能是不完整 JSONL，等待下一次追加。
+    }
+  }
+  return false;
+}
+
 type WindowWithPtyOrphanTimer = Window & {
   __CLI_MANAGER_PTY_ORPHAN_RECONCILE_TIMER__?: ReturnType<typeof setInterval>;
 };
@@ -3556,6 +3571,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
       return;
     }
     const currentTranscript = get().subagentTranscripts[sessionId];
+    if (currentTranscript?.ended) return;
     logInfo("[subagent_transcript] stop target resolved", {
       sessionId,
       tabId: payload.tabId,
@@ -3594,10 +3610,13 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
 
     const existingTimer = subagentCloseTimers.get(sessionId);
     if (existingTimer) clearTimeout(existingTimer);
+    const settings = useSettingsStore.getState();
     const closeDelayMs =
-      currentTranscript?.source.kind === "child-jsonl" || payload.source === "codex"
-        ? SUBAGENT_CHILD_JSONL_CLOSE_DELAY_MS
-        : SUBAGENT_CLOSE_DELAY_MS;
+      settings.hookPopupAutoCloseEnabled
+        ? settings.hookPopupAutoCloseSeconds * 1000
+        : currentTranscript?.source.kind === "child-jsonl" || payload.source === "codex"
+          ? SUBAGENT_CHILD_JSONL_CLOSE_DELAY_MS
+          : SUBAGENT_CLOSE_DELAY_MS;
     logInfo("[subagent_transcript] schedule transcript close", { sessionId, closeDelayMs, sourceKind: currentTranscript?.source.kind });
     const timer = setTimeout(() => {
       subagentCloseTimers.delete(sessionId);
@@ -3609,6 +3628,13 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
   },
 
   appendSubagentTranscript: (key, content, reset) => {
+    const session = get().sessions.find((candidate) => candidate.id === key);
+    const shouldFinish = Boolean(
+      session?.kind === "subagent-transcript"
+      && session.subagent
+      && !get().subagentTranscripts[key]?.ended
+      && hasCodexTerminalEvent(content),
+    );
     set((state) => {
       const prev = state.subagentTranscripts[key];
       // 仅更新已存在的订阅（本窗口 openSubagentTranscript 预置）；未知 key 忽略（多窗口广播）。
@@ -3663,6 +3689,16 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
         },
       };
     });
+    if (shouldFinish && session?.subagent) {
+      const parentSessionId = session.subagent.parentSessionId;
+      get().finishSubagentTranscript({
+        tabId: parentSessionId,
+        event: "SubagentStop",
+        source: "codex",
+        sessionId: parentSessionId,
+        agentId: session.subagent.agentId ?? null,
+      });
+    }
   },
 }));
 

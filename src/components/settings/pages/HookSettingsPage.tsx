@@ -938,8 +938,8 @@ export function HookSettingsPage() {
             onCheckedChange={(checked) => void updateSetting("hookPopupNotificationsEnabled", checked)}
           />
           <SettingsSwitchRow
-            title={text("自动关闭弹框", "Auto-close Toasts")}
-            description={text("开启后 Hook 通知会在指定时间后自动消失。", "When enabled, Hook notifications disappear after the configured delay.")}
+            title={text("自动关闭", "Auto-close")}
+            description={text("开启后 Hook 通知和子任务转录窗格会在指定时间后自动关闭。", "When enabled, Hook notifications and sub-agent transcript panes close after the configured delay.")}
             checked={hookPopupAutoCloseEnabled}
             onCheckedChange={(checked) => void updateSetting("hookPopupAutoCloseEnabled", checked)}
           />
@@ -956,7 +956,7 @@ export function HookSettingsPage() {
                   {text("默认关闭时间", "Default Close Delay")}
                 </Text>
                 <Text mt={4} size="xs" c="var(--text-muted)">
-                  {text("单位：秒，默认 60 秒；仅在自动关闭开启时可编辑。", "Seconds. Default is 60. Editable only when auto-close is enabled.")}
+                  {text("单位：秒，默认 60 秒；同时用于 Hook 通知和子任务转录窗格。", "Seconds. Default is 60. Applies to Hook notifications and sub-agent transcript panes.")}
                 </Text>
               </Box>
               <Group gap="xs">
@@ -976,7 +976,7 @@ export function HookSettingsPage() {
                 }}
                 w={96}
                 size="xs"
-                aria-label={text("Hook 弹框默认关闭时间", "Hook toast default close delay")}
+                aria-label={text("Hook 通知和子任务转录默认关闭时间", "Hook notification and sub-agent transcript default close delay")}
               />
                 <Text size="xs" c="var(--on-surface-variant)">
                   {text("秒", "sec")}

@@ -10,6 +10,7 @@
 
 ### 修复
 - **WebDAV SSH 项目恢复**：备份现会携带 SSH 主机分组、可移植主机配置、远程路径和项目主机绑定；恢复后无需重新创建主机或重新绑定项目。密码、凭据引用、私钥/自定义 SSH Config 路径及 ProxyCommand 仍不上传；目标设备缺少本机认证材料时明确降级为交互认证。
+- **Codex 子任务窗格结束状态**：当子任务转录包含完成或中断终态但未收到 `SubagentStop` Hook 时，自动将窗格标记为已结束并按设置关闭；Hook 通知与子任务转录窗格统一使用配置的自动关闭时间。
 - **PTY daemon 断连诊断与重连提示**：保留 `pty-daemon` 作为终端主链路不变，新增 WebSocket 连接、断开、心跳超时与重连过程日志；终端写入在可恢复断连时改为“连接已断开，正在尝试自动重连”的提示，不再只暴露裸 `PtyHost WebSocket disconnected`。
 - **文件预览资源熔断**：项目文件浏览器不再预览视频；文本/其他文件超过 1 MiB、图片超过 5 MiB 或光栅图片超过 1200 万像素时会在读取和 Base64 转换前拒绝预览。本地、WSL/UNC 与 SSH 文件读取均增加后端兜底，避免大文件或高像素图片导致 WebView 卡死和 GPU 飙升。
 - **新建终端 PTY 写入超时**：daemon 的 WebSocket writer 将 Attach Replay 拆为可调度帧，Replay 期间允许普通控制响应优先发送，避免大滚动缓冲区恢复时已执行的启动命令因确认响应延迟而误报 `PtyHost request timed out: write`。
