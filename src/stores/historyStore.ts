@@ -8,6 +8,7 @@ import { buildSshAgentHistoryContext, type SshAgentHistoryContext } from "../lib
 import { ensureHistorySourceSettingsLoaded, getHistoryPathArgs, getHistoryPathArgsSync } from "../lib/historyPathArgs";
 import { useProjectStore } from "./projectStore";
 import { useSshAgentIntegrationStore } from "./sshAgentIntegrationStore";
+import { useBackgroundOperationStore } from "./backgroundOperationStore";
 import type {
   HistoryBackupStatus,
   HistoryEditAuditEntry,
@@ -33,6 +34,7 @@ import type {
   HistoryToolEvent,
   HistoryToolCount,
   PromptScope,
+  Project,
   HistorySource,
   HistorySourceFilter,
   SessionFavoriteSnapshot,
@@ -308,6 +310,7 @@ function normalizeSummary(raw: unknown): HistorySessionSummary {
       ? remoteIdentityRaw as HistorySessionSummary["remote_identity"]
       : null,
     read_only: rec.read_only === true || rec.readOnly === true,
+    usage: normalizeSessionUsage(rec.usage),
   };
 }
 
@@ -718,6 +721,7 @@ export interface FetchHistoryStatsOptions {
   sourceFilter: HistorySourceFilter;
   projectKey?: string | null;
   projectPath?: string | null;
+  sourceInstanceId?: string | null;
   rangeDays?: number | null;
   startAt?: number | null;
   endAt?: number | null;
@@ -735,6 +739,7 @@ export async function fetchHistoryStatsProjectOptions(sourceFilter: HistorySourc
 export async function fetchHistoryStatsPayload(options: FetchHistoryStatsOptions): Promise<HistoryStatsPayload> {
   const projectKey = options.projectKey?.trim() || null;
   const projectPath = options.projectPath?.trim() || null;
+  const sourceInstanceId = options.sourceInstanceId?.trim() || null;
   const startAt = typeof options.startAt === "number" && Number.isFinite(options.startAt) ? options.startAt : null;
   const endAt = typeof options.endAt === "number" && Number.isFinite(options.endAt) ? options.endAt : null;
   const rangeDays = options.rangeDays ?? 30;
@@ -744,6 +749,7 @@ export async function fetchHistoryStatsPayload(options: FetchHistoryStatsOptions
     ...(await getHistoryPathArgs()),
     projectKey,
     projectPath,
+    sourceInstanceId,
     rangeDays,
     startAt,
     endAt,
@@ -752,11 +758,33 @@ export async function fetchHistoryStatsPayload(options: FetchHistoryStatsOptions
   return normalizeStats(raw);
 }
 
+export async function fetchRemoteHistoryStatsPayload(
+  project: Project,
+  options: FetchHistoryStatsOptions,
+): Promise<HistoryStatsPayload> {
+  let context = await buildSshAgentHistoryContext(project);
+  try {
+    context = await syncRemoteHistoryContext(context, { limit: 1000 });
+    return await fetchHistoryStatsPayload({
+      ...options,
+      projectKey: null,
+      projectPath: project.remote_path,
+      sourceInstanceId: context.sourceInstanceId,
+      force: true,
+    });
+  } finally {
+    void invoke("history_remote_close", {
+      hostId: context.hostId,
+      consumerId: context.consumerId,
+    }).catch(() => undefined);
+  }
+}
+
 // 供终端统计面板使用：按项目路径取最近一次 CLI 会话详情，不改动历史工作区的选中状态。
 // source 非空时只匹配对应 CLI（claude/codex），供按终端工具区分的场景使用。
 // 传入 prev（上次结果的 file_path/updated_at）时，若最近会话未变化则返回 "unchanged"，
 // 跳过整个 jsonl 的重新解析，供轮询场景使用。
-// forceCatalogRefresh：Hook 刚绑定 sessionId / 用量仍为 0 时强制扫盘索引，避免 catalog TTL 导致侧栏空等再闪出。
+// forceCatalogRefresh：Hook 刚绑定 sessionId / 用量仍为 0 时后台触发扫盘索引；查询保持非阻塞。
 export async function fetchLatestProjectSessionDetail(
   projectPath: string,
   prev?: { filePath: string; updatedAt: number },
@@ -802,7 +830,7 @@ export async function fetchLatestProjectSessionDetail(
     };
 
     // 绑定了 CLI sessionId 时：先按项目过滤找，失败再仅按 sessionId 找（Pi 等 cwd/project_key 口径与 Claude 不同）。
-    // 仍 miss 时强制刷新 catalog 再试一次，避免新会话落盘后 10s TTL 内侧栏一直空白。
+    // 仍 miss 时后台刷新 catalog 再试一次；Grok 精确 sessionId 可由后端绕过 catalog 直接命中。
     const sessionQuery = cliSessionId?.trim() || null;
     const resolveBoundSummary = async (): Promise<HistorySessionSummary | null> => {
       if (!sessionQuery) {
@@ -814,7 +842,7 @@ export async function fetchLatestProjectSessionDetail(
       if (summary?.session_id === sessionQuery) return summary;
       if (!forceCatalogRefresh) return null;
       try {
-        await invoke("history_refresh_index", { ...pathArgs, wait: true });
+        await invoke("history_refresh_index", { ...pathArgs, wait: false });
       } catch (error) {
         logWarn("history.realtime.lookup.refreshFailed", {
           source: source ?? null,
@@ -895,6 +923,7 @@ export async function fetchDiscoveredModels(): Promise<string[]> {
     source: null,
     ...(await getHistoryPathArgs()),
     projectKey: null,
+    sourceInstanceId: null,
     rangeDays: null,
     startAt: null,
     endAt: null,
@@ -924,6 +953,7 @@ export async function fetchTodayProjectStats(
       projectKey: normalizedProjectPath || hasProjectPaths ? null : projectKey,
       projectPath: hasProjectPaths ? null : normalizedProjectPath,
       projectPaths: hasProjectPaths ? normalizedProjectPaths : null,
+      sourceInstanceId: null,
       rangeDays: null,
       startAt: todayStart.getTime(),
       endAt: Date.now(),
@@ -964,11 +994,77 @@ export async function fetchTodayProjectStatsMerged(
   return fetchTodayProjectStats(projectKey, source, null, uniquePaths);
 }
 
+export async function fetchRemoteTodayProjectStats(
+  context: SshAgentHistoryContext,
+): Promise<{ context: SshAgentHistoryContext; result: TodayProjectStats | null }> {
+  const synced = await syncRemoteHistoryContext(context, { limit: 200 });
+  const todayStart = new Date();
+  todayStart.setHours(0, 0, 0, 0);
+  const raw = await invoke<unknown>("history_get_stats", {
+    source: synced.source,
+    ...(await getHistoryPathArgs()),
+    projectKey: null,
+    projectPath: null,
+    projectPaths: synced.projectPaths,
+    sourceInstanceId: synced.sourceInstanceId,
+    rangeDays: null,
+    startAt: todayStart.getTime(),
+    endAt: Date.now(),
+    force: true,
+  });
+  const stats = normalizeStats(raw);
+  return {
+    context: synced,
+    result: {
+      sessions: stats.total_sessions,
+      totalTokens:
+        stats.total_input_tokens +
+        stats.total_output_tokens +
+        stats.total_cache_read_tokens +
+        stats.total_cache_creation_tokens,
+      totalCostUsd: stats.total_cost_usd,
+      inputTokens: stats.total_input_tokens,
+      outputTokens: stats.total_output_tokens,
+      cacheReadTokens: stats.total_cache_read_tokens,
+      cacheCreationTokens: stats.total_cache_creation_tokens,
+      unpricedTokens: stats.total_unpriced_tokens,
+    },
+  };
+}
+
 export async function fetchRemoteLatestProjectSessionDetail(
   context: SshAgentHistoryContext,
   prev?: { filePath: string; updatedAt: number },
   cliSessionId?: string | null,
+  remoteTranscriptRef?: string | null,
 ): Promise<{ context: SshAgentHistoryContext; result: HistorySessionDetail | "unchanged" | null }> {
+  const requestedSessionId = cliSessionId?.trim() || null;
+  if (requestedSessionId) {
+    try {
+      const detailRaw = await invoke<unknown>("history_remote_get_session", {
+        consumerId: context.consumerId,
+        sshLaunch: context.launch,
+        source: context.source,
+        configuredConfigRoot: context.configuredConfigRoot,
+        projectPaths: context.projectPaths,
+        sourceInstanceId: context.sourceInstanceId,
+        sourceSessionId: requestedSessionId,
+        remoteTranscriptRef: remoteTranscriptRef?.trim() || null,
+      });
+      const detail = normalizeDetail(detailRaw);
+      if (detail.session_id !== requestedSessionId) return { context, result: null };
+      const sourceInstanceId = detail.session_ref?.sourceInstanceId || context.sourceInstanceId;
+      const nextContext = sourceInstanceId === context.sourceInstanceId
+        ? context
+        : { ...context, sourceInstanceId };
+      if (prev && detail.file_path === prev.filePath && detail.updated_at === prev.updatedAt) {
+        return { context: nextContext, result: "unchanged" };
+      }
+      return { context: nextContext, result: detail };
+    } catch {
+      return { context, result: null };
+    }
+  }
   const synced = await syncRemoteHistoryContext(context, { limit: SESSION_PAGE_FETCH_LIMIT });
   if (!synced.sourceInstanceId) return { context: synced, result: null };
   const summariesRaw = await invoke<unknown[]>("history_remote_list_cached", {
@@ -979,10 +1075,7 @@ export async function fetchRemoteLatestProjectSessionDetail(
     offset: 0,
   });
   const summaries = (summariesRaw ?? []).map((item) => normalizeSummary(item));
-  const requestedSessionId = cliSessionId?.trim() || null;
-  const summary = requestedSessionId
-    ? summaries.find((item) => item.session_id === requestedSessionId) ?? null
-    : summaries[0] ?? null;
+  const summary = summaries[0] ?? null;
   if (!summary) return { context: synced, result: null };
   if (prev && summary.file_path === prev.filePath && summary.updated_at === prev.updatedAt) {
     return { context: synced, result: "unchanged" };
@@ -995,6 +1088,7 @@ export async function fetchRemoteLatestProjectSessionDetail(
     projectPaths: synced.projectPaths,
     sourceInstanceId: synced.sourceInstanceId,
     sourceSessionId: summary.session_id,
+    remoteTranscriptRef: null,
   });
   return { context: synced, result: normalizeDetail(detailRaw) };
 }
@@ -1562,11 +1656,13 @@ function ensureHistoryIndexListener(): Promise<void> {
   return historyIndexListenerPromise;
 }
 
-async function syncRemoteHistoryContext(
+const remoteHistorySyncRequests = new Map<string, Promise<SshRemoteHistorySyncResult>>();
+
+async function requestRemoteHistorySync(
   context: SshAgentHistoryContext,
-  options: { reset?: boolean; limit?: number } = {},
-): Promise<SshAgentHistoryContext> {
-  const result = await invoke<SshRemoteHistorySyncResult>("history_remote_sync", {
+  options: { reset?: boolean; limit?: number },
+): Promise<SshRemoteHistorySyncResult> {
+  const args = {
     consumerId: context.consumerId,
     sshLaunch: context.launch,
     source: context.source,
@@ -1575,13 +1671,47 @@ async function syncRemoteHistoryContext(
     sourceInstanceId: context.sourceInstanceId || null,
     cursor: options.reset ? null : context.cursor || null,
     limit: options.limit ?? SESSION_PAGE_FETCH_LIMIT,
+  };
+  const key = JSON.stringify({ ...args, hostId: context.hostId, scopeKind: context.scopeKind });
+  const existing = remoteHistorySyncRequests.get(key);
+  if (existing) return existing;
+  const operationId = `remote-history:${context.consumerId}`;
+  useBackgroundOperationStore.getState().start({
+    id: operationId,
+    kind: "remoteHistory",
+    titleKey: "backgroundOperations.remoteHistory.title",
+    detailKey: "backgroundOperations.remoteHistory.loading",
+    contextLabel: context.projectPaths[0] ?? context.configuredConfigRoot,
+    retry: () => { void syncRemoteHistoryContext(context, options).catch(() => undefined); },
   });
-  await useSshAgentIntegrationStore.getState().recordHistorySource(
-    context.hostId,
-    context.configuredConfigRoot,
-    result,
-    context.scopeKind,
-  );
+  const request = invoke<SshRemoteHistorySyncResult>("history_remote_sync", args).then(async (result) => {
+    if (result.applied !== false) {
+      await useSshAgentIntegrationStore.getState().recordHistorySource(
+        context.hostId,
+        context.configuredConfigRoot,
+        result,
+        context.scopeKind,
+      );
+    }
+    useBackgroundOperationStore.getState().succeed(operationId);
+    return result;
+  }).catch((error) => {
+    useBackgroundOperationStore.getState().fail(operationId, error);
+    throw error;
+  });
+  remoteHistorySyncRequests.set(key, request);
+  void request.finally(() => {
+    if (remoteHistorySyncRequests.get(key) === request) remoteHistorySyncRequests.delete(key);
+  }).catch(() => undefined);
+  return request;
+}
+
+async function syncRemoteHistoryContext(
+  context: SshAgentHistoryContext,
+  options: { reset?: boolean; limit?: number } = {},
+): Promise<SshAgentHistoryContext> {
+  const result = await requestRemoteHistorySync(context, options);
+  if (result.applied === false) return context;
   return {
     ...context,
     sourceInstanceId: result.sourceInstanceId,
@@ -2134,6 +2264,7 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
               projectPaths: remoteContext.projectPaths,
               sourceInstanceId: target.session_ref.sourceInstanceId,
               sourceSessionId: target.session_ref.sourceSessionId,
+              remoteTranscriptRef: null,
             })
             : await Promise.reject(new Error("history_remote_online_required"))
           : await invoke<unknown>("history_get_session", {
@@ -2175,6 +2306,7 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
             projectPaths: remoteContext.projectPaths,
             sourceInstanceId: hit.session_ref.sourceInstanceId,
             sourceSessionId: hit.session_ref.sourceSessionId,
+            remoteTranscriptRef: null,
           })
           : await Promise.reject(new Error("history_remote_online_required"))
         : await invoke<unknown>("history_get_session", {

@@ -957,3 +957,135 @@ Claude 启动阶段提前订阅子任务 transcript，Codex rollout 增加有界
 ### Next Steps
 
 - None - task complete
+
+
+## Session 29: CLI 启动参数历史与同步
+
+**Date**: 2026-07-22
+**Task**: CLI 启动参数历史与同步
+**Branch**: `master`
+
+### Summary
+
+为新建项目增加按 CLI 工具统计、按次数和最近使用时间排序的 CLI 参数历史下拉，仅展示前 10 条；历史随偏好设置快照同步，并补充测试、国际化、功能清单和同步契约。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `79a6f9d` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 30: 文件预览熔断保护
+
+**Date**: 2026-07-22
+**Task**: 文件预览熔断保护
+**Branch**: `master`
+
+### Summary
+
+禁止视频预览，并为本地与 SSH 文件浏览增加 1 MiB 文本、5 MiB 图片和 12 MP 光栅图片读取熔断；补充本地化提示、测试、文档与契约。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `9ca8c923` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 31: 修复 Codex 子任务窗格自动关闭
+
+**Date**: 2026-07-23
+**Task**: 修复 Codex 子任务窗格自动关闭
+**Branch**: `master`
+
+### Summary
+
+为 Codex 子任务转录补充 task_complete/turn_aborted 终态兜底，统一自动关闭延迟并更新契约与文档。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `0347ab8e` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 32: 修复跨 Workspan 终端空白
+
+**Date**: 2026-07-23
+**Task**: 修复跨 Workspan 终端空白
+**Branch**: `master`
+
+### Summary
+
+修复普通终端跨 Workspan 分屏重挂载时 StrictMode 探测实例覆盖有效快照的问题，并补充重挂载输出契约测试。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `5cd5011d` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

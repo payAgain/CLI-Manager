@@ -1,6 +1,75 @@
 # CLI Hook Contracts
 
-Concrete contracts for Claude/Codex hook integration.
+Concrete contracts for Claude/Codex/Pi/Grok hook integration.
+
+## Scenario: Local Hook Source Admission
+
+### 1. Scope / Trigger
+
+- Trigger: adding a local CLI Hook source or extending its installed event modules.
+- Applies to: Hook installation, the hidden `__hook` client, local HTTP bridge validation, frontend source typing, and realtime session binding.
+
+### 2. Signatures
+
+```text
+<cli-manager-exe> __hook --source <claude|codex|pi|grok> --event <event>
+normalize_source(source: Option<&str>) -> &str
+is_valid_payload(payload: &ClaudeHookRequest) -> bool
+```
+
+### 3. Contracts
+
+- A source is supported only when the installer, `__hook` client, HTTP receiver, frontend `CliHookSource`, and history binding all recognize the same source value.
+- `normalize_source` preserves `grok`; unknown explicit values normalize to an empty value and are rejected.
+- Grok installer maps approval attention to `PreToolUse` with matcher `Bash|Edit|Write|MultiEdit`, then reports it as `PermissionRequest`; Grok 0.2.111 does not expose a native `PermissionRequest` hook and `Notification` is not an approval event.
+- Grok accepts `SessionStart`, `UserPromptSubmit`, legacy `Notification`, `PermissionRequest`, `Stop`, `StopFailure`, `SubagentStart`, `SubagentStop`, `AgentToolStart`, `AgentToolStop`, `ToolStart`, and `ToolStop`. Uninstalling the attention module must remove only its `PreToolUse -> PermissionRequest` command and preserve `ToolStart`/sub-agent hooks sharing the same native event.
+- Grok `permissionMode=bypassPermissions` suppresses the synthetic approval notification; `auto` does not, because dangerous tools may still require approval.
+- Grok hook stdin may use camelCase `sessionId` and `transcriptPath`; shared hook normalization must preserve them.
+- Invalid source/event pairs return HTTP 400 and never reach frontend or third-party notification sinks. The hidden Hook process still exits successfully so a bridge failure cannot interrupt the CLI.
+
+### 4. Validation & Error Matrix
+
+| Condition | Required behavior |
+|-----------|-------------------|
+| Known source + allowed event | Accept, normalize, and route the payload. |
+| Known source + unknown event | HTTP 400; no notification delivery. |
+| Unknown explicit source | Normalize to empty, HTTP 400. |
+| Missing source | Preserve the legacy Claude default. |
+| Grok camelCase session id | Bind the normalized session id when present. |
+
+### 5. Good/Base/Bad Cases
+
+- Good: Grok displays a successful Hook execution and CLI-Manager receives the event under `source=grok`.
+- Base: Claude, Codex, and Pi keep their existing event sets and routing behavior.
+- Bad: the installer writes `--source grok`, but `normalize_source` or `is_valid_payload` omits Grok, causing every request to be silently discarded after Hook execution.
+
+### 6. Tests Required
+
+- Rust unit test that every installed Grok event passes `is_valid_payload` and an unknown event fails.
+- Hook-schema unit test that Grok camelCase `sessionId` is normalized.
+- Run `cargo check` after changing source admission or payload fields.
+- Manual desktop check: start an internal Grok terminal, confirm SessionStart binds the session, then confirm Stop and an approved dangerous-tool `PermissionRequest` reach CLI-Manager.
+
+### 7. Wrong vs Correct
+
+#### Wrong
+
+```rust
+// Installer supports Grok, but the HTTP receiver still rejects it.
+match normalize_source(payload.source.as_deref()) {
+    "claude" => validate_claude_event(&payload.event),
+    _ => false,
+}
+```
+
+#### Correct
+
+```rust
+match normalize_source(payload.source.as_deref()) {
+    "claude" | "grok" => validate_claude_compatible_event(&payload.event),
+    _ => false,
+}
+```
 
 ## Scenario: Per-Tool Hook Bridge Enablement
 
@@ -120,6 +189,8 @@ return (
   - `initialContent`: existing complete JSONL lines already present before tail startup. The frontend must append this immediately; the backend tail starts after the consumed offset to avoid duplicate output.
 - `SubagentStart` and `SubagentStop` must be installed/uninstalled together for each source. Claude `PreToolUse`/`PostToolUse` Agent/Task fallback hooks must be installed/uninstalled with the Claude subagent hooks.
 - Stop routing priority: match by `agentId`; if missing, close only when exactly one transcript pane belongs to the parent `tabId`.
+- Codex child completion must not depend exclusively on `SubagentStop`: a complete child rollout JSONL record with `type=event_msg` and `payload.type=task_complete|turn_aborted` is a fallback stop signal for that transcript key. Malformed/incomplete lines are ignored until a later complete append, and repeated Hook/rollout stop signals are idempotent.
+- When Hook auto-close is enabled, sub-agent transcript panes use `hookPopupAutoCloseSeconds`; when disabled, retain the existing source-specific fallback delay.
 - Transcript rendering performance contract:
   - Backend transcript tail emits complete JSONL lines only; the frontend may parse appended suffixes incrementally when `resetSeq` is unchanged and `content.length` only grows.
   - Frontend increments `resetSeq` whenever `reset=true` or content is front-trimmed. A `resetSeq` change is the only signal that consumers must discard parse cache and rebuild from the retained tail.
@@ -137,6 +208,7 @@ return (
 - WSL Codex discovery receives a config path that is neither Linux absolute, WSL UNC, nor convertible Windows absolute -> return `invalid_wsl_codex_config_dir` and keep the pane pending/degraded.
 - Child transcript already has complete lines at subscribe time -> backend returns them in `initialContent` and starts tailing from that offset; an incomplete final line must wait for completion before emit.
 - Missing or ambiguous stop target -> frontend does nothing; it must not guess and close multiple child panes.
+- Malformed, incomplete, or non-terminal Codex rollout JSONL -> keep the pane active and wait for a later append or Hook stop.
 - `appendSubagentTranscript` receives an unknown key -> ignore it; multi-window broadcasts must not create stray transcript state.
 - Appended transcript content exceeds the retention cap -> retain the latest tail, increment `truncatedBytes`, emit the existing OOM diagnostic, and increment `resetSeq` so view caches rebuild safely.
 
@@ -152,12 +224,14 @@ return (
 - Good: Codex runs in WSL with `cwd=/mnt/c/repo` and no custom `CODEX_HOME`; discovery prefers the parent rollout's sessions root, otherwise scans `$HOME/.codex/sessions` inside the reported distro and returns the matched rollout as WSL UNC for tailing.
 - Base: Claude `SubagentStart` includes `agent_transcript_path`; frontend uses it unchanged.
 - Good: `SubagentStop` includes `agent_id`; frontend marks the pane ended and closes it after the grace delay.
+- Good: a Codex child rollout appends `task_complete` or `turn_aborted` without a matching `SubagentStop`; only that pane is marked ended and closes after the configured delay.
 - Good: a hidden child transcript pane receives 1MB of JSONL append traffic; the store retains content, but the hidden view does not re-parse or re-render until it becomes visible.
 - Good: a child transcript grows past the rendered row cap; the UI renders the newest rows plus an omitted-count marker instead of thousands of DOM nodes.
 - Good: Claude hook stdin includes `effort.level = "high"`; the bridge emits `reasoningEffort: "high"` and the current terminal's stats card shows the effort even when the JSONL history usage lacks `reasoning_effort`.
 - Bad: `SubagentStop` calls `finishSubagentTranscript` before awaiting the late child transcript subscription; the pane can close with empty output.
 - Bad: A new hook event is installed but not added to the bridge whitelist; the hook silently posts but the bridge rejects it.
 - Bad: `SubagentStop` has no `agent_id` while multiple child panes share one parent; frontend must not close all of them.
+- Bad: searching raw transcript text for `task_complete` and closing a pane when the phrase only appears inside an assistant message.
 - Bad: deriving Claude effort from the model name or global settings when the current hook payload/env has no effort; concurrent sessions can use different `/effort` values.
 - Bad: parsing the full retained transcript and re-rendering every Markdown message on every 250ms tail append; this blocks terminal typing and tab switching.
 
@@ -174,6 +248,7 @@ return (
 - Rust unit test: `hook_client` extracts `reasoningEffort` from Claude `effort.level`.
 - TypeScript type-check must pass after `CliHookPayload` field changes.
 - Frontend regression test or manual profiling: while a child transcript is hidden and appends continue, React render count/CPU for `SubagentTranscriptView` should not grow with append frequency; when shown again, it catches up from retained content.
+- Frontend regression test: valid Codex `task_complete`/`turn_aborted` records finish only the matching pane; malformed JSON, ordinary messages containing those words, and duplicate stop signals do not trigger extra closes.
 
 ### 7. Wrong vs Correct
 
@@ -206,6 +281,21 @@ invoke("codex_subagent_transcript_discover", {
   wslDistroName,
   parentTranscriptPath,
 });
+```
+
+#### Wrong
+
+```ts
+if (content.includes("task_complete")) finishSubagentTranscript(payload);
+```
+
+#### Correct
+
+```ts
+const record = JSON.parse(completeJsonlLine);
+if (record.type === "event_msg" && ["task_complete", "turn_aborted"].includes(record.payload?.type)) {
+  finishMatchingTranscriptOnce(sessionId);
+}
 ```
 
 #### Wrong
@@ -527,7 +617,7 @@ Reserved launch environment: `CLI_MANAGER_SSH_HOST_ID`, `CLI_MANAGER_SSH_CLIENT_
 - Daemon validates Host/client/project/Tab/epoch/installation/source against a live PTY before routing. Remote transcript refs stay in `remoteTranscriptRef` fields and never enter local transcript/file commands.
 - Delivery is at least once from Agent to daemon, then deduplicated by event id. Spool uses monotonic sequence, ACK deletion, TTL/count/byte limits, and sequenced gap warnings.
 - The reusable bridge is protocol `1.1`: bounded preamble/response deadlines, 10-second heartbeat, global four-bridge/two-reconnect gates, bounded cancellation/backpressure, takeover retry, and streaming spool read/ACK apply before Hook delivery.
-- `ClaudeHookPayload::to_notification_job` must clear SSH cwd. Third-party notifications never receive remote cwd, transcript refs, Host/project/session/Tab identity, or prompt text.
+- The shared Claude/Codex `ClaudeHookPayload::to_notification_job` path must clear SSH cwd for both sources. Its display-only project label comes only from the configured sidebar `Project.name` captured in the desktop launch plan and injected by the daemon after live SSH binding validation; neither the remote event nor the remote cwd basename may author that label. Third-party notifications never receive remote cwd, transcript refs, Host/project/session/Tab identity, or prompt text.
 
 ### 4. Validation & Error Matrix
 
@@ -552,7 +642,7 @@ Reserved launch environment: `CLI_MANAGER_SSH_HOST_ID`, `CLI_MANAGER_SSH_CLIENT_
 ### 6. Tests Required
 
 - Agent tests: exact merge/uninstall, duplicates, unknown events, malformed JSON/TOML, Codex feature/comment ownership, default/custom roots, symlink target changes, fingerprints, journal rollback, binding no-op, stdin bound, message redaction, stale lock, meta rebuild, spool limits/gap, and ACK.
-- Desktop Rust tests: strict report validation, reserved env overwrite, session binding rejection, bridge full-spool dedup including gap replay, remote payload validation, and third-party cwd redaction.
+- Desktop Rust tests: strict report validation, reserved env overwrite, session binding rejection, bridge full-spool dedup including gap replay, remote payload validation, and Claude/Codex third-party cwd redaction plus trusted sidebar project-label propagation.
 - Frontend/type tests: per-tool Host roots, grouped project overrides, retained-root cleanup, preview confirmation, canonical paths, bilingual states, and remote transcript local-API refusal.
 - Run Agent host tests, Linux x64/arm64 all-target checks, desktop Rust tests, TypeScript, and `git diff --check`.
 

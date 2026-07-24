@@ -57,8 +57,8 @@ interface TerminalStatsPanelProps {
   embedded?: boolean;
 }
 
-const POLL_INTERVAL_MS = 10_000;
-/** 已绑定 cliSessionId 但用量尚未出来时加快轮询，避免 Pi 等新会话空等 10s 再闪出。 */
+const POLL_INTERVAL_MS = 5_000;
+/** 已绑定 cliSessionId 但用量尚未出来时加快轮询，避免 Pi 等新会话空等 5s 再闪出。 */
 const WAITING_USAGE_POLL_INTERVAL_MS = 2_000;
 const TICK_INTERVAL_MS = 30_000;
 const TERMINAL_PANEL_SCROLLBAR_STYLE = {
@@ -85,6 +85,7 @@ function inferHistorySource(haystack: string): HistorySource | null {
   const lower = haystack.toLowerCase();
   if (/\bcodex\b/.test(lower)) return "codex";
   if (/\bclaude\b/.test(lower)) return "claude";
+  if (/\bgrok\b/.test(lower)) return "grok";
   if (/(?:^|\s)pi(?:\s|$)/.test(lower) || /\bpi[-_ ]?agent\b/.test(lower)) return "pi";
   return null;
 }
@@ -424,9 +425,7 @@ export function TerminalStatsPanel({ activeSessionId, open, visible = true, embe
   const worktrees = useWorktreeStore((state) => state.worktrees);
 
   const [latestSession, setLatestSession] = useState<HistorySessionDetail | null>(null);
-  const [loadingSession, setLoadingSession] = useState(false);
   const [todayStats, setTodayStats] = useState<TodayProjectStats | null>(null);
-  const [loadingToday, setLoadingToday] = useState(false);
   const [updatedAt, setUpdatedAt] = useState<number | null>(null);
   const [, setNowTick] = useState(0);
   const [refreshSeq, setRefreshSeq] = useState(0);
@@ -434,6 +433,7 @@ export function TerminalStatsPanel({ activeSessionId, open, visible = true, embe
   const [diffFileChange, setDiffFileChange] = useState<HistoryFileChangeSummary | null>(null);
   const latestRef = useRef<HistorySessionDetail | null>(null);
   const lastPathRef = useRef<string | null>(null);
+  const sessionLoadInFlightRef = useRef(new Set<string>());
   const remoteHistoryContextRef = useRef<SshAgentHistoryContext | null>(null);
   const wasPanelActiveRef = useRef(false);
 
@@ -488,12 +488,10 @@ export function TerminalStatsPanel({ activeSessionId, open, visible = true, embe
     [latestSession?.project_key, todayUsageProjectPaths]
   );
 
-  // 4 张「会话级」卡片（Token 用量/趋势/模型上下文/工具）只认 hook 绑定的 CLI 会话：
-  // 仅当本终端已拿到 cliSessionId 且加载到的会话 session_id 与之一致时才展示，
-  // 否则置空。其余卡片（会话信息/今日用量）按项目级回退正常展示，不受此门控影响。
-  const tokensBound =
-    Boolean(terminalSession?.cliSessionId) &&
-    latestSession?.session_id === terminalSession?.cliSessionId;
+  // 「会话级」卡片只认 hook 绑定的当前 CLI 会话；未绑定时保持空态。
+  // 「今日项目用量」仍按项目聚合，不受此门控影响。
+  const boundCliSessionId = terminalSession?.cliSessionId?.trim() || "";
+  const tokensBound = Boolean(boundCliSessionId) && latestSession?.session_id === boundCliSessionId;
   const boundUsageTotal = tokensBound
     ? (latestSession?.usage?.input_tokens ?? 0) +
       (latestSession?.usage?.output_tokens ?? 0) +
@@ -501,7 +499,10 @@ export function TerminalStatsPanel({ activeSessionId, open, visible = true, embe
       (latestSession?.usage?.cache_creation_tokens ?? 0)
     : 0;
   // 已绑定 session 但用量仍为 0：可能 catalog 尚未索引到新文件，进入快速轮询 + 强制刷新。
-  const waitingForUsage = Boolean(terminalSession?.cliSessionId) && (!tokensBound || boundUsageTotal === 0);
+  const waitingForUsage = Boolean(boundCliSessionId) && (!tokensBound || boundUsageTotal === 0);
+  // 已识别 CLI 来源但 Hook 尚未绑定 sessionId 时，不查询项目最近会话。
+  const waitingForBoundSessionId = Boolean(sourceFilter) && !boundCliSessionId;
+  const waitingForRemoteSessionId = isSshProject && !terminalSession?.cliSessionId?.trim();
   const panelActive = open && visible;
 
   // 首次打开侧栏时再触发一次刷新，避开面板激活与历史源初始化同帧完成导致的空态停留。
@@ -516,20 +517,20 @@ export function TerminalStatsPanel({ activeSessionId, open, visible = true, embe
     setRefreshSeq((prev) => prev + 1);
   }, [panelActive]);
 
-  // A6: 统一定时器调度 - 稳定后 10s；等待用量时 2s，尽快追上落盘的 Pi/Claude/Codex 会话。
+  // A6: 统一定时器调度 - 稳定后 5s；等待用量时 2s，尽快追上落盘的 CLI 会话。
   useEffect(() => {
-    if (!panelActive) return;
+    if (!panelActive || waitingForBoundSessionId || waitingForRemoteSessionId) return;
     const intervalMs = waitingForUsage ? WAITING_USAGE_POLL_INTERVAL_MS : POLL_INTERVAL_MS;
     const timer = window.setInterval(() => {
       setPollTrigger((prev) => prev + 1);
     }, intervalMs);
     return () => window.clearInterval(timer);
-  }, [panelActive, waitingForUsage]);
+  }, [panelActive, waitingForBoundSessionId, waitingForRemoteSessionId, waitingForUsage]);
 
   // 会话数据轮询：updated_at 未变化时跳过 jsonl 重解析
   // 多窗口隔离：scopeKey 含 activeSessionId(tabId)，不同终端窗口的数据各自独立缓存与查询
   useEffect(() => {
-    if (!panelActive || !lookupProjectPath) {
+    if (!panelActive || !lookupProjectPath || waitingForBoundSessionId || waitingForRemoteSessionId) {
       lastPathRef.current = null;
       latestRef.current = null;
       setLatestSession(null);
@@ -537,7 +538,7 @@ export function TerminalStatsPanel({ activeSessionId, open, visible = true, embe
     }
     // 切换 Tab（项目路径、CLI 来源、Tab ID 或 cliSessionId 变化）时按作用域换数据：
     // 命中内存缓存则先秒显缓存，无缓存才清空；随后后台刷新校正。
-    const scopeKey = `${activeSessionId}|${lookupProjectPath}|${sourceFilter ?? ""}|${terminalSession?.cliSessionId ?? ""}`;
+    const scopeKey = `${activeSessionId}|${lookupProjectPath}|${sourceFilter ?? ""}|${terminalSession?.cliSessionId ?? ""}|${terminalSession?.remoteTranscriptRef ?? ""}`;
     if (lastPathRef.current !== scopeKey) {
       lastPathRef.current = scopeKey;
       const cached = sessionDetailCache.get(scopeKey) ?? null;
@@ -545,10 +546,9 @@ export function TerminalStatsPanel({ activeSessionId, open, visible = true, embe
       setLatestSession(cached);
       setUpdatedAt(cached ? Date.now() : null);
     }
-    let cancelled = false;
-
     const loadSession = async (initial: boolean) => {
-      if (initial && !latestRef.current) setLoadingSession(true);
+      if (sessionLoadInFlightRef.current.has(scopeKey)) return;
+      sessionLoadInFlightRef.current.add(scopeKey);
       const current = latestRef.current;
       const prev = current
         ? { filePath: current.file_path, updatedAt: current.updated_at }
@@ -563,6 +563,7 @@ export function TerminalStatsPanel({ activeSessionId, open, visible = true, embe
             remoteHistoryContextRef.current,
             prev,
             terminalSession?.cliSessionId,
+            terminalSession?.remoteTranscriptRef,
           );
           remoteHistoryContextRef.current = remote.context;
           result = remote.result;
@@ -579,11 +580,11 @@ export function TerminalStatsPanel({ activeSessionId, open, visible = true, embe
       } catch {
         result = prev ? "unchanged" : null;
       }
-      if (cancelled) return;
+      sessionLoadInFlightRef.current.delete(scopeKey);
+      if (lastPathRef.current !== scopeKey) return;
       if (result !== "unchanged") {
         // 查找 miss 时不要清掉已有可用数据，避免侧栏 Token 卡片「闪一下归零再回来」。
         if (result === null && latestRef.current) {
-          if (initial) setLoadingSession(false);
           return;
         }
         latestRef.current = result;
@@ -592,19 +593,14 @@ export function TerminalStatsPanel({ activeSessionId, open, visible = true, embe
         if (result) sessionDetailCache.set(scopeKey, result);
       }
       if (initial) {
-        setLoadingSession(false);
         if (updatedAt === null) setUpdatedAt(Date.now());
       }
     };
 
     void loadSession(true);
-
-    return () => {
-      cancelled = true;
-    };
-    // activeSessionId 入依赖：切换 Tab 时立即重新核对最近会话（unchanged 时开销仅一次列表查询）
+    // activeSessionId 入依赖：切换 Tab 时立即重新核对当前绑定会话（unchanged 时开销仅一次列表查询）
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeSessionId, displayProjectPath, isSshProject, lookupProjectPath, panelActive, pollTrigger, project, project?.path, refreshSeq, sourceFilter, statsPanelRefreshSeq, terminalSession?.cliSessionId, terminalSession?.cwd, terminalSession?.projectId, waitingForUsage]);
+  }, [activeSessionId, displayProjectPath, isSshProject, lookupProjectPath, panelActive, pollTrigger, project, project?.path, refreshSeq, sourceFilter, statsPanelRefreshSeq, terminalSession?.cliSessionId, terminalSession?.cwd, terminalSession?.projectId, terminalSession?.remoteTranscriptRef, waitingForBoundSessionId, waitingForRemoteSessionId, waitingForUsage]);
 
   // 今日项目用量：会话数据变化时同步刷新（与终端 CLI 来源保持一致）
   // Issue #137：聚合主项目 + worktree 路径，主仓库 Tab 与 worktree Tab 看到同一套「今日项目」合计。
@@ -613,21 +609,28 @@ export function TerminalStatsPanel({ activeSessionId, open, visible = true, embe
       setTodayStats(null);
       return;
     }
+    if (isSshProject) {
+      setTodayStats(null);
+      return;
+    }
     let cancelled = false;
-    setLoadingToday(true);
-    void fetchTodayProjectStatsMerged(
-      todayUsageScope.projectKey,
-      sourceFilter,
-      todayUsageScope.projectPaths
-    ).then((result) => {
-      if (cancelled) return;
-      setTodayStats(result);
-      setLoadingToday(false);
-    });
+    const loadTodayStats = async () => {
+      try {
+        const result = await fetchTodayProjectStatsMerged(
+          todayUsageScope.projectKey,
+          sourceFilter,
+          todayUsageScope.projectPaths
+        );
+        if (!cancelled) setTodayStats(result);
+      } catch {
+        if (!cancelled) setTodayStats(null);
+      }
+    };
+    void loadTodayStats();
     return () => {
       cancelled = true;
     };
-  }, [isSshProject, latestSession?.updated_at, panelActive, sourceFilter, todayUsageScope]);
+  }, [isSshProject, latestSession?.updated_at, panelActive, project, sourceFilter, todayUsageScope]);
 
   // 空闲时数据轮询返回 unchanged 不会触发重渲染，需独立 tick 让头部相对时间文案随时间走字
   useEffect(() => {
@@ -654,7 +657,7 @@ export function TerminalStatsPanel({ activeSessionId, open, visible = true, embe
   }, [saveSession, terminalSession, project]);
 
   // A7: 实时查询当前项目的 git 分支，初始值为会话静态分支，避免首屏闪烁
-  // A6: 通过 pollTrigger 与会话数据轮询共用 10s 节拍
+  // A6: 通过 pollTrigger 与会话数据轮询共用 5s 节拍
   const currentBranch = useCurrentGitBranch(
     lookupProjectPath,
     panelActive && !isSshProject,
@@ -662,7 +665,7 @@ export function TerminalStatsPanel({ activeSessionId, open, visible = true, embe
     pollTrigger
   );
 
-  // 未绑定 hook 会话时，4 张会话级卡片照常渲染但数据置空（保留图形骨架）
+  // 未绑定 hook 会话时，会话级卡片照常渲染但数据置空（保留图形骨架）
   const boundSession = tokensBound ? latestSession : null;
   const boundStats = tokensBound ? stats : EMPTY_TOKEN_STATS;
   const latestChangesSummary = useMemo(() => buildLatestChangesSummary(boundSession), [boundSession]);
@@ -747,7 +750,7 @@ export function TerminalStatsPanel({ activeSessionId, open, visible = true, embe
           />
         );
       case "todayUsage":
-        return <TodayUsageCard key={cardKey} stats={todayStats} loading={loadingToday} />;
+        return <TodayUsageCard key={cardKey} stats={todayStats} loading={false} />;
     }
   };
 
@@ -777,7 +780,7 @@ export function TerminalStatsPanel({ activeSessionId, open, visible = true, embe
           {updatedAt && <span>{formatRelativeTime(updatedAt)}</span>}
           <button
             onClick={handleRefresh}
-            className={`ui-focus-ring rounded p-0.5 ${loadingSession ? "animate-spin" : ""}`}
+            className="ui-focus-ring rounded p-0.5"
             style={{ color: TERM.cyan }}
             title={t("termStats.refresh")}
             aria-label={t("termStats.refresh")}
@@ -789,8 +792,6 @@ export function TerminalStatsPanel({ activeSessionId, open, visible = true, embe
 
       {!displayProjectPath ? (
         <EmptyHint text={t("termStats.noProject")} />
-      ) : loadingSession && !latestSession ? (
-        <EmptyHint text={t("common.loading")} />
       ) : !displaySession ? (
         <EmptyHint text={t("termStats.noSessionRecord", { source: sourceFilter ?? "CLI" })} />
       ) : !hasVisibleCard ? (

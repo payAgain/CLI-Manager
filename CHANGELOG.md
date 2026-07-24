@@ -1,17 +1,81 @@
 # Changelog
 
-### 新增
-- **终端相对路径跳转**：终端“文件”工具栏开启时，Ctrl+单击项目或 Worktree 内的相对文件/目录路径可打开右侧文件面板；目录自动展开并选中，文件支持 `:行[:列]` 与 `(行,列)` 定位、高亮和选中。绝对路径仍保持打开系统资源管理器的原有行为。
-
-## [V1.3.0] - 2026-07-20
+## [TEMP]
 
 ### SSH
 
+- SSH Git 面板与本地/WSL 复用同一套仓库、状态、Diff、暂存、回滚、提交、Fetch/Push/Pull、分支切换和冲突处理交互。Agent bridge 协议升级到 `1.7`，远程 Git 通过 `gitFull` capability 和独立串行 Git lane 执行；写操作不自动重试，项目根、仓库/文件路径、分支、Patch、symlink、输入大小和非交互凭据均在 Agent 边界重新校验，SSH context 未就绪时不会回落到本地 Git。
+- 修复 SSH 项目终端的空本地 `cwd` 导致 Git 面板误报“当前终端未关联项目”，以及刷新已打开远程文件时漏传 Agent 文件上下文、错误调用本地文件命令并返回 `root_not_absolute` 的问题；Host 或 `remote_path` 变化会重建文件上下文并丢弃旧请求结果，文件与 Git 面板首次远程加载期间统一显示“加载中…”。携带 `gitFull` 的 SSH Agent 独立版本升级到 `0.1.1`，安装预览可正确识别协议 `1.6` 的 `0.1.0` Agent 并执行升级。
+- SSH Agent 版本提升到 `0.1.2`，修复将合法的空 `repoPath` 误判为 `remote_git_path_invalid`；远程项目根仓库现在可以正常加载 Git 变更、分支和 Diff。
+- SSH Agent 版本提升到 `0.1.3`，远程 Git 状态会把普通未跟踪目录展开到具体文件，并过滤由仓库列表单独管理的嵌套 Git 仓库；修复目录被显示为空名称文件、打开 Diff 返回 `remote_git_path_invalid` 的问题，未跟踪文件右键删除继续复用本地面板的二次确认与状态复核流程。
+
+### 供应商管理界面
+- 为供应商详情、属性和环境变量卡片增加边框及悬浮反馈。
+
+### 优化
+- **实时统计刷新**：实时统计面板的稳定状态轮询间隔调整为 5 秒，并继续按当前终端 `sessionId` 自动加载会话数据。
+- **历史来源筛选**：会话历史的来源下拉列表显示对应 CLI 图标，并提高弹层背景不透明度，避免底层内容干扰阅读。
+- **终端分屏拖拽性能**：分隔线拖拽改为按动画帧直接更新 Pane 与分隔线 DOM 几何，松手后再一次性保存最终比例，避免 React 逐帧重绘终端子树，使横向、纵向及嵌套分屏调整更跟手。
+- **Workspan 分屏 Pane 样式**：开启 Workspan 后，分屏 Pane 的标题栏与操作按钮使用更紧凑的扁平样式；普通分屏和未分屏状态保持原有样式。
+
+### 修复
+- **实时统计空状态闪屏**：无统计数据时，Claude Code 高频 Hook 回调仅静默刷新数据，不再把侧栏内容替换成“加载中”或旋转刷新图标；切换项目或来源后直接保持稳定的空数据卡片布局。
+- **Codex `/clear` 后 Hook 失效诊断**：Hook 安装状态现在校验 Codex 的启用与信任哈希，避免配置存在但已被禁用或信任失效时仍显示“已安装”；本地 Hook 客户端失败时写入脱敏错误码，便于定位会话切换后无实时统计、Tab 状态和通知的问题。
+- **分屏终端全屏范围**：分屏 Pane 的“终端全屏”只放大当前 Pane，不再联动全局沉浸式全屏，项目列表保持显示。
+- **分屏终端初始输出丢失**：延后 PTY 输出订阅，避免 React StrictMode 的探测挂载提前消费启动提示符，修复新分屏必须输入命令后才显示内容的问题。
+- **终端 Tab 拖拽预览样式**：拖拽 Tab 创建分屏时，预览保持与原 Tab 一致的尺寸、透明度、关闭图标及终端主题配色。
+- **拖拽分屏终端空白**：终端跨 Pane 迁移时在布局卸载阶段提前保存缓冲区，并在快照恢复、刷新完成后再启用卸载快照和订阅 PTY 输出，避免 React StrictMode 探测挂载用空缓冲区覆盖有效快照。
+- **Workspan 分屏 Tab 缺失**：分屏后的单会话 Pane 继续显示标题、关闭、拖拽、全屏和当前 Tab 还原操作；当前 Tab 还原会将其分离为独立顶层 Tab，Workspan 右键菜单则分离其中全部 Tab。
+- **Workspan Tab 拖回顶层**：Pane 内终端 Tab 可拖到顶部 Workspan 标签或标签栏空白区，分离为独立顶层 Workspan，并按落点插入或追加；拖拽经过顶层标签栏时实时显示平滑移动的插入位置预选线。
+
+### 调整
+- **拖拽分屏落点**：将 Pane 四边的分屏识别区域扩大到 42%，让终端 Tab 与 Workspan 更容易拖拽分屏。
+
+## [V1.3.1] - 2026-07-23
+
+### 新增
+- **供应商类型图标**：设置页的 cc-switch 供应商类型筛选现在复用项目 CLI 工具图标，Claude、Codex、Gemini、Grok Build、OpenCode 等类型可直接通过图标识别，未知类型使用统一兜底图标。
+- **CLI 启动参数历史**：新建或编辑项目时，CLI 启动参数支持按当前 CLI 工具展开历史，并可按输入内容搜索全部历史；匹配结果按使用次数、最近使用时间排序且最多显示 10 条。新建或编辑成功后累计使用次数，克隆项目不显示历史且不累计；历史随偏好设置快照同步，恢复时按现有规则覆盖本地记录。
+- **终端相对路径跳转**：终端“文件”工具栏开启时，Ctrl+单击项目或 Worktree 内的相对文件/目录路径可打开右侧文件面板；目录自动展开并选中，文件支持 `:行[:列]` 与 `(行,列)` 定位、高亮和选中。绝对路径仍保持打开系统资源管理器的原有行为。
+- **桌面宠物菜单配置**：桌宠设置新增快捷操作菜单显示开关与悬停自动展开开关；关闭快捷菜单后仅展示任务卡片，关闭悬停展开后改用右键打开。普通任务和托管会话最多直接展示三张卡片，更多内容使用与桌宠主题一致的纵向滚动条。
+
+### 修复
+- **Grok 实时统计会话隔离**：终端实时统计仅展示 Hook 绑定的当前 Grok 会话，不再在会话 ID 尚未绑定时回退到项目最近会话；精确会话在 catalog 尚未收录时直接读取对应 Grok 会话目录，后台索引刷新不再阻塞轮询。绑定和刷新期间保留稳定卡片骨架，避免右侧面板闪屏；“今日项目用量”继续按项目及其 Worktree 汇总。
+- **Grok 历史恢复与 Hook 通知**：历史会话恢复现在能正确匹配 Grok 项目配置；Grok Hook 事件也会通过本地桥接校验并送达 CLI-Manager。审批通知改由 Grok 原生 `PreToolUse` 的危险写操作事件映射为 `PermissionRequest`，`bypassPermissions` 模式不会误报；解决原 `Notification` matcher 已显示触发但实际审批不送达的问题。
+- **WebDAV SSH 项目恢复**：备份现会携带 SSH 主机分组、可移植主机配置、远程路径和项目主机绑定；恢复后无需重新创建主机或重新绑定项目。密码、凭据引用、私钥/自定义 SSH Config 路径及 ProxyCommand 仍不上传；目标设备缺少本机认证材料时明确降级为交互认证。
+- **Codex 子任务窗格结束状态**：当子任务转录包含完成或中断终态但未收到 `SubagentStop` Hook 时，自动将窗格标记为已结束并按设置关闭；Hook 通知与子任务转录窗格统一使用配置的自动关闭时间。
+- **PTY daemon 断连诊断与重连提示**：保留 `pty-daemon` 作为终端主链路不变，新增 WebSocket 连接、断开、心跳超时与重连过程日志；终端写入在可恢复断连时改为“连接已断开，正在尝试自动重连”的提示，不再只暴露裸 `PtyHost WebSocket disconnected`。
+- **文件预览资源熔断**：项目文件浏览器不再预览视频；文本/其他文件超过 1 MiB、图片超过 5 MiB 或光栅图片超过 1200 万像素时会在读取和 Base64 转换前拒绝预览。本地、WSL/UNC 与 SSH 文件读取均增加后端兜底，避免大文件或高像素图片导致 WebView 卡死和 GPU 飙升。
+- **新建终端 PTY 写入超时**：daemon 的 WebSocket writer 将 Attach Replay 拆为可调度帧，Replay 期间允许普通控制响应优先发送，避免大滚动缓冲区恢复时已执行的启动命令因确认响应延迟而误报 `PtyHost request timed out: write`。
+- **远程 Codex 托管启动链路**：Windows 改用随应用打包的 GUI 子系统原生代理启动 Codex app-server，避免连接、对话和停止托管时弹出命令窗口；原生 shim 仅拦截首个子命令为 `app-server` 的调用，其他 Codex 命令继续透传参数、Provider 覆盖和退出码。macOS/Linux wrapper 会在内容写入或复用后统一校正为 `0755`，并在 PATH 注入前解析 wrapper 目录之外的真实 Codex 绝对路径，避免自递归启动。恢复会话时严格校验目标 Session，并压缩超过 cc-connect 扫描上限的恢复响应；API Key 仅通过子进程环境变量传递，不进入命令行参数或日志。
+- **macOS Universal 辅助程序打包**：Universal 构建会同时合并 `cli-manager-daemon` 与 `cli-manager-codex-proxy` 的 Apple Silicon、Intel 产物，避免新增代理程序后 Universal 应用缺少对应架构二进制。
+- **跨平台 Tauri 构建配置**：`macos-private-api` 仅在 macOS 目标启用，Windows/Linux 的直接 Cargo 检查与 Codex proxy 端到端构建不再因 macOS 专属 feature 和平台配置不一致而中断。
+- **Windows Tauri 开发启动**：`npm run tauri dev` 会先构建随远程 Codex 托管使用的原生 app-server proxy，并同步 Tauri/Cargo runner 区域指定的 Rust target、release/profile 与 target-dir；第二个 `--` 后的应用参数不会影响 proxy 构建，避免开发版运行时缺少或读取错误目录的代理程序。
+- **SSH 显式地址直连**：未配置跳板机的手工地址连接在私钥、密码、凭据引用和交互认证模式下不再读取无关的用户 `~/.ssh/config`，避免该文件 ACL/语法异常在认证前阻断连接；Agent 与 SSH Config 模式继续读取默认配置，以保留 `IdentityAgent` 和 `Host *` 等设置。Config 别名、跳板路由与用户明确选择的自定义配置文件继续按原逻辑生效。
+- **后台探测进程树回收**：外部命令探测在 Windows 使用 Job Object、macOS/Linux 使用独立进程组；超时、等待失败或启动器提前退出时都会回收所属后代进程，避免真实 Codex 等后代继续运行或持有输出管道导致后台残留和等待卡死。
+- **Worktree 创建失败诊断与防重入**：阻止同一项目同一任务名的自动、手动和分屏 Worktree 创建并发撞路径；Git 检出失败会保留最终错误信息，前端改为双语可读提示，不再产生未处理 Promise。
+- 修复在终端 Tab 右键重命名普通项目 Tab 时，误把项目名称和同项目所有已打开 Tab 一起改名的问题；现在 Tab 重命名只作用于当前终端会话。
+- 修复旧版历史索引数据库升级时，在补充 `scope_kind` 等字段之前提前创建依赖索引，导致刷新报错且会话无法打开的问题；现有索引数据会原地升级，无需用户手工删除缓存。
+- 修复 WebDAV 恢复、ZIP 导入及恢复回滚把 SQLite 事务拆分到连接池的多个连接上，可能触发 `database is locked` 的问题；数据库域恢复现由 Rust 在单连接事务中原子执行。
+- 修复 SSH Config 批量导入、主机/分组删除、CLI 配置目录保存及 Hook 集成记录把事务拆分到连接池不同连接，可能锁库或部分写入的问题；相关组合操作改由 Rust 单连接短事务执行，批量导入一次读取重复项，普通 SSH 操作不增加全局互斥。
+- 修复 SSH 远程历史轮询、历史页刷新和加载更多并发时，重复请求造成额外写入、旧 generation 或旧分页游标覆盖新 catalog 状态的问题；相同请求会合并执行，落库按来源 generation 与游标单调更新。
+
+### SSH
+
+- 修复切换到 SSH 项目后文件、Git 变更、会话历史与实时统计面板加载完成却不展示或反复闪烁的问题；受支持的远程面板不再因会话切换被本地能力守卫关闭。
+- 修复 SSH 项目 Tab 菜单与右侧工具栏“新建终端”重复执行项目 CLI 启动命令的问题；现在会在对应远程目录打开空 Shell。
+- 修复 SSH Claude/Codex Hook 的第三方通知使用当前目录名或 `Unknown Project` 的问题；通知项目名改为绑定终端对应的左侧菜单项目名，并由 daemon 校验绑定后注入。
+- 修复 SSH 实时统计重复加载整段远程会话历史、面板持续加载或闪烁的问题；Hook 绑定会话后按 session ID 与 transcript 引用直接读取单一会话，并隔离并发请求与过期结果。
+- 修复 SSH 项目会话历史与历史用量筛选退化为全局范围的问题；项目选择使用稳定项目 ID，查询使用 `remote_path`，统计再以远程 `source_instance_id` 隔离不同主机与配置根，同名路径和空本地路径不再导致多个远程项目同时选中。
 - SSH Claude/Codex 终端实时统计现复用同一 Agent history consumer 增量同步精确 session detail，并从现有远端 catalog 聚合今日项目用量；切换远端 Tab 不再调用本地 history、Git 分支或 Explorer API，断线时保留上次快照与缓存统计。
 - Agent bridge 协议升级到 `1.6`；SSH 项目文件面板新增只读远端浏览，通过复用 bridge 懒加载目录、搜索文件名或文本并预览 UTF-8 文本与图片；只读 Git 面板支持远端仓库、状态、Diff、分支和 upstream/ahead/behind/asOf。Agent 对路径、symlink、遍历、Diff 大小和 Git 外部扩展实施限制，UI/store 拒绝所有远程写入、网络、凭据、Worktree、外部 Explorer、external diff 与 textconv。
 - SSH Claude/Codex 项目现可在统一历史工作区按绑定项目读取远端会话：Agent 增量索引原生 JSONL，通过共享单写锁维护可重建派生索引；桌面端复用每主机 bridge，支持分页列表、全文搜索、按需详情/Diff、usage 摘要、删除 tombstone 与断线后的摘要缓存，不复制完整远端历史目录，也不把远端路径交给本地文件 API。
 - Agent bridge 协议升级到 `1.3`，详情使用 256 KiB payload 分块并保持 1 MiB frame 上限；桌面端校验 request ID、分块顺序、总数、聚合 64 MiB 上限和整次请求 deadline。远端来源身份稳定绑定 machine/user/source/config root，不随 Agent 重装变化。
 - Agent bridge 协议升级到 `1.4`，远端历史会话可在同一主机/用户/source/config root 上执行恢复前检查：重新确认原 JSONL、cwd 与 CLI 可用性，由 Rust 从结构化参数生成安全 resume 命令；同一客户端已有会话时直接跳转 Tab，其他 consumer 占用时阻止并发恢复，无匹配项目时可显式使用原远端目录创建 SSH terminal。
+
+## [V1.3.0] - 2026-07-20
+
+### SSH
 
 - SSH 主机新增 Claude/Codex“CLI 配置目录（Hook 与历史）”设置，SSH 项目可单独覆盖；新建、分屏、复制、恢复等统一启动链路会按“项目覆盖 -> 主机配置 -> CLI 原生默认”解析，并安全注入 `CLAUDE_CONFIG_DIR` 或 `CODEX_HOME`。自定义目录仅接受绝对 POSIX 路径或 `~/...`，保存配置不会安装 Agent 或修改远端 Hook。
 - 删除 SSH 主机时会先阻止活动终端和跳板机引用，再解除项目绑定；远端 Agent/Hook 不会被隐式卸载，已验证的远端集成身份保留为待重新绑定状态。

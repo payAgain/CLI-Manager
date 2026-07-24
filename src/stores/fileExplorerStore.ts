@@ -57,6 +57,10 @@ function errorHasCode(error: unknown, code: string): boolean {
 
 function fileReadErrorMessage(error: unknown): string {
   if (errorHasCode(error, "binary_file")) return translateCurrent("files.error.binaryFile");
+  if (errorHasCode(error, "video_preview_unsupported")) return translateCurrent("files.error.videoUnsupported");
+  if (errorHasCode(error, "image_dimensions_too_large")) return translateCurrent("files.error.imageDimensionsTooLarge");
+  if (errorHasCode(error, "image_file_too_large")) return translateCurrent("files.error.imageTooLarge");
+  if (errorHasCode(error, "remote_file_too_large")) return translateCurrent("files.error.tooLarge");
   if (errorHasCode(error, "file_too_large")) return translateCurrent("files.error.tooLarge");
   if (errorHasCode(error, "text_decode_failed") || errorHasCode(error, "text_encoding_unknown")) {
     return translateCurrent("files.error.encodingUnknown");
@@ -415,6 +419,20 @@ function isImage(path: string): boolean {
   return ["jpg", "jpeg", "png", "gif", "webp", "bmp", "svg"].includes(extension(path));
 }
 
+const TEXT_PREVIEW_MAX_BYTES = 1024 * 1024;
+const IMAGE_PREVIEW_MAX_BYTES = 5 * 1024 * 1024;
+const VIDEO_EXTENSIONS = new Set([
+  "3g2", "3gp", "avi", "flv", "m2ts", "m4v", "mkv", "mov", "mp4", "mpeg", "mpg", "mts", "ogv", "ts", "webm", "wmv",
+]);
+
+function previewGuardError(path: string, sizeBytes: number): string | null {
+  if (VIDEO_EXTENSIONS.has(extension(path))) return "video_preview_unsupported";
+  if (sizeBytes <= 0) return null;
+  if (isImage(path) && sizeBytes > IMAGE_PREVIEW_MAX_BYTES) return "image_file_too_large";
+  if (!isImage(path) && sizeBytes > TEXT_PREVIEW_MAX_BYTES) return "file_too_large";
+  return null;
+}
+
 async function listDir(rootPath: string, path: string): Promise<ProjectFileEntry[]> {
   const entries = await invoke<ProjectFileEntry[]>("file_list_dir", {
     rootPath,
@@ -429,6 +447,8 @@ async function loadProjectFile(
   remoteContext?: SshRemoteFileContext | null,
 ): Promise<{ file: ActiveProjectFile; errorMessage?: string }> {
   try {
+    const guardError = previewGuardError(entry.path, entry.sizeBytes);
+    if (guardError) throw new Error(guardError);
     if (remoteContext) {
       const remote = await sshRemoteReadFile(remoteContext, entry.path);
       if (remote.previewKind === "image") {
@@ -621,6 +641,7 @@ export const useFileExplorerStore = create<FileExplorerStore>((set, get) => ({
     set({
       project,
       remoteFileContext: null,
+      tree: keepCurrentProject ? get().tree : [],
       loading: true,
       searchMode: "files",
       searchQuery: "",
@@ -645,9 +666,10 @@ export const useFileExplorerStore = create<FileExplorerStore>((set, get) => ({
         remoteContext ? sshRemoteListDir(remoteContext) : listDir(project.path, ""),
         remoteContext ? Promise.resolve([]) : fetchGitChanges(project.path),
       ]);
-      if (get().project?.id !== project.id) return;
+      if (!isSameProjectFileContext(get().project, project)) return;
       set({ tree, gitChanges, remoteFileContext: remoteContext, loading: false });
     } catch (err) {
+      if (!isSameProjectFileContext(get().project, project)) return;
       logError("Failed to open project files", err);
       toast.error("文件列表加载失败", { description: String(err) });
       set({ tree: [], gitChanges: [], loading: false });
@@ -712,11 +734,17 @@ export const useFileExplorerStore = create<FileExplorerStore>((set, get) => ({
   },
 
   refreshVisibleStateOnce: async (changedPaths) => {
-    const project = get().project;
+    const state = get();
+    const project = state.project;
     if (!project) return;
 
-    const expandedPaths = get().expandedPaths;
-    const openFiles = get().openFiles;
+    const remoteFileContext = state.remoteFileContext;
+    // SSH 项目的本地 path 为空。远程上下文尚未建立或已经失败时，绝不能
+    // 回落到本地 file_* command，否则会把空根路径送进 canonical_root。
+    if (project.environment_type === "ssh" && !remoteFileContext) return;
+
+    const expandedPaths = state.expandedPaths;
+    const openFiles = state.openFiles;
     const refreshPaths = collectRefreshPaths(expandedPaths, openFiles, changedPaths);
 
     try {
@@ -724,8 +752,8 @@ export const useFileExplorerStore = create<FileExplorerStore>((set, get) => ({
         try {
           return {
             path,
-            children: get().remoteFileContext
-              ? await sshRemoteListDir(get().remoteFileContext!, path)
+            children: remoteFileContext
+              ? await sshRemoteListDir(remoteFileContext, path)
               : await listDir(project.path, path),
           };
         } catch (err) {
@@ -778,8 +806,16 @@ export const useFileExplorerStore = create<FileExplorerStore>((set, get) => ({
           continue;
         }
 
-        const { file: refreshedFile } = await loadProjectFile(project, latestEntry);
+        const { file: refreshedFile } = await loadProjectFile(project, latestEntry, remoteFileContext);
         nextOpenFiles.push(refreshedFile);
+      }
+
+      const currentState = get();
+      if (
+        !isSameProjectFileContext(currentState.project, project)
+        || currentState.remoteFileContext?.consumerId !== remoteFileContext?.consumerId
+      ) {
+        return;
       }
 
       const activeFile = nextOpenFiles.find((file) => file.path === get().activeFilePath) ?? nextOpenFiles[0] ?? null;

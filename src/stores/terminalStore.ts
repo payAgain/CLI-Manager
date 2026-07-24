@@ -10,6 +10,10 @@ import type {
   SubagentTranscriptSource,
   TerminalSession,
 } from "../lib/types";
+import {
+  createAgentTerminalMetadata,
+  resolveAgentTerminalMetadata,
+} from "../lib/agentTerminal";
 import { debugConsoleWarn } from "../lib/debugConsole";
 import { sourceTool, type SyncedHistoryGroup } from "../lib/externalSessionGrouping";
 import { logError, logInfo, logWarn, recordCrashActivity } from "../lib/logger";
@@ -30,6 +34,7 @@ import {
 import { useProjectStore } from "./projectStore";
 import { useSshHostStore } from "./sshHostStore";
 import { useSshAgentIntegrationStore } from "./sshAgentIntegrationStore";
+import { resolveCliSessionRebind } from "./terminalCliSession";
 import { buildSshConnectionSpec, type SshConnectionSpecPayload } from "../lib/ssh";
 import { parseStoredSshHookReport, resolveSshToolSource } from "../lib/sshToolIntegration";
 import { getSshClientInstanceId } from "../lib/sshClientIdentity";
@@ -61,6 +66,8 @@ import {
   collapseTerminalWorkspansToLegacy,
   collectWorkspanSessionIds,
   createTerminalWorkspan,
+  detachTerminalSessionToWorkspan,
+  detachTerminalWorkspanSessions,
   findWorkspanByPane,
   findWorkspanBySession,
   getAdjacentWorkspanSessionId,
@@ -75,7 +82,7 @@ import {
 } from "./terminalWorkspan";
 
 export type SessionStatus = "running" | "exited" | "error";
-export type CliHookSource = "claude" | "codex" | "pi";
+export type CliHookSource = "claude" | "codex" | "pi" | "grok";
 export type CliHookEventName =
   | "SessionStart"
   | "UserPromptSubmit"
@@ -227,6 +234,7 @@ interface HookSettingsStatusPayload {
   claude: HookToolStatus;
   codex: HookToolStatus;
   pi: HookToolStatus;
+  grok: HookToolStatus;
   claudeAutoRepaired?: boolean;
 }
 
@@ -260,6 +268,7 @@ interface TerminalStore {
   setActiveWorkspan: (id: string) => void;
   reorderWorkspans: (fromId: string, toId: string) => void;
   renameWorkspan: (id: string, title: string) => void;
+  restoreWorkspanToSinglePane: (id: string) => void;
   mergeWorkspanAtPaneEdge: (sourceId: string, targetId: string, targetPaneId: string, edge: TerminalPaneDropEdge) => void;
   updateSessionCwd: (sessionId: string, cwd: string) => void;
   updateSshConnectionState: (sessionId: string, connectionState: SshConnectionState, disconnectReason?: SshDisconnectReason) => void;
@@ -277,6 +286,7 @@ interface TerminalStore {
   bumpStatsPanelRefresh: () => void;
   reorderSessions: (fromId: string, toId: string) => void;
   moveSessionToPane: (sessionId: string, targetPaneId: string, beforeSessionId?: string) => void;
+  detachSessionToWorkspan: (sessionId: string, insertAt?: number) => void;
   splitSessionToPaneEdge: (sessionId: string, targetPaneId: string, edge: TerminalPaneDropEdge) => void;
   renameSession: (id: string, title: string) => void;
   splitTerminal: (sessionId: string, direction: TerminalPaneSplitDirection, options?: SplitTerminalOptions) => Promise<string | null>;
@@ -418,6 +428,21 @@ const SUBAGENT_DISCOVERY_SLOW_INTERVAL_MS = 5000;
 const SUBAGENT_DIRECTORY_DISCOVERY_TTL_MS = 15000;
 const PTY_ORPHAN_RECONCILE_INTERVAL_MS = 30_000;
 const TERMINAL_STORE_IN_TAURI = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+
+function hasCodexTerminalEvent(content: string): boolean {
+  for (const line of content.split("\n")) {
+    if (!line.trim()) continue;
+    try {
+      const record = JSON.parse(line) as { type?: string; payload?: { type?: string } };
+      if (record.type === "event_msg" && (record.payload?.type === "task_complete" || record.payload?.type === "turn_aborted")) {
+        return true;
+      }
+    } catch {
+      // 尾部可能是不完整 JSONL，等待下一次追加。
+    }
+  }
+  return false;
+}
 
 type WindowWithPtyOrphanTimer = Window & {
   __CLI_MANAGER_PTY_ORPHAN_RECONCILE_TIMER__?: ReturnType<typeof setInterval>;
@@ -1052,15 +1077,17 @@ function prepareStartupCommandForPty(command: string | undefined, shell: ShellKe
 // 与 isDirectCodexStartupCommand（要求 codex 位于命令开头）不同，这里用更宽松的整词匹配做类型判定。
 const CODEX_COMMAND_PATTERN = /(?:^|\s)codex(?:\.(?:cmd|exe|ps1))?(?:\s|$)/i;
 const CLAUDE_COMMAND_PATTERN = /(?:^|\s)claude(?:\.(?:cmd|exe|ps1))?(?:\s|$)/i;
+const GROK_COMMAND_PATTERN = /(?:^|\s)grok(?:\.(?:cmd|exe|ps1))?(?:\s|$)/i;
 
-// 恢复会话时判定它是否为 codex/claude 这类 TUI CLI 会话。判定依据 = startupCmd 文本 + 项目 cli_tool 配置。
+// 恢复会话时判定它是否为 codex/claude/grok 这类 TUI CLI 会话。判定依据 = startupCmd 文本 + 项目 cli_tool 配置。
 // 判不出（如普通 pwsh/bash）返回 null，走 shell 分支（静态贴回 scrollback）。
 export function detectCliResumeKind(
   startupCmd: string | undefined,
   project: Project | undefined
-): "claude" | "codex" | null {
+): "claude" | "codex" | "grok" | null {
   const cmd = startupCmd?.trim() ?? "";
   const projectKind = project ? getProviderSwitchAppType(project) : null;
+  const cliTool = project?.cli_tool?.trim().toLowerCase() ?? "";
   // codex 优先：codex 项目可能带自定义 startupCmd，仍应当 codex resume。
   if (projectKind === "codex" || (project ? isExactCodexProject(project) : false) || CODEX_COMMAND_PATTERN.test(cmd)) {
     return "codex";
@@ -1068,14 +1095,17 @@ export function detectCliResumeKind(
   if (projectKind === "claude" || CLAUDE_COMMAND_PATTERN.test(cmd)) {
     return "claude";
   }
+  if (cliTool.includes("grok") || GROK_COMMAND_PATTERN.test(cmd)) {
+    return "grok";
+  }
   return null;
 }
 
-// 构造 CLI 会话的 resume 启动命令。为什么不贴 scrollback 而改走 resume：codex/claude 启动用绝对光标
+// 构造 CLI 会话的 resume 启动命令。为什么不贴 scrollback 而改走 resume：codex/claude/grok 启动用绝对光标
 // 定位整屏重绘，会盖掉我们贴回的历史文本（见 research/tui-startup-clear-sequences.md），因此改由 CLI
 // 自己 resume 重画上次对话。有 cliSessionId 走带 id 的 resume；无 id 兜底续最近一次（用户已拍板）。
 function buildCliResumeStartupCommand(
-  kind: "claude" | "codex",
+  kind: "claude" | "codex" | "grok",
   cliSessionId: string | undefined,
   project: Project | undefined
 ): string {
@@ -1084,6 +1114,11 @@ function buildCliResumeStartupCommand(
   if (kind === "codex") {
     const base = hasValidId ? `codex resume --no-alt-screen ${id}` : "codex resume --no-alt-screen --last";
     return appendResumeCliArgs(base, "codex", project ?? null);
+  }
+  if (kind === "grok") {
+    // Align with Claude: no --no-alt-screen by default. No id → cwd-scoped continue.
+    const base = hasValidId ? `grok --resume ${id}` : "grok --continue";
+    return appendResumeCliArgs(base, "grok", project ?? null);
   }
   const base = hasValidId ? `claude --resume ${id}` : "claude --continue";
   return appendResumeCliArgs(base, "claude", project ?? null);
@@ -1167,6 +1202,7 @@ interface SshLaunchPayload extends SshConnectionSpecPayload {
   remotePath: string;
   clientInstanceId: string;
   projectId: string;
+  projectName: string;
   bridgeEpoch: string;
   agentPath: string;
   agentInstallationId: string;
@@ -1224,7 +1260,12 @@ function scheduleHookRunningTimeout(tabId: string, updatedAt: string) {
 
 async function shouldEnableHookEnv(): Promise<boolean> {
   const settings = useSettingsStore.getState();
-  if (!settings.claudeHookBridgeEnabled && !settings.codexHookBridgeEnabled && !settings.piHookBridgeEnabled) {
+  if (
+    !settings.claudeHookBridgeEnabled &&
+    !settings.codexHookBridgeEnabled &&
+    !settings.piHookBridgeEnabled &&
+    !settings.grokHookBridgeEnabled
+  ) {
     return false;
   }
   try {
@@ -1232,13 +1273,15 @@ async function shouldEnableHookEnv(): Promise<boolean> {
       selectedDir: settings.claudeHookConfigDir?.trim() || null,
       codexSelectedDir: settings.codexHookConfigDir?.trim() || null,
       piSelectedDir: settings.piHookConfigDir?.trim() || null,
+      grokSelectedDir: settings.grokHookConfigDir?.trim() || null,
       ccSwitchDbPath: settings.ccSwitchDbPath ?? undefined,
       autoRepair: settings.claudeHookBridgeEnabled && settings.claudeHookAutoRepairKnownInstalled,
     });
     return (
       (settings.claudeHookBridgeEnabled && status.claude.status === "installed") ||
       (settings.codexHookBridgeEnabled && status.codex.status === "installed") ||
-      (settings.piHookBridgeEnabled && status.pi.status === "installed")
+      (settings.piHookBridgeEnabled && status.pi.status === "installed") ||
+      (settings.grokHookBridgeEnabled && status.grok.status === "installed")
     );
   } catch (err) {
     logError("hook_settings_get_status failed while deciding terminal hook env", { err });
@@ -1264,6 +1307,23 @@ function getProviderLaunchProject(projectId?: string, worktreeId?: string) {
   const projectState = useProjectStore.getState();
   const project = projectState.projects.find((item) => item.id === projectId);
   return project ? resolveProjectForProviderLaunch(project, projectState.worktrees, worktreeId) : null;
+}
+
+function getProjectAgentTerminalMetadata(projectId?: string) {
+  const project = projectId
+    ? useProjectStore.getState().projects.find((item) => item.id === projectId)
+    : undefined;
+  return createAgentTerminalMetadata(project);
+}
+
+function getRestoredAgentTerminalMetadata(
+  session: Pick<TerminalSession, "isAgentSession" | "cliTool"> | null | undefined,
+  projectId?: string
+) {
+  const project = projectId
+    ? useProjectStore.getState().projects.find((item) => item.id === projectId)
+    : undefined;
+  return resolveAgentTerminalMetadata(session, project);
 }
 
 function getCodexProviderLaunchConfig(projectId?: string, startupCmd?: string | null, worktreeId?: string) {
@@ -1381,6 +1441,7 @@ async function resolvePtyLaunch(options: DetachedPtyLaunchOptions, os: OsPlatfor
           remotePath,
           clientInstanceId: getSshClientInstanceId(),
           projectId: project?.id ?? "",
+          projectName: project?.name.trim() ?? "",
           bridgeEpoch: crypto.randomUUID(),
           agentPath: hookBridgeEnabled ? agentInstallation?.install_path ?? "" : "",
           agentInstallationId: hookBridgeEnabled ? agentInstallation?.installation_id ?? "" : "",
@@ -1798,6 +1859,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
       shell: resolvedShell,
       envVars,
       startupCmd: launch.startupHandledByLaunch ? launchStartupCmd : startupCmd,
+      ...getProjectAgentTerminalMetadata(projectId),
       environmentType: launch.environmentType,
       sshHostId: launch.sshHostId,
       remotePath: launch.remotePath,
@@ -2041,6 +2103,22 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     persistWorkspanState(workspans, state.activeWorkspanId, state.sessions);
   },
 
+  restoreWorkspanToSinglePane: (id) => {
+    const state = get();
+    const current = state.workspans.find((workspan) => workspan.id === id);
+    if (!current) return;
+    const detached = detachTerminalWorkspanSessions(current, createWorkspanId, createPaneId);
+    if (detached.length <= 1) return;
+
+    const workspans = state.workspans.flatMap((workspan) => (workspan.id === id ? detached : [workspan]));
+    const requestedActiveWorkspanId = state.activeWorkspanId === id
+      ? detached.find((workspan) => workspan.activeSessionId === current.activeSessionId)?.id ?? detached[0]?.id ?? null
+      : state.activeWorkspanId;
+    const mirror = buildWorkspanMirror(workspans, requestedActiveWorkspanId);
+    set(state.activeWorkspanId === id ? mirror : { workspans });
+    persistWorkspanState(workspans, mirror.activeWorkspanId, state.sessions);
+  },
+
   mergeWorkspanAtPaneEdge: (sourceId, targetId, targetPaneId, edge) => {
     const state = get();
     const result = mergeTerminalWorkspansAtPaneEdge(
@@ -2071,20 +2149,23 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     const tabId = resolvePrimaryTabId(payload.tabId, get().splits);
     if (!get().sessions.some((session) => session.id === tabId)) return null;
     const cliSessionId = payload.sessionId?.trim();
+    const remoteTranscriptRef = payload.environmentType === "ssh" ? payload.remoteTranscriptRef?.trim() : undefined;
     const cliReasoningEffort = payload.reasoningEffort?.trim();
     let boundNewCliSessionId = false;
-    if ((cliSessionId || cliReasoningEffort) && get().sessions.some((session) => session.id === rawTabId)) {
+    if ((cliSessionId || remoteTranscriptRef || cliReasoningEffort) && get().sessions.some((session) => session.id === rawTabId)) {
       set((state) => ({
         sessions: state.sessions.map((session) => {
           if (session.id !== rawTabId) return session;
-          const nextCliSessionId =
-            cliSessionId && session.cliSessionId !== cliSessionId ? cliSessionId : session.cliSessionId;
-          if (cliSessionId && session.cliSessionId !== cliSessionId) {
+          const cliSessionRebind = resolveCliSessionRebind(session.cliSessionId, cliSessionId);
+          if (cliSessionRebind.changed) {
             boundNewCliSessionId = true;
           }
           return {
             ...session,
-            ...(nextCliSessionId !== session.cliSessionId ? { cliSessionId: nextCliSessionId } : {}),
+            ...(cliSessionRebind.changed ? { cliSessionId: cliSessionRebind.cliSessionId } : {}),
+            ...(remoteTranscriptRef && session.remoteTranscriptRef !== remoteTranscriptRef
+              ? { remoteTranscriptRef }
+              : {}),
             ...(cliReasoningEffort && session.cliReasoningEffort !== cliReasoningEffort
               ? { cliReasoningEffort }
               : {}),
@@ -2188,6 +2269,21 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     persistWorkspanState(workspans, owner.id, state.sessions);
   },
 
+  detachSessionToWorkspan: (sessionId, insertAt) => {
+    const state = get();
+    const result = detachTerminalSessionToWorkspan(
+      state.workspans,
+      sessionId,
+      createWorkspanId,
+      createPaneId,
+      insertAt
+    );
+    if (!result.changed || !result.detachedWorkspanId) return;
+    set(buildWorkspanMirror(result.workspans, result.detachedWorkspanId));
+    scheduleSaveActiveId(sessionId);
+    persistWorkspanState(result.workspans, result.detachedWorkspanId, state.sessions);
+  },
+
   splitSessionToPaneEdge: (sessionId, targetPaneId, edge) => {
     const state = get();
     const owner = findWorkspanBySession(state.workspans, sessionId);
@@ -2279,6 +2375,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
       shell: resolvedShell,
       envVars: options?.envVars,
       startupCmd: launch.startupHandledByLaunch ? launchStartupCmd : options?.startupCmd,
+      ...getProjectAgentTerminalMetadata(options?.projectId),
       environmentType: launch.environmentType,
       sshHostId: launch.sshHostId,
       remotePath: launch.remotePath,
@@ -2670,6 +2767,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
         newIdMap[ps.id] = ps.id;
         restoredSessions.push({
           ...ps,
+          ...getRestoredAgentTerminalMetadata(ps, ps.projectId),
           kind: undefined,
           deferStartupUntilInitialOutput: false,
         });
@@ -2699,6 +2797,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
               envVars: ps.envVars,
               // 仅保留给 Tab 厂商识别；daemon attach 不会重新执行该命令。
               startupCmd: ps.startupCmd,
+              ...getRestoredAgentTerminalMetadata(ps, attachedMeta.projectId),
               cliSessionId: ps.cliSessionId,
               remoteHistoryConsumerId: ps.remoteHistoryConsumerId,
               remoteHistorySourceInstanceId: ps.remoteHistorySourceInstanceId,
@@ -2819,6 +2918,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
         shell: resolvedShell,
         envVars: ps.envVars,
         startupCmd: launch.startupHandledByLaunch ? restoredStartupCmd : launchStartupCmd,
+        ...getRestoredAgentTerminalMetadata(ps, ps.projectId),
         environmentType: launch.environmentType ?? ps.environmentType,
         sshHostId: launch.sshHostId ?? ps.sshHostId,
         remotePath: launch.remotePath ?? ps.remotePath,
@@ -2969,6 +3069,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
       envVars: persisted?.envVars,
       // 元数据用于 Tab 厂商识别；daemon attach 不会重新执行该命令。
       startupCmd: persisted?.startupCmd,
+      ...getRestoredAgentTerminalMetadata(persisted, attachedMeta.projectId),
       cliSessionId: persisted?.cliSessionId,
       remoteHistoryConsumerId: persisted?.remoteHistoryConsumerId,
       remoteHistorySourceInstanceId: persisted?.remoteHistorySourceInstanceId,
@@ -3523,6 +3624,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
       return;
     }
     const currentTranscript = get().subagentTranscripts[sessionId];
+    if (currentTranscript?.ended) return;
     logInfo("[subagent_transcript] stop target resolved", {
       sessionId,
       tabId: payload.tabId,
@@ -3561,10 +3663,13 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
 
     const existingTimer = subagentCloseTimers.get(sessionId);
     if (existingTimer) clearTimeout(existingTimer);
+    const settings = useSettingsStore.getState();
     const closeDelayMs =
-      currentTranscript?.source.kind === "child-jsonl" || payload.source === "codex"
-        ? SUBAGENT_CHILD_JSONL_CLOSE_DELAY_MS
-        : SUBAGENT_CLOSE_DELAY_MS;
+      settings.hookPopupAutoCloseEnabled
+        ? settings.hookPopupAutoCloseSeconds * 1000
+        : currentTranscript?.source.kind === "child-jsonl" || payload.source === "codex"
+          ? SUBAGENT_CHILD_JSONL_CLOSE_DELAY_MS
+          : SUBAGENT_CLOSE_DELAY_MS;
     logInfo("[subagent_transcript] schedule transcript close", { sessionId, closeDelayMs, sourceKind: currentTranscript?.source.kind });
     const timer = setTimeout(() => {
       subagentCloseTimers.delete(sessionId);
@@ -3576,6 +3681,13 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
   },
 
   appendSubagentTranscript: (key, content, reset) => {
+    const session = get().sessions.find((candidate) => candidate.id === key);
+    const shouldFinish = Boolean(
+      session?.kind === "subagent-transcript"
+      && session.subagent
+      && !get().subagentTranscripts[key]?.ended
+      && hasCodexTerminalEvent(content),
+    );
     set((state) => {
       const prev = state.subagentTranscripts[key];
       // 仅更新已存在的订阅（本窗口 openSubagentTranscript 预置）；未知 key 忽略（多窗口广播）。
@@ -3630,6 +3742,16 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
         },
       };
     });
+    if (shouldFinish && session?.subagent) {
+      const parentSessionId = session.subagent.parentSessionId;
+      get().finishSubagentTranscript({
+        tabId: parentSessionId,
+        event: "SubagentStop",
+        source: "codex",
+        sessionId: parentSessionId,
+        agentId: session.subagent.agentId ?? null,
+      });
+    }
   },
 }));
 

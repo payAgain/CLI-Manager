@@ -17,6 +17,7 @@ mod git_watcher;
 pub mod hook_client;
 mod linux_graphics;
 mod log_rotation;
+mod process_job;
 pub mod pty;
 mod shell_resolver;
 mod ssh_agent_supply_chain;
@@ -945,9 +946,17 @@ pub fn run() {
             commands::ssh::ssh_agent_hook_inspect,
             commands::ssh::ssh_agent_hook_preview,
             commands::ssh::ssh_agent_hook_apply,
+            commands::ssh_integration::ssh_agent_record_hook_report,
+            commands::ssh_integration::ssh_agent_save_host_preferences,
             commands::ssh::ssh_save_password,
             commands::ssh::ssh_password_status,
             commands::ssh::ssh_delete_password,
+            commands::ssh_db::ssh_db_ensure_group_schema,
+            commands::ssh_db::ssh_db_import_config_hosts,
+            commands::ssh_db::ssh_db_delete_host,
+            commands::ssh_db::ssh_db_delete_group,
+            commands::ssh_db::ssh_db_save_host_preferences,
+            commands::ssh_db::ssh_db_record_hook_report,
             commands::ssh::ssh_check_path,
             commands::ssh::ssh_list_directories,
             commands::ssh_config::ssh_config_default_directory,
@@ -1040,6 +1049,7 @@ pub fn run() {
             commands::sync::backup_restore_safety_save,
             commands::sync::backup_restore_safety_load,
             commands::sync::backup_restore_safety_clear,
+            commands::sync::backup_restore_database,
             commands::sync::sync_save_password,
             commands::sync::sync_load_password,
             commands::sync::sync_delete_password,
@@ -1061,6 +1071,8 @@ pub fn run() {
             commands::hook_settings::hook_settings_uninstall_codex,
             commands::hook_settings::hook_settings_install_pi,
             commands::hook_settings::hook_settings_uninstall_pi,
+            commands::hook_settings::hook_settings_install_grok,
+            commands::hook_settings::hook_settings_uninstall_grok,
             commands::hook_settings::hook_settings_select_dir,
             commands::ccusage::ccusage_get_status,
             commands::ccusage::ccusage_install_tools,

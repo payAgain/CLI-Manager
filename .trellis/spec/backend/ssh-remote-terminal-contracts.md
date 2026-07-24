@@ -4,7 +4,7 @@
 
 Apply this contract when changing SSH host persistence, remote project creation, remote directory queries, terminal launch, PTY/daemon restore, project capability routing, or project sync/import behavior.
 
-SSH projects support remote terminals plus explicit Claude/Codex Agent Hook integration, read-only history, and same-source remote resume. Local and WSL projects retain their existing capabilities. Remote files, Git, Worktree, historical statistics, provider switching, external terminal launch, and remote resource monitoring remain separate implementations.
+SSH projects support remote terminals plus explicit Claude/Codex Agent Hook integration, read-only history, same-source remote resume, and a full remote Git panel routed through the SSH Agent. Local and WSL projects retain their existing capabilities. Remote files, Worktree, historical statistics, provider switching, external terminal launch, and remote resource monitoring remain separate implementations.
 
 ## 2. Signatures
 
@@ -74,6 +74,7 @@ pub struct SshLaunchPlan {
     pub remote_path: String,
     pub client_instance_id: String,
     pub project_id: String,
+    pub project_name: String,
     pub bridge_epoch: String,
     pub agent_path: String,
     pub agent_installation_id: String,
@@ -97,7 +98,7 @@ pub struct SshLaunchPlan {
 - Host grouping is independent from the existing manual project grouping.
 - `ssh_host_groups` owns the editable multi-level SSH host tree. `ssh_hosts.group_name` is legacy display/migration data; new UI should bind by `group_id`.
 - Migration 21 must preserve old flat `group_name` values as root groups and backfill each host's `group_id`.
-- Migration 22 adds `ssh_hosts.config_file TEXT NOT NULL DEFAULT ''`; empty values keep the system OpenSSH default config behavior.
+- Migration 22 adds `ssh_hosts.config_file TEXT NOT NULL DEFAULT ''`; an empty value means no custom Config file was selected. SSH Config aliases, Agent authentication, and configured jump routes still use the system default Config. Address-based connections without a jump route isolate it with `-F none` only when CLI-Manager fully supplies identity-file, password, credential-reference, or keyboard-interactive authentication.
 
 ### Authentication and secrets
 
@@ -129,6 +130,8 @@ pub struct SshLaunchPlan {
 - Environment keys must match shell variable syntax.
 - Directory browsing/check commands use non-interactive `BatchMode=yes` for SSH Config, Agent, and identity-file modes.
 - Every OpenSSH probe, directory query, and terminal launch must add `-F <config_file>` when `config_file` is non-empty. If that file later becomes invalid or unreadable, return an error and never fall back to the default config.
+- A fully structured address-based connection without a jump route must add `-F none` for identity-file, password-prompt, credential-reference, and keyboard-interactive authentication. This prevents an unrelated, malformed, or insecurely-permissioned `~/.ssh/config` from blocking modes whose authentication is fully represented by CLI-Manager.
+- Agent and SSH Config authentication must continue to load the system default Config even for explicit addresses, because the host model does not represent settings such as `IdentityAgent` or general `Host *` rules. A target Config alias or configured jump route also keeps the default Config when no custom `config_file` is selected.
 - HTTP and SOCKS5 proxy URLs are stored as structured `proxy_type`, `proxy_host`, and `proxy_port` fields. The app binary provides the stdio proxy helper used by OpenSSH `ProxyCommand`; users must not need to author a raw command.
 - When a direct HTTP/SOCKS5 proxy is enabled, it takes precedence over `ProxyJump`; do not emit both routes for the same connection.
 - Connection testing must probe a configured HTTP/SOCKS5 proxy as a separate diagnostic stage before starting SSH, and return the sanitized proxy endpoint plus the raw connect/handshake error when that stage fails.
@@ -145,7 +148,7 @@ pub struct SshLaunchPlan {
 - Resolve the source only from the SSH project's configured `cli_tool`. Inject `CLAUDE_CONFIG_DIR` for Claude or `CODEX_HOME` for Codex; do not scan or switch remote providers.
 - Absolute POSIX roots use normal POSIX quoting. `~` and `~/...` roots must be rendered with an explicit quoted `${HOME}` prefix so shell expansion occurs without evaluating arbitrary variables or command substitution.
 - Active PTYs capture the root in their launch plan. Editing a Host or project root affects only subsequent launches and never rewrites a running session.
-- When an SSH project creates a terminal without an explicit session command, resolve its project command as `startup_cmd` first, otherwise `cli_tool + cli_args`; project environment variables follow the same fallback rule. Explicit resume/template commands take precedence, and machine-local provider overrides are not injected into the remote command.
+- Opening an SSH project without an explicit session command resolves its project command as `startup_cmd` first, otherwise `cli_tool + cli_args`; project environment variables follow the same fallback rule. The in-terminal `New Terminal` actions explicitly request an empty command so they open a shell in the same remote directory instead of relaunching the project's CLI. Explicit resume/template commands take precedence, and machine-local provider overrides are not injected into the remote command.
 - SSH startup commands are embedded in `SshLaunchPlan` and executed exactly once by the remote launch command. The frontend may retain the resolved command as session metadata but must not write it again through `pty_write`.
 - A configured initialization/startup command runs inside one login shell, then hands control to a non-login interactive shell that inherits the initialized environment. Do not start a second login shell after the command; repeated MOTD/profile output can bury command output and rerun login side effects.
 
@@ -156,15 +159,21 @@ pub struct SshLaunchPlan {
 - Reopen a live daemon session by attaching to its existing PTY. Never rerun the SSH launch or startup command.
 - An exited daemon session may restore replay and disconnected metadata only.
 - If an older daemon rejects the SSH create frame, fall back to the in-process PTY path; legacy local Create frames remain compatible.
-- Rust removes user-supplied reserved Hook variables and injects `CLI_MANAGER_SSH_HOST_ID`, `CLI_MANAGER_SSH_CLIENT_INSTANCE_ID`, `CLI_MANAGER_PROJECT_ID`, `CLI_MANAGER_TAB_ID`, and `CLI_MANAGER_BRIDGE_EPOCH` from validated launch/session state.
-- The daemon stores the corresponding Hook binding with the live PTY. Remote events are accepted only when Host/client/project/Tab/epoch/Agent installation/source all match and the session remains alive.
+- Rust removes user-supplied reserved Hook variables and injects `CLI_MANAGER_SSH_HOST_ID`, `CLI_MANAGER_SSH_CLIENT_INSTANCE_ID`, `CLI_MANAGER_PROJECT_ID`, `CLI_MANAGER_TAB_ID`, and `CLI_MANAGER_BRIDGE_EPOCH` from validated launch/session state. `project_name` is desktop-only display metadata and must not be exported to the remote environment.
+- The daemon stores the corresponding Hook binding, including the configured sidebar project name, with the live PTY. Remote events are accepted only when Host/client/project/Tab/epoch/Agent installation/source all match and the session remains alive; only then may the daemon attach the trusted project display name for third-party notification rendering.
 - One daemon Agent bridge is reused for active sessions on the same Host/client/connection identity. PTYs remain independent SSH processes. The last Host session release stops the Hook bridge; probe/install/config operations remain short-lived connections.
 - Remote resume persists `cliSessionId`, history source instance, and history consumer identity with the terminal. The same current-client session jumps to its existing Tab; another consumer is blocked until PTY exit/error/close releases ownership.
 
 ### Capability routing
 
 - All SSH feature entry points must consult `resolveProjectCapabilities` or an equivalent hard backend/store guard.
-- SSH project capabilities allow `terminal`, `splitTerminal`, and `commandTemplates`; remote Hook state is routed by the dedicated Agent/binding contract rather than by local history/provider capability fallbacks.
+- SSH project capabilities allow `terminal`, `splitTerminal`, `commandTemplates`, read-only remote `files`, full remote `git` when the Agent advertises `gitFull`, remote `history`, and remote `statistics`; remote Hook state is routed by the dedicated Agent/binding contract rather than by local history/provider capability fallbacks.
+- Switching to an SSH session must not close a supported terminal side panel. Files, Git, history/replay, and statistics remain open after their asynchronous remote load completes in both merged and independent panel layouts.
+- Terminal Git panel identity comes from the registered `Project`: SSH uses trimmed `project.remote_path`, while local/WSL may use the session/Worktree path. An SSH session's empty desktop `cwd`/`project.path` must never produce the Git `no project` state.
+- File panel context identity is environment-specific: local/WSL compare project id plus normalized local/Worktree path; SSH compares project id, Host id, and case-sensitive normalized `remote_path`. Host/root changes must rebuild the remote context, and stale async results must not overwrite the replacement context.
+- While the SSH file or Git context is being built and its first empty snapshot is pending, the panel shows the localized `common.loading` state. It may show an empty result only after the initial request completes.
+- Every SSH file read, including refreshes of already-open files, must carry the captured `SshRemoteFileContext`. If an SSH project has no ready remote context, the file Store returns without invoking any local `file_*` command.
+- Opening session history from an SSH terminal scopes both remote synchronization and cached listing to that project's `remote_path`; the empty desktop-local `path` must never be passed as the history filter or interpreted as all remote projects.
 - A hidden or disabled UI control is not sufficient for files and Worktree: stores must reject SSH projects before invoking local filesystem/Git processes.
 - `findProjectByPath` and other local path matchers must exclude SSH projects and empty local paths.
 - The system resources panel is local-only and must be labelled `Local Resources` / `本机资源` for SSH sessions.
@@ -172,9 +181,10 @@ pub struct SshLaunchPlan {
 
 ### Sync
 
-- Sync/export may carry project `environment_type`, `remote_path`, and `cli_config_root`.
-- It must exclude `ssh_hosts`, `ssh_host_id`, `config_file`, `identity_file`, `credential_ref`, passwords, and machine-specific proxy credentials.
-- Imported SSH projects have `ssh_host_id = null`, preserve only a valid explicit POSIX/`~/...` project config root, and clear machine-specific provider/worktree configuration before requesting host rebinding.
+- Sync/export carries project `environment_type`, `remote_path`, `cli_config_root`, and `ssh_host_id`, plus SSH host groups and portable SSH host profiles.
+- Sync excludes `config_file`, `identity_file`, `credential_ref`, passwords, `proxy_command`, private-key contents, and machine-specific proxy credentials. An existing same-ID host on the destination retains these local-only fields.
+- On a new device, a restored `identity_file` mode without a local key becomes `interactive`; a `credential_ref` mode without a local credential becomes `password_prompt`; a ProxyCommand without a local command is disabled. The host, project path, grouping, address, port, user, Config alias, jump route, structured HTTP/SOCKS5 proxy, timeout, keepalive, encoding, startup script, and notes remain available.
+- Older snapshots without both SSH workspace arrays retain existing destination host tables, and their imported SSH projects remain unbound. SSH project provider/worktree configuration remains subject to the existing machine-specific cleanup.
 
 ## 4. Validation & Error Matrix
 
@@ -208,6 +218,10 @@ pub struct SshLaunchPlan {
 | Reserved Hook binding is missing/invalid | remote Hook exits successfully as no-op; do not spool or broadcast |
 | Remote event binding does not match a live daemon PTY | reject and log a sanitized warning |
 | Agent installation or remote machine identity changed | refuse Hook config/bridge with `ssh_agent_identity_changed` |
+| SSH Git Agent is missing, incompatible, or lacks `gitFull` | show a localized update/install error; do not render a fake read-only Git panel or call local Git |
+| SSH Git `rootPath` differs from the Launch Plan `remotePath` | `remote_git_root_mismatch`; reject before bridge dispatch |
+| SSH file context is pending or unavailable | keep/show initial loading or the original load failure; never call local `file_*` with the empty desktop `path` |
+| SSH project terminal has `cwd == ""` | resolve the Git panel root from trimmed `project.remote_path` |
 
 ## 5. Good / Base / Bad Cases
 
@@ -217,16 +231,22 @@ pub struct SshLaunchPlan {
 - Good: Username / Password host can test connection and browse/check a remote path through AskPass without exposing the password.
 - Good: project `~/state/claude` overrides the Host Claude root and launches with `CLAUDE_CONFIG_DIR="${HOME}"/'state/claude'`.
 - Good: two projects on one Host use independent Tab/epoch bindings while sharing one client/Host Hook bridge; events route only to the originating live Tab.
+- Good: an SSH project waits for its Agent Git context, then routes repository-relative operations through the dedicated Git lane without ever treating `remote_path` as a desktop path.
+- Good: the SSH file tree and Git panel display `加载中…` / `Loading...` until their first remote result is available; refreshing an open remote file still uses the same remote context.
 - Base: no project or Host root exists, so Claude/Codex uses its native default without an injected variable.
 - Base: Hook is not installed; the SSH terminal still runs normally and only live Hook status is unavailable.
 - Good: a host imported from a custom config directory uses the same canonical `config_file` for testing, browsing, and terminal launch.
 - Base: password-prompt/MFA users manually enter a remote path, then authenticate in the real PTY.
 - Base: a host imported from the default `~/.ssh/config` stores an empty `config_file` and lets OpenSSH resolve its normal user config.
-- Base: an imported SSH project remains visible with a rebinding warning.
+- Base: a manually entered address with no jump route stores an empty `config_file` and runs with `-F none`; unrelated default Config permissions and rules do not participate in that connection.
+- Base: an older snapshot imports an SSH project with an unbound-host warning.
 - Bad: treating `path = ""` as a local project key; on POSIX this can match every local path.
 - Bad: passing a remote POSIX path into local filesystem, Git, Worktree, history, or provider APIs.
+- Bad: selecting LocalGitTransport merely because the SSH Agent context is temporarily null during project switching.
+- Bad: calling `loadProjectFile(project, entry)` from an SSH refresh and thereby treating `project.path == ""` as a local root.
+- Bad: deriving an SSH Git panel root from `session.cwd`, which is intentionally empty for the desktop PTY launch.
 - Bad: falling back to default OpenSSH config after a custom `config_file` is moved or becomes unreadable.
-- Bad: synchronizing host IDs or private-key paths across machines.
+- Bad: synchronizing passwords, credential references, private-key paths, custom SSH Config paths, or ProxyCommand content.
 - Bad: quoting `~/.claude` as one literal shell token; this disables tilde expansion and points the CLI at a directory named `~`.
 
 ## 6. Tests Required
@@ -247,8 +267,11 @@ pub struct SshLaunchPlan {
 - Assert deleting a Host cascades Host preferences while retaining validated integration identity with `host_id = NULL` and `unbound/retained` state.
 - Assert Rust overwrites reserved binding env, provider launch fields remain null for SSH, one Host bridge serves multiple PTYs, mismatched events are rejected, and the final PTY release stops the bridge.
 - Assert session restore attaches live daemon PTYs and never reruns an exited SSH command.
-- Assert SSH projects are rejected by file and Worktree stores and excluded from local path matching.
-- Assert export/import omits all host and credential fields and requires rebinding.
+- Assert SSH file operations require `SshRemoteFileContext`, Worktree stores reject SSH projects, and local path matching excludes SSH projects.
+- Assert SSH Git context pending/failure cannot invoke local `git_*`, `rootPath` must equal Launch Plan `remotePath`, and missing `gitFull` blocks only the Git panel.
+- Assert terminal Git panel path resolution uses `remote_path` for SSH even when `session.cwd == ""`; initial file/Git loading renders `common.loading`; visible-file refresh passes the remote context into `loadProjectFile`.
+- Assert changing an SSH project's Host or `remote_path` while the file panel is open clears the previous tree, rebuilds `SshRemoteFileContext`, and discards success/failure from the old async load; local/WSL Worktree path comparison remains unchanged.
+- Assert export/import preserves portable host fields and the project host binding, while omitting all secrets and machine-local paths.
 - Manually verify OpenSSH Agent, private key, password/MFA, first host key, changed host key, ProxyJump, ProxyCommand, network interruption, zh-CN/en-US, and 24-hour time display.
 
 ## 7. Wrong vs Correct
@@ -293,6 +316,31 @@ if (!projectSupportsCapability(project, "git")) return null;
 ```
 
 The corresponding store/backend path must also reject SSH projects before any local path operation.
+
+### Wrong: infer Local Git from a missing remote context
+
+```ts
+const transport = remoteContext ? createSshGitTransport(remoteContext) : createLocalGitTransport(path);
+```
+
+### Correct: carry the environment requirement separately
+
+```ts
+const transport = createGitTransport(path, remoteContext, project.environment_type === "ssh");
+```
+
+### Wrong: let an SSH file refresh infer its backend from a missing argument
+
+```ts
+await loadProjectFile(project, entry);
+```
+
+### Correct: preserve the captured remote file context across the refresh
+
+```ts
+if (project.environment_type === "ssh" && !remoteFileContext) return;
+await loadProjectFile(project, entry, remoteFileContext);
+```
 
 ### Wrong: quote a tilde root literally
 

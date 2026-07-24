@@ -40,8 +40,10 @@ import {
 } from "@/components/icons";
 import { ProviderBadge } from "@/components/provider/ProviderRow";
 import { SettingsListItem } from "@/components/settings/SettingsListItem";
+import { CliToolIcon } from "@/components/CliToolIcon";
 import { VendorIcon, inferVendor, type VendorKey } from "@/components/VendorIcon";
 import { useSettingsStore } from "@/stores/settingsStore";
+import { resolveCliToolIconKey } from "@/lib/cliTools";
 import { pickByLanguage, useI18n, type AppLanguage } from "@/lib/i18n";
 
 // 深度合并对象（target 覆盖 source）
@@ -143,19 +145,39 @@ const providerPageStyles = `
   overflow: hidden;
   border-radius: 16px;
   background: var(--surface-container-lowest);
-  outline: 1px solid color-mix(in srgb, var(--border) 15%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border) 58%, transparent);
+  transition: border-color var(--animate-duration-fast), box-shadow var(--animate-duration-fast);
+}
+.prov-detail-hero:hover {
+  border-color: color-mix(in srgb, var(--primary) 34%, var(--border));
+  box-shadow: 0 6px 18px color-mix(in srgb, var(--primary) 8%, transparent);
 }
 
-/* 环境变量卡：tonal layering，无硬边框 */
+/* 环境变量卡：保留 tonal layering，同时提供清晰边界和悬浮反馈 */
 .prov-env-card {
   background: var(--surface-container-lowest);
   border-radius: 12px;
   padding: 10px 12px;
-  outline: 1px solid color-mix(in srgb, var(--border) 12%, transparent);
-  transition: outline-color var(--animate-duration-fast), background-color var(--animate-duration-fast);
+  border: 1px solid color-mix(in srgb, var(--border) 48%, transparent);
+  transition: border-color var(--animate-duration-fast), background-color var(--animate-duration-fast), box-shadow var(--animate-duration-fast);
 }
 .prov-env-card:hover {
-  outline-color: color-mix(in srgb, var(--primary) 28%, transparent);
+  border-color: color-mix(in srgb, var(--primary) 34%, var(--border));
+  background: color-mix(in srgb, var(--primary) 3%, var(--surface-container-lowest));
+  box-shadow: 0 4px 12px color-mix(in srgb, var(--primary) 8%, transparent);
+}
+.prov-meta-card {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--border) 48%, transparent);
+  border-radius: 12px;
+  background: var(--surface-container-lowest);
+  transition: border-color var(--animate-duration-fast), background-color var(--animate-duration-fast), box-shadow var(--animate-duration-fast);
+}
+.prov-meta-card:hover {
+  border-color: color-mix(in srgb, var(--primary) 34%, var(--border));
+  background: color-mix(in srgb, var(--primary) 3%, var(--surface-container-lowest));
+  box-shadow: 0 4px 12px color-mix(in srgb, var(--primary) 8%, transparent);
 }
 .prov-env-key {
   font-size: 10px;
@@ -679,7 +701,7 @@ function ProviderDetailPanel({ provider }: { provider: CcSwitchProvider }) {
 
 function MetaField({ label, icon: Icon, children }: { label: string; icon?: LucideIcon; children: ReactNode }) {
   return (
-    <Stack gap={6} className="min-w-0">
+    <Stack gap={6} className="prov-meta-card">
       <Group gap={6} align="center">
         {Icon && <Icon size={13} style={{ color: "var(--text-muted)" }} />}
         <Text
@@ -823,6 +845,7 @@ export function ProviderSettingsPage({ searchValue }: { searchValue: string }) {
     return types.map((type) => ({
       value: type,
       label: `${type} (${counts.get(type)})`,
+      icon: resolveCliToolIconKey(type),
     }));
   }, [data]);
 
@@ -967,7 +990,7 @@ export function ProviderSettingsPage({ searchValue }: { searchValue: string }) {
                 key={option.value}
                 type="button"
                 onClick={() => setAppTypeFilter(option.value)}
-                className="shrink-0 px-3 py-1.5 text-xs font-medium transition-all"
+                className="inline-flex shrink-0 items-center gap-1.5 px-3 py-1.5 text-xs font-medium transition-all"
                 style={{
                   borderRadius: "10px",
                   backgroundColor:
@@ -994,6 +1017,13 @@ export function ProviderSettingsPage({ searchValue }: { searchValue: string }) {
                   }
                 }}
               >
+                <span aria-hidden="true" className="inline-flex h-4 w-4 shrink-0 items-center justify-center">
+                  {option.icon ? (
+                    <CliToolIcon icon={option.icon} size={14} className="text-current" />
+                  ) : (
+                    <Boxes size={14} />
+                  )}
+                </span>
                 {option.label}
               </button>
             ))}

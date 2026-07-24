@@ -13,10 +13,28 @@
 - `TerminalProcessManager` owns every received frame until xterm's write callback commits it. Component cleanup must only detach the consumer; it must not discard or persist-and-duplicate uncommitted frames.
 - Live frames may be combined for one xterm write, but completion commits and ACKs the constituent frames in sequence order using each frame's raw UTF-16 length.
 - A remounted Display receives all uncommitted frames again. Commit callbacks from an older attachment generation are ignored.
+- When a layout/workspan migration remounts a Display, its layout-effect cleanup must serialize the xterm buffer; the new Display restores that snapshot and completes its first fit/refresh before subscribing to PTY output. Do not arm the new Display's unmount snapshot callback until that restore completes: React StrictMode may dispose the probe mount while its initial write is still pending, and serializing that empty probe would overwrite the valid source snapshot. Committed frames are not replayed by the manager, so subscribing before restore can leave an idle shell visually blank.
 - Closing the last attached session cancels any scheduled reconnect; a delayed reconnect callback must return without opening a socket when no non-tombstoned sessions remain.
 - No component or store may call `listen("pty-output-...")` or invoke `pty_write/pty_resize/pty_close` directly.
 - Large-buffer horizontal resize uses a leading + trailing latest-wins cadence capped at 34ms; vertical resize remains immediate. Consecutive `ResizeObserver` frames replace only the pending fit RAF and must not cancel that horizontal cadence. macOS/Linux enable xterm cursor-line reflow so a rapid shrink does not expose the old-width cursor row while waiting for the PTY application's `SIGWINCH` redraw; Windows keeps the existing ConPTY compatibility policy. Shrink and grow must both expose xterm's live resize as soon as its queued render is ready. Immediately before each visible horizontal shrink, keep a pixel copy of the last stable `.xterm-screen` above the hidden live screen, but display that copy at its original CSS size inside an overflow-clipped viewport; never stretch the bitmap or hold it for the whole drag. Reveal the live renderer after two animation frames, and restart only this two-frame guard if another `Terminal.resize()` arrives first. `ResizeObserver` events that occur while waiting for the next throttled terminal resize may update the clip bounds but must not delay the reveal. WebGL must preserve its drawing buffer for this copy, and the barrier must validate that a captured frame contains visible pixels before hiding the live screen; a failed/empty capture leaves the live renderer visible. Capture geometry and visibility belong to `.xterm-screen`; root-level canvas lookup is only a compatibility fallback and must exclude the overview ruler. This barrier starts immediately before `Terminal.resize()`, never during the throttle wait, so it hides only xterm/WebGL's corrupt intermediate reflow frame without freezing the whole drag. Before a normal-buffer column change, if the user is above the live bottom, register a temporary marker at `viewportY`; after `Terminal.resize()` wait two animation frames for xterm's queued render and DOM viewport synchronization, then scroll to the marker's updated line and dispose it. A synchronous `scrollToLine()` is forbidden because the old DOM scroll height clamps the target before xterm's queued viewport sync. Cancel and dispose a pending marker on a newer resize or terminal detach. Do not force bottom-following or alternate-buffer terminals. Visibility restore fits immediately and forces a full refresh only when natural rendering does not complete within two frames or the renderer was rebuilt.
 - Split-pane leaf and divider bounds must align to the current display's physical pixel grid using the split root's global origin and `window.devicePixelRatio`. Arbitrary persisted/drag-preview ratios, fractional container bounds, nested splits, and fullscreen leaves must not place an xterm canvas at a fractional device-pixel origin. Snap divider start/end boundaries and derive the second pane from the remaining aligned space so the layout has no gap or overlap. Refresh the grid metrics on container resize and window changes, and use a resolution media query that rebinds itself whenever DPR changes so moving an unchanged-size window among 1080p, 2K fractional-scaling (including DPR 1.25/1.5), and Retina displays cannot retain the previous screen's pixel grid.
+
+**Remount snapshot ordering**:
+
+```tsx
+// Wrong: a StrictMode probe can serialize an empty terminal before restore finishes.
+snapshotBeforeUnmountRef.current = serializeCurrentBuffer;
+terminal.write(initialTerminalOutput, finishInitialDisplayRestore);
+
+// Correct: the valid source snapshot remains untouched until the new display is ready.
+terminal.write(initialTerminalOutput, () => {
+  scheduleFit(true);
+  requestAnimationFrame(() => {
+    snapshotBeforeUnmountRef.current = serializeCurrentBuffer;
+    markInitialDisplayReady();
+  });
+});
+```
 
 **Wrong**:
 
@@ -860,11 +878,11 @@ function buildSplitLayout(node: TerminalPaneNode, rect: Rect): { leaves: LeafLay
 - [ ] Divider drag resizing still works; nested splits resize correctly.
 - [ ] Pane tab switching and session activation unchanged.
 
-### Convention: Terminal resize drag uses local or DOM preview, then commits once
+### Convention: Terminal resize drag uses DOM preview, then commits once
 
-**What**: For terminal split dividers and terminal-side resizable panels, the drag interaction must update only a local preview during `mousemove` and commit the final width/ratio to React/Zustand state on `mouseup`. Do not write heavy global state or rerender embedded stats / git panels on every drag frame.
+**What**: For terminal split dividers and terminal-side resizable panels, the drag interaction must update wrapper geometry directly in the DOM during `mousemove` and commit the final width/ratio to React/Zustand state on `mouseup`. Do not write local/global React state or rerender embedded terminals, stats, or git panels on every drag frame.
 
-**Why**: Terminal panes contain xterm, realtime stats, and git views. Writing `paneTree` or panel width state every frame causes the whole terminal shell or panel subtree to rerender during drag, which makes width adjustment feel sticky and unsmooth.
+**Why**: Terminal panes contain xterm, realtime stats, and git views. Even component-local preview state still makes `SplitTerminalView` rebuild and reconcile every pane wrapper per frame. VS Code's SplitView/Sash path updates view geometry directly and commits proportions at drag end; matching that boundary keeps pointer tracking independent from React rendering.
 
 **Correct**:
 
@@ -888,18 +906,21 @@ const onUp = () => {
 
 ```tsx
 const onMove = (event: MouseEvent) => {
-  latestRatio = clampSplitRatio(rawRatio);
+  pendingRatioRef.current = clampSplitRatio(rawRatio);
   if (rafId === null) {
     rafId = requestAnimationFrame(() => {
       rafId = null;
-      setDragPreview({ splitId, ratio: latestRatio });
+      applySplitLayoutToElements(buildSplitLayout({
+        splitId,
+        ratio: pendingRatioRef.current,
+      }));
     });
   }
 };
 
 const onUp = () => {
-  setDragPreview(null);
-  setSplitRatio(splitId, latestRatio);
+  applyFinalPreview();
+  setSplitRatio(splitId, pendingRatioRef.current);
 };
 ```
 
@@ -919,7 +940,9 @@ const onMove = (event: MouseEvent) => {
 
 **Contracts**:
 
-- Drag preview may use local component state or direct DOM width updates, but the persistent width/ratio source of truth updates once on drag end.
+- Drag preview updates pane/divider wrapper geometry directly in the DOM at most once per animation frame; React state is limited to drag start/end presentation state.
+- Keep the latest live layout in a ref so an unrelated React render cannot restore stale persisted geometry during the drag.
+- The persistent width/ratio source of truth updates once on drag end, after synchronously applying the last pointer position.
 - For split panes, keep pane content component identity stable while only wrapper geometry changes.
 - For terminal-side panels, avoid rerendering `TerminalStatsPanel` / `GitChangesPanel` on every mousemove.
 
@@ -1486,3 +1509,27 @@ Removing `scrollOnEraseInDisplay: true` is a worse regression: Codex repaints vi
 ```
 
 **Tests**: Run `npx tsc --noEmit`; manually verify at least one light palette and one dark theme. In the light theme, check project-tree selection, terminal tabs, toolbar buttons, and terminal side-panel buttons are distinguishable at a glance without changing layout density.
+
+### Convention: Project CLI argument history records after every eligible successful save
+
+**What**: `ConfigModal` must use `CliArgsHistoryField` for both new and edit forms whenever a CLI tool is selected. Its query filters the current tool's complete history before applying the 10-item limit. After `createProject` or `updateProject` succeeds, record a non-empty `trimmedCliArgs` through the shared `!isClone` path; cloned projects remain excluded.
+
+**Why**: Separating history recording into only the create branch makes an edited project's arguments unavailable when the user subsequently creates another project. Recording after the persistence branch also prevents a failed save from inflating usage counts.
+
+**Correct**:
+
+```tsx
+if (!isClone && trimmedCliArgs) {
+  await recordCliArgsHistory(trimmedCliTool, trimmedCliArgs);
+}
+```
+
+**Wrong**:
+
+```tsx
+if (!isEdit && !isClone && trimmedCliArgs) {
+  await recordCliArgsHistory(trimmedCliTool, trimmedCliArgs);
+}
+```
+
+**Tests**: Run `npx tsc --noEmit` and `node --test scripts/cliArgsHistory.test.mjs`; assert the shared record block occurs after the edit/create persistence branch and before `onClose()`, and a query can find an item outside the unfiltered top 10 while its matching result remains limited to 10 entries.

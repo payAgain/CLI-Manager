@@ -8,11 +8,12 @@ use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 
 use crate::files::{FileListRequest, FileReadRequest, FileSearchRequest};
-use crate::git::GitRequest;
 use crate::history::{
     HistoryGetRequest, HistoryResumePreflightRequest, HistoryScopeRequest, HistorySearchRequest,
 };
 use crate::hook_runtime::{ack_spool, read_spool_batch, spool_namespace};
+#[cfg(unix)]
+use crate::hook_runtime::{bridge_pid_file_name, bridge_socket_file_name};
 use crate::installer::read_installation_record;
 use crate::layout::resolve_layout;
 use crate::{PROTOCOL_MAJOR, PROTOCOL_MINOR};
@@ -139,8 +140,8 @@ fn bind_hook_bridge(payload: &Value) -> Result<HookBridgeBinding, String> {
             .map_err(|_| "bridge_runtime_dir_failed".to_string())?;
         fs::set_permissions(&layout.runtime_dir, fs::Permissions::from_mode(0o700))
             .map_err(|_| "bridge_runtime_permissions_failed".to_string())?;
-        let socket_path = layout.runtime_dir.join(format!("hook-{namespace}.sock"));
-        let pid_path = layout.runtime_dir.join(format!("hook-{namespace}.pid"));
+        let socket_path = layout.runtime_dir.join(bridge_socket_file_name(&namespace));
+        let pid_path = layout.runtime_dir.join(bridge_pid_file_name(&namespace));
         if socket_path.exists() || pid_path.exists() {
             if process_alive(&pid_path) {
                 return Err("bridge_already_active".to_string());
@@ -275,7 +276,8 @@ fn capabilities() -> Value {
         "gitChanges",
         "gitDiff",
         "gitBranchStatus",
-        "gitBranches"
+        "gitBranches",
+        "gitFull"
     ])
 }
 
@@ -472,35 +474,11 @@ pub fn run_bridge(
             continue;
         }
 
-        if matches!(
-            frame.kind.as_str(),
-            "gitListRepositories" | "gitChanges" | "gitDiff" | "gitBranchStatus" | "gitBranches"
-        ) {
+        if frame.kind.starts_with("git") {
             let request_id = frame.request_id.clone();
-            let response = match serde_json::from_value::<GitRequest>(frame.payload) {
-                Ok(request) => {
-                    let result = match frame.kind.as_str() {
-                        "gitListRepositories" => crate::git::list_repositories(request)
-                            .map(|repositories| json!({ "repositories": repositories, "asOf": crate::git::as_of_ms() })),
-                        "gitChanges" => crate::git::changes(request)
-                            .map(|changes| json!({ "changes": changes, "asOf": crate::git::as_of_ms() })),
-                        "gitDiff" => crate::git::diff(request)
-                            .map(|content| json!({ "content": content, "asOf": crate::git::as_of_ms() })),
-                        "gitBranchStatus" => crate::git::branch_status(request)
-                            .map(|status| json!({ "status": status, "asOf": crate::git::as_of_ms() })),
-                        _ => crate::git::branches(request)
-                            .map(|branches| json!({ "branches": branches, "asOf": crate::git::as_of_ms() })),
-                    };
-                    match result {
-                        Ok(payload) => response(request_id, "response", payload),
-                        Err(code) => response(request_id, "error", json!({ "code": code })),
-                    }
-                }
-                Err(_) => response(
-                    request_id,
-                    "error",
-                    json!({ "code": "remote_git_request_invalid" }),
-                ),
+            let response = match crate::git::dispatch(&frame.kind, frame.payload) {
+                Ok(payload) => response(request_id, "response", payload),
+                Err(code) => response(request_id, "error", json!({ "code": code })),
             };
             write_frame(writer, &response)?;
             continue;
@@ -805,6 +783,7 @@ mod tests {
             "gitDiff",
             "gitBranchStatus",
             "gitBranches",
+            "gitFull",
         ] {
             assert!(frame.payload["capabilities"]
                 .as_array()

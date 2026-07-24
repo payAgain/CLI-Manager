@@ -4,7 +4,35 @@
 
 Apply this contract when changing `cli-manager-ssh-agent`, shared SSH transport generation, one-shot Agent probes, Agent installation metadata, bridge framing, or the SSH Host CLI Integration status UI.
 
-The delivered scope includes explicit one-shot probe/install lifecycle, remote Claude/Codex Hook configuration, the one-shot Hook runtime, remote history/resume RPCs, and one reusable daemon-owned protocol `1.6` bridge per active SSH Host. Protocol 1.5 file RPCs and protocol 1.6 Git RPCs are read-only; realtime/historical stats remain separate stages.
+The delivered scope includes explicit one-shot probe/install lifecycle, remote Claude/Codex Hook configuration, the one-shot Hook runtime, remote history/resume RPCs, and daemon-owned protocol `1.7` bridges per active SSH Host. Protocol 1.5 file RPCs remain read-only; protocol 1.7 Git RPCs expose the full Git panel through a dedicated serialized Git lane. Realtime/historical stats remain separate stages.
+
+### Agent Release Identity
+
+- The Agent product version is `src-tauri/ssh-agent/Cargo.toml` `[package].version`; its Cargo
+  lockfile package entry and `AGENT_VERSION` must resolve to the same value. It is independent
+  from the desktop app version and from the bridge protocol version.
+- Protocol `1.7` plus `gitFull` first ships as Agent `0.1.1`. The published `0.1.0`
+  prerelease reports protocol `1.6`; releases `0.1.0` through `0.1.2` remain immutable.
+  Agent `0.1.3` keeps protocol `1.7` and expands ordinary untracked directories into file
+  entries so Diff, stage, and guarded deletion receive valid repository-relative paths.
+- The independent Agent release tag is exactly `ssh-agent-v<agent-version>`. Its signed manifest
+  must carry that Agent version and point only to assets on that same tag.
+- Independent Agent releases are GitHub prereleases with `make_latest: false`. The desktop
+  updater endpoint `releases/latest/download/latest.json` remains owned by stable desktop
+  releases tagged `V<desktop-version>`.
+- Stable desktop releases bundle the signed Agent manifest, signature, and Linux x64/arm64
+  binaries. Desktop installation uses that bundle first; only a completely absent bundle falls
+  back to the stable desktop Release network manifest.
+- Linux x64 and arm64 release binaries target a GLIBC 2.17 ABI baseline. Both desktop and
+  independent Agent release workflows use the same build path and reject binaries whose maximum
+  referenced GLIBC symbol version is newer than 2.17.
+- The shell installer uses `ssh-agent-v<version>` for explicit versions, except legacy `1.3.0`,
+  which resolves to its original `V1.3.0` desktop Release. An unavailable GitHub network cannot
+  be repaired by the remote installer; the bundled desktop installation remains the offline path.
+- User-configured and signed-manifest URLs reject query strings, fragments, and credentials.
+  HTTPS redirect targets may contain CDN-generated temporary query signatures, but still require
+  a host, reject credentials/fragments, and remain bounded to three redirects. Manifest Minisign
+  and Agent SHA-256 verification remain mandatory after redirect resolution.
 
 ## 2. Signatures
 
@@ -52,6 +80,21 @@ pub async fn ssh_agent_uninstall(...) -> Result<SshAgentOperationResult, String>
 pub async fn ssh_agent_hook_inspect(...) -> Result<HookConfigReport, String>;
 pub async fn ssh_agent_hook_preview(...) -> Result<HookConfigReport, String>;
 pub async fn ssh_agent_hook_apply(...) -> Result<HookConfigReport, String>;
+
+pub async fn ssh_db_ensure_group_schema() -> Result<(), String>;
+pub async fn ssh_db_import_config_hosts(
+    hosts: Vec<SshImportHostInput>,
+    group_id: Option<String>,
+) -> Result<SshImportResult, String>;
+pub async fn ssh_db_delete_host(id: String) -> Result<(), String>;
+pub async fn ssh_db_delete_group(id: String) -> Result<(), String>;
+pub async fn ssh_db_save_host_preferences(
+    host_id: String,
+    claude_root: String,
+    codex_root: String,
+    updated_at: String,
+) -> Result<(), String>;
+pub async fn ssh_db_record_hook_report(input: SshHookReportInput) -> Result<(), String>;
 ```
 
 `SshAgentProbeResult` contains `status`, stable `code`, sanitized executable/version/protocol/target metadata, `supported`, and an ephemeral diagnostic `detail`. Only metadata fields enter `ssh_agent_installations`; `detail` is never persisted.
@@ -92,6 +135,7 @@ Frames use a four-byte big-endian length followed by UTF-8 JSON. The maximum fra
 - `ssh_agent_installations` preserves last-known sanitized metadata on unreachable/authentication-required probes, but a confirmed `notInstalled` result clears stale version/path metadata.
 - Bridge `--protocol` is mandatory. A clean EOF before a frame starts is normal; a partial four-byte length or payload is a protocol error.
 - A healthy Agent must report protocol major 1 and minor 4 or newer. Minor 1 advertises `heartbeat`, `requestCancellation`, and `boundedBackpressure`; minor 3 adds remote history RPCs and `historyDetailChunks`; minor 4 adds `historyResumePreflight`. Older minor versions remain upgradeable but are not marked usable by the current desktop.
+- The full remote Git panel additionally requires protocol minor 7 and the explicit `gitFull` capability; capability absence blocks Git only and never falls back to local Git commands or the read-only lane.
 - Desktop install and the HTTP(S) script consume the same schema-1 release manifest and Tauri updater Minisign trust root. The signature covers manifest bytes; the manifest pins channel, semantic version, protocol range, Linux target, URL, size, and SHA-256.
 - Release URLs default to HTTPS. HTTP requires explicit user opt-in, never permits embedded credentials, query strings, or fragments, and still requires a valid signature. Manifest, signature, and artifact downloads are bounded.
 - Install preview is read-only. Confirmation re-fetches and re-verifies the manifest before downloading or opening SSH, preventing a stale preview from authorizing different bytes.
@@ -104,14 +148,18 @@ Frames use a four-byte big-endian length followed by UTF-8 JSON. The maximum fra
 - Hook config requests use the Host/tool `configuredConfigRoot`; empty means `$HOME/.claude` or `$HOME/.codex`. Inspect and preview never create directories. Confirmed install may create only a missing native default root; a missing custom root is rejected.
 - Hook reports return the configured and canonical roots, `configRootHash`, actual canonical config files, fingerprints, change actions, Agent installation/machine identity, and an installation record. The desktop validates every field before persisting `hook_record_json`.
 - A later inspect refresh preserves the last validated `HookInstallationRecord` for the same canonical root until explicit uninstall. Host-primary and project-override rows that resolve to the same Host/source/canonical root mirror the same Hook report so one physical installation cannot appear installed in one scope and absent in another.
+- Local Hook report persistence uses one backend-owned SQLite connection and one bounded transaction. Frontend SQL pool calls must not split `BEGIN`, mutations, and `COMMIT` across separate invocations. A failed root rotation or mirror update rolls back every affected integration row.
 - Claude JSON and Codex JSON/TOML are parsed structurally. Install normalizes only exact Agent-owned duplicates in place; uninstall removes only the exact path/source/event/owner/installation command. Unknown events and third-party fields, array order, matchers, symlinks, TOML comments, and user-owned `features.hooks = true` remain intact.
 - Config writes hold a per-root lock, verify preview fingerprints and current symlink targets, journal original bytes/mode, atomically replace files, reread, and roll back safely. A stale or externally edited target returns a conflict instead of overwriting it.
 - Hook execution requires all reserved Host/client/project/Tab/bridge-epoch variables. Missing or invalid binding is a successful no-op. Runtime errors are swallowed by the `hook` CLI so Claude/Codex is never blocked.
+- The full 64-character Hook spool namespace remains the durable isolation key. Unix bridge socket and PID filenames use the same deterministic 96-bit shortened digest so bind and notify agree while the default fallback runtime path stays below the Linux `AF_UNIX` path limit.
 - Hook stdin is limited to 1 MiB and normalized through `hook-schema`. Prompt/message text is removed before spooling. Remote transcript paths remain opaque references and never become desktop-local paths.
 - Spool/socket namespace is `SHA-256(hostId, clientInstanceId, installationId)`. It is bounded by 24 hours, 10000 records, and 32 MiB; overflow emits a sequenced `gap`. A stale PID lock is recoverable, JSONL/meta divergence rebuilds monotonic sequence state, ACK removes only confirmed records, and reconnect dedup covers the full bounded spool.
 - Bridge hello requires Host/client/installation identity and reports remote machine identity. The desktop also validates every event against the live daemon session's Host/client/project/Tab/epoch/installation/source binding before routing it to the existing Hook sink.
 - SSH PTY launch injects Agent bridge identity only when the effective Host/source/configured root has a locally validated `installed` Hook report whose Agent installation and remote machine identities still match. Agent installation alone must not create a background Hook bridge.
 - The daemon owns one bridge entry per Host/client connection fingerprint while every PTY remains independent. Address, SSH user/config alias, auth, identity/credential reference, jump/proxy settings, Agent identity/path, ConnectTimeout, or KeepAlive changes replace the old bridge without holding the global registry lock during process shutdown.
+- File requests reserve the existing primary bridge while it is connecting or connected and has no external request in flight. Git requests use a separate Host-scoped Git lane with its own client identity and serialize reads/writes so a refresh cannot observe a write in progress. A slow history request may use one isolated read-only bridge instead of blocking file/Git. Bridge startup, authentication, handshake, and capacity failures are delivered immediately to queued consumers; a dropped response channel is never reported as a response timeout.
+- Every Git request must carry the exact SSH project `remotePath` as `rootPath`; the Tauri command rejects a mismatch before opening the Agent bridge. The Agent then canonicalizes that root and confines every repo-relative path beneath it. An SSH Git context that is pending or unavailable is a hard error and must never select the local Git transport.
 - At most four bridge processes and two concurrent connect/reconnect handshakes run globally. A fifth active Host waits without opening SSH; releasing its last session cancels that wait. Probe/install one-shot processes do not consume a bridge permit.
 - Bridge stdout is consumed by a bounded 32-frame reader queue. Login banner plus preamble must complete within `min(ConnectTimeout + 10s, 60s)`; hello, ACK, ping, and ordinary responses have a 10-second bound. Timeout or disconnect kills/reaps the local SSH child before retry.
 - Bridge stderr is always drained but only the first 8 KiB is retained in memory for classification. Permission/passphrase/keyboard-interactive failures become `ssh_interactive_auth_required`; Host Key failures become `ssh_host_key_verification_required`; raw stderr is never persisted or logged.
@@ -119,12 +167,16 @@ Frames use a four-byte big-endian length followed by UTF-8 JSON. The maximum fra
 - Cancellation IDs are validated and held in a bounded 1024-entry registry. Unknown frame kinds return a versioned error without closing the bridge; invalid request IDs/kinds, oversized frames, contaminated preamble/frame streams, or malformed response identities close it.
 - Hook batches are accepted only when at most 128 records have strictly increasing sequences above the current cursor and the final sequence equals `latestSequence`; ACK must echo `accepted=true` and the exact sequence. Remote error codes are limited to 128 ASCII identifier bytes before logging.
 - Spool drain and ACK use bounded per-record streaming rather than loading the full 32 MiB file. A malformed or over-1-MiB record fails closed and preserves the original spool; ACK temporary files are removed on failure.
-- Remote history list/search/detail requests reuse the Host bridge and remain project-scoped. Agent cursors use `generation:offset`; full detail uses ordered 256-KiB chunks under the existing 1-MiB frame limit and a 64-MiB aggregate cap.
+- Remote history list/search/detail requests reuse the Host bridge and remain project-scoped. Agent cursors use `generation:offset`; full detail uses ordered 256-KiB chunks under the existing 1-MiB frame limit and a 64-MiB aggregate cap. Realtime detail may use a Hook-provided `remoteTranscriptRef` as an opaque Agent-side locator: the Agent must canonicalize it under the configured source root, require a regular `.jsonl` file, parse only that file, and reject a session-id or project-scope mismatch.
 - Desktop remote-history consumers validate installation/machine/user/source/config-root/source-instance identity on initial and continuation pages. Detail chunks additionally validate request identity, sequence, total, aggregate size, and one request deadline.
 - Resume preflight reopens the indexed artifact, validates the stable source identity, verifies the original JSONL is still readable, canonicalizes an enterable absolute POSIX cwd, checks the standard Claude/Codex executable, and returns structured resume args plus the canonical config-root environment override.
 - Agent uninstall returns `agent_managed_hooks_present` while any Agent Hook installation record remains. Hook uninstall does not delete the configured root, future history source identity, or unrelated Agent state.
 - If a custom config root was deleted externally, install/inspect still report it missing, but preview-uninstall/uninstall may recover exactly one matching canonical identity from the bounded Agent-owned record set and remove that stale record without recreating the directory. Retained-root cleanup also sends the previously validated `expectedCanonicalRoot`; if the configured path is a symlink that now resolves elsewhere, only an exact unique Agent record may route cleanup back to the old canonical root. Ambiguous, missing, invalid, or retargeted canonical records fail closed.
-- Remote Hook third-party notification jobs omit remote cwd, transcript refs, Host/project/session/Tab identifiers, and prompt text.
+- Remote Hook third-party notification jobs omit remote cwd, transcript refs, Host/project/session/Tab identifiers, and prompt text. Their optional display project is the daemon-validated sidebar project name captured at launch, never a remote cwd basename or remote event field.
+- SSH combination writes use explicit `ssh_db_*` commands. Each command opens the primary database with WAL, foreign keys, and a 15-second busy timeout, then keeps all dependent reads and writes inside one short `BEGIN IMMEDIATE` transaction on that connection.
+- `ssh_db_record_hook_report` owns existing-row selection, inspect-record preservation, retained-root conversion, replacement insertion, and canonical-root mirror updates. Its nested report identity fields must equal the validated top-level fields.
+- `ssh_db_import_config_hosts` accepts at most 10000 normalized host rows, reads existing aliases once inside the transaction, and inserts only the missing case-insensitive aliases.
+- Only `ssh_db_ensure_group_schema` uses a process-wide async mutex and atomic success fast path. The lock covers compatibility DDL/backfill only; ordinary host/group/preference/integration/history operations do not share an application mutex.
 
 ## 4. Validation & Error Matrix
 
@@ -145,6 +197,9 @@ Frames use a four-byte big-endian length followed by UTF-8 JSON. The maximum fra
 | OS/architecture is outside Linux x64/arm64 | status `unsupported`, code `unsupported_target` |
 | Supported target has no usable HOME/XDG layout | status `corrupt`, code `home_directory_unavailable` |
 | Manifest signature, schema, protocol, URL, target, size, or SHA-256 is invalid | reject before upload |
+| Agent manifest version differs from Agent Cargo package version or an Agent Tag differs from `ssh-agent-v<version>` | fail the release workflow |
+| Linux Agent requires a GLIBC symbol newer than 2.17 | fail the release workflow |
+| Independent Agent prerelease changes GitHub desktop latest Release | fail the release workflow |
 | Concurrent install/upgrade holds the lock | `agent_install_locked` |
 | Incoming semantic version is lower without explicit approval | `agent_downgrade_forbidden` |
 | Existing launcher is not owned by CLI-Manager | `agent_launcher_conflict` |
@@ -161,10 +216,15 @@ Frames use a four-byte big-endian length followed by UTF-8 JSON. The maximum fra
 | Hook batch sequence/latest/ACK mismatch | close bridge without advancing the cursor |
 | Remote continuation identity changes | `history_remote_identity_changed`; preserve the previous catalog rows |
 | Detail chunks are reordered, duplicated, oversized, or exceed the deadline | close/fail the request without caching partial detail |
+| Realtime transcript ref escapes the configured root, is not a regular `.jsonl`, or parses to another session/project | `history_artifact_*` / `history_session_identity_mismatch`; return no detail and do not fall back to discovery |
 | Resume source JSONL or cwd is missing | `remote_session_source_missing` / `remote_session_cwd_unavailable`; create no PTY |
 | Another daemon consumer owns the same source-instance/session | `remote_session_active_elsewhere` |
 | Remote file root is not absolute/canonical or a relative path escapes through `..`/symlink | stable `remote_file_root_*` / `remote_file_path_*` error; no local fallback |
-| Remote file is binary or exceeds 8 MiB | `remote_file_binary` / `remote_file_too_large` |
+| Remote file is binary | `remote_file_binary` |
+| Remote text/other file exceeds 1 MiB | `remote_file_too_large` |
+| Remote image exceeds 5 MiB | `image_file_too_large` |
+| Remote raster image exceeds 12,000,000 pixels | `image_dimensions_too_large` |
+| Remote path has a known video extension | `video_preview_unsupported` |
 | Spool record is malformed or over 1 MiB | stable `hook_spool_record_*` error; preserve original spool |
 | Custom Hook config root is missing | `hook_config_root_missing` |
 | Deleted custom root has one valid matching Agent record during uninstall | use its canonical identity for no-op config cleanup and remove the record |
@@ -173,8 +233,20 @@ Frames use a four-byte big-endian length followed by UTF-8 JSON. The maximum fra
 | Hook JSON/TOML is malformed or a managed event has an invalid shape | stable `hook_config_*_invalid` error; no write |
 | Preview fingerprint or symlink/root target changed | `hook_config_changed` / `hook_config_root_changed` |
 | Another live Hook config transaction owns the root lock | `hook_config_locked` |
+| SSH multi-row write cannot obtain/commit its SQLite transaction | stable `ssh_database_begin_failed` / `ssh_database_commit_failed`; no partial mutation |
+| Hook report nested identity differs from top-level command input | `ssh_hook_report_invalid`; no write |
+| Explicit integration belongs to another source | `ssh_hook_integration_identity_changed`; no write |
+| SSH Config import exceeds 10000 hosts | `ssh_config_import_too_many_hosts`; no write |
+| Local Hook metadata remains write-locked after the bounded wait | `ssh_agent_hook_metadata_busy`; preserve all integration rows |
 | CLI-Manager marker belongs to another installation or placement | status `conflict` / `hook_config_owner_conflict` |
 | Spool JSONL was appended but meta is stale | rebuild count/bytes/next sequence before append |
+| Git request root differs from `SshLaunchPlan.remotePath` | `remote_git_root_mismatch`; do not open the Agent bridge |
+| Git capability `gitFull` is absent | `ssh_agent_capability_missing:gitFull`; do not downgrade to read-only or local Git |
+| Untracked Git diff target is a symlink or directory | `remote_git_symlink_rejected`; do not follow or read the target |
+| Git status contains an ordinary untracked directory | enumerate its files with `--untracked-files=all`; never return a trailing-slash pseudo-file |
+| Git path list exceeds count or aggregate byte bound | `remote_git_paths_invalid` |
+| Root repository uses `repoPath == ""` | accept it only for repository resolution; file paths still require a non-empty relative path |
+| SSH Git context is pending, missing, or stale | `ssh_agent_context_unavailable`; do not invoke any local `git_*` command |
 
 ## 5. Good / Base / Bad Cases
 
@@ -188,8 +260,19 @@ Frames use a four-byte big-endian length followed by UTF-8 JSON. The maximum fra
 - Good: the desktop disconnects, events spool under the bound Host/client namespace, and reconnect replays each event at most once before ACK deletion.
 - Good: four Host bridges are connected, a fifth waits without starting SSH, and closing one Host releases a permit for the waiting Host.
 - Good: an SSH project file panel reuses its Host bridge, lists only canonical-root descendants, skips symlinks, and reads bounded UTF-8 text or supported image data URLs.
-- Good: an SSH terminal stats panel reuses one history consumer for incremental detail and catalog usage facts, while stale/offline failures preserve the last bounded snapshot without local path fallback.
+- Good: remote video, byte-size, and raster-pixel checks run before file reads and Base64 conversion; the desktop also prechecks directory metadata to avoid unnecessary RPCs.
+- Bad: relying only on WebView `<img>` sizing after a high-pixel image has already crossed the SSH bridge as Base64.
+- Good: an SSH terminal stats panel with a Hook session id and transcript ref reads only that bounded JSONL through the Agent, while stale/offline failures preserve the last bounded snapshot without local path fallback or full history discovery.
+- Good: deleting a Host either clears project/integration references and deletes the Host together, or rolls the entire operation back.
+- Good: two different SSH Hosts save preferences concurrently; SQLite coordinates only their short write sections and no application-wide CRUD mutex serializes them.
+- Base: two imports contain the same config alias; the later transaction observes the normalized existing alias and reports it as skipped.
+- Bad: issue `BEGIN IMMEDIATE`, updates, and `COMMIT` as separate `tauri-plugin-sql` calls and assume the pool preserves connection affinity.
 - Bad: pass a remote absolute path to local `file_*`/Git commands, expose create/save/delete/move/external opener actions, or traverse more than the Agent file quotas.
+- Good: while an SSH project is still building its Agent context, Git actions fail closed; once ready, `rootPath` equals the launch plan and only the dedicated Git lane is used.
+- Good: Agent repository validation allows the empty `repoPath` that identifies the configured root repository, while `validate_file_path` continues to reject an empty file path.
+- Good: an untracked `test/c.txt` is returned as that exact file path; a nested repository remains in repository enumeration and does not become a blank file row in its parent repository.
+- Bad: let a missing SSH context make `createGitTransport` silently choose the local transport, or allow a symlinked untracked file to be read by `fs::read`.
+- Bad: validate an allowed-empty `repoPath` with the same non-empty path-segment check as file paths; the root repository then fails every Git read with `remote_git_path_invalid`.
 - Good: a replaced bridge briefly receives `bridge_already_active`, backs off, then takes ownership after the old Agent process removes its socket.
 - Base: a missing or malformed discovery record is reconstructed only after an explicit install; no page-open or probe action changes remote files.
 - Base: Claude/Codex launched from an ordinary SSH shell has no binding variables; the installed Hook exits successfully without writing spool data.
@@ -201,6 +284,11 @@ Frames use a four-byte big-endian length followed by UTF-8 JSON. The maximum fra
 
 ## 6. Tests Required
 
+- Desktop SSH persistence: multi-row/multi-table writes must run on one Rust-owned SQLite connection with a short `BEGIN IMMEDIATE` transaction and busy timeout. Do not send transaction control through `tauri-plugin-sql` pooled IPC calls.
+- SSH group schema compatibility may use a process-wide single-flight lock only around the idempotent DDL/backfill step. Ordinary host, preference, integration, and history operations must not share an application-level global mutex.
+- Batch SSH Config import reads existing aliases once inside the write transaction, then inserts only normalized missing aliases; concurrent imports must not create partial batches.
+- Assert rollback for host deletion, preference pairs, Hook retained-root replacement, and group child/host migration when any statement fails.
+
 - Run `npx tsc --noEmit`.
 - Run `cargo check --manifest-path src-tauri/Cargo.toml` with no warnings.
 - Run `cargo test --manifest-path src-tauri/Cargo.toml --lib`.
@@ -209,13 +297,16 @@ Frames use a four-byte big-endian length followed by UTF-8 JSON. The maximum fra
 - Assert explicit path validation and safe HOME expansion.
 - Assert bounded banner/report parsing, invalid UTF-8/contamination, protocol mismatch, identity mismatch, unsupported target, clean EOF, partial frame length, oversized frame, and mandatory bridge protocol.
 - Assert protocol minor 1 capability negotiation, bounded reader/response timeouts, global bridge/connect permits, retry jitter/reset classification, `bridge_already_active` takeover, heartbeat echo, cancellation bounds, and last-session shutdown.
-- Assert protocol minor 3 history capability negotiation, generation cursors, continuation identity, chunk ordering/size/deadline, detail LRU eviction, and consumer release.
+- Assert protocol minor 3 history capability negotiation, generation cursors, continuation identity, chunk ordering/size/deadline, detail LRU eviction, consumer release, and direct transcript-ref root/type/session/project confinement.
 - Assert protocol minor 4 resume capability and protocol minor 5 remote-file capability, structured Claude/Codex args, source/cwd validation, ownership claim/release, and implicit SSH Config username handling.
-- Assert remote file root/path confinement, symlink escape rejection, binary/oversized refusal, directory/search/visited limits, image data URLs, and UI/store read-only routing.
+- Assert remote file root/path confinement, symlink escape rejection, binary refusal, 1 MiB text and 5 MiB image limits, the exact 12,000,000-pixel boundary, video refusal, directory/search/visited limits, image data URLs, and UI/store read-only routing.
+- Assert protocol minor 7 and `gitFull`, dedicated Git-lane serialization and identity isolation, exact launch-root binding, strict per-RPC payloads, full Git mutation/network operations, write timeout/no-retry result-unknown handling, path/branch/patch validation, untracked symlink rejection, and SSH-pending fail-closed transport selection.
+- Assert `validate_relative("", true)` succeeds for the root repository, while `validate_relative("", false)` and empty file paths remain rejected.
+- Assert ordinary untracked directories expand to concrete files and nested repositories are excluded from the parent repository's change list.
 - Assert manifest tampering, duplicate/unknown targets, HTTP opt-in, query/fragment rejection, target selection, size/SHA-256 mismatch, and bounded downloads.
 - Assert install path quoting, strict operation markers/metadata, semantic version actions, lock conflicts, default/custom roots, corrupt/missing discovery recovery, promote rollback, distinct previous versions, and transactional uninstall.
 - Assert Claude/Codex exact-owner merge, duplicate normalization, unknown-event preservation, invalid JSON/TOML refusal, user-owned Codex feature/comment preservation, symlink target change refusal, fingerprint conflict, journal rollback, and Agent uninstall blocking.
-- Assert missing binding no-op, event allowlists, 1 MiB stdin bound, message redaction, Host/client/installation namespace isolation, stale lock recovery, monotonic meta rebuild, TTL/count/byte gap, streaming read/ACK, malformed-record preservation, monotonic batch/ACK validation, full-window event/gap dedup, and remote notification cwd redaction.
+- Assert missing binding no-op, event allowlists, 1 MiB stdin bound, message redaction, Host/client/installation namespace isolation, stale lock recovery, monotonic meta rebuild, TTL/count/byte gap, streaming read/ACK, malformed-record preservation, monotonic batch/ACK validation, full-window event/gap dedup, and Claude/Codex remote notification cwd redaction plus trusted project-name propagation.
 - Run the POSIX installer smoke test for HTTPS dry-run, default HTTP rejection, explicit HTTP, custom install root, downgrade forwarding, and temporary-directory cleanup.
 - Compile the Agent for Linux `x86_64-unknown-linux-gnu` and `aarch64-unknown-linux-gnu` in addition to host tests.
 - Manually verify the CLI Integration page opens without SSH traffic and only Probe Agent starts a one-shot connection.
@@ -236,3 +327,32 @@ transport.build_one_shot_launch(agent_probe_script, SshOneShotOptions::default()
 ```
 
 The shared transport owns authentication and routing; the caller owns whether the process is an interactive PTY or a bounded one-shot operation.
+
+### Wrong: treat an SSH Git request as local when the Agent context is not ready
+
+```ts
+return createGitTransport(projectRoot, remoteContext); // null silently means local
+```
+
+### Correct: make the remote requirement explicit and fail closed
+
+```ts
+return createGitTransport(projectRoot, remoteContext, remoteRequired);
+// remoteRequired && !remoteContext -> ssh_agent_context_unavailable
+```
+
+### Wrong: split a database transaction across pooled IPC calls
+
+```typescript
+await db.execute("BEGIN IMMEDIATE");
+await db.execute("UPDATE ssh_hosts ...");
+await db.execute("COMMIT");
+```
+
+### Correct: invoke one domain command
+
+```typescript
+await invoke("ssh_db_delete_host", { id });
+```
+
+The Rust command owns one connection and one short transaction. Schema single-flight is separate and never becomes a CRUD lock.

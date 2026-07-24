@@ -1351,3 +1351,201 @@ Completed S06-S10 with remote history/cache and resume, read-only file and Git p
 ### Next Steps
 
 - None - task complete
+
+
+## Session 39: 统一 CLI-Manager 版本号为 1.3.1
+
+**Date**: 2026-07-22
+**Task**: 统一 CLI-Manager 版本号为 1.3.1
+**Branch**: `master`
+
+### Summary
+
+按版本更新指南统一 npm、Cargo 与 Tauri 的根版本元数据为 1.3.1，并通过 TypeScript、Cargo locked 检查及 GitNexus 变更检测。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `13825454` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 40: 修复 PR #165 跨平台 Tauri Feature 配置
+
+**Date**: 2026-07-22
+**Task**: 修复 PR #165 跨平台 Tauri Feature 配置
+**Branch**: `pr-165-targeted-tauri-feature`
+
+### Summary
+
+将 macos-private-api 限定到 macOS Cargo target，恢复 Windows proxy E2E 与直接 Cargo 检查；同步发布契约、CHANGELOG 和验证记录。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `0c723c3c` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 41: 修复 Worktree 创建并发与错误诊断
+
+**Date**: 2026-07-23
+**Task**: 修复 Worktree 创建并发与错误诊断
+**Branch**: `master`
+
+### Summary
+
+修复同名 Worktree 创建并发撞路径、Git checkout 错误截断和未处理 Promise；补齐中英文提示、Worktree 合约及 V1.3.1 变更记录。用户已确认修复成功。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `a140aaef` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 42: 修复 WebDAV 远程项目恢复字段
+
+**Date**: 2026-07-23
+**Task**: 修复 WebDAV 远程项目恢复字段
+**Branch**: `master`
+
+### Summary
+
+WebDAV 工作区快照现同步可移植 SSH 主机分组、主机档案及项目绑定；恢复保持远程路径和主机绑定，严格排除凭据与本机路径，并补齐事务回归测试和同步契约。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `4be60cce` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 43: 完成 SSH 远程 Git 全功能面板
+
+**Date**: 2026-07-23
+**Task**: 完成 SSH 远程 Git 全功能面板
+**Branch**: `feat/ssh-agent`
+
+### Summary
+
+统一 SSH 与本地 Git 面板，发布 Agent 0.1.3，并修复根仓库路径及未跟踪目录采集问题。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `c6c7626e` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
+
+
+## Session 44: Grok Hook 与实时统计修复
+
+**Date**: 2026-07-24
+**Task**: Grok Hook 与实时统计修复
+**Branch**: `master`
+
+### Summary
+
+完成 Grok Hook 安装、审批通知映射、历史恢复与当前会话实时统计修复；用户验收通过，关联 #152 与 #140，并 rebase 到最新 origin/master。
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `ec4352ee` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete

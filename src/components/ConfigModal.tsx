@@ -31,6 +31,10 @@ import { toast } from "sonner";
 import { logError, logInfo, logWarn } from "../lib/logger";
 import { pickByLanguage, useI18n, type TranslationKey } from "../lib/i18n";
 import { ArrowUp, ChevronRight, FolderOpen } from "lucide-react";
+import {
+  getCliArgsHistorySuggestions,
+  type CliArgsHistoryEntry,
+} from "../lib/cliArgsHistory";
 
 interface Props {
   project?: Project;
@@ -101,6 +105,8 @@ export function ConfigModal({ project, cloneFrom, defaultGroupId, onManageSshHos
   const projectWorktreeConfigEnabled = useSettingsStore((s) => s.projectWorktreeConfigEnabled);
   const terminalShellProfiles = useSettingsStore((s) => s.terminalShellProfiles);
   const defaultShell = useSettingsStore((s) => s.defaultShell);
+  const cliArgsHistory = useSettingsStore((s) => s.cliArgsHistory);
+  const recordCliArgsHistory = useSettingsStore((s) => s.recordCliArgsHistory);
   const isEdit = !!project;
   const isClone = !!cloneFrom;
   const logInstanceIdRef = useRef(crypto.randomUUID().slice(0, 8));
@@ -164,6 +170,10 @@ export function ConfigModal({ project, cloneFrom, defaultGroupId, onManageSshHos
   const [wslPickerEntries, setWslPickerEntries] = useState<ProjectFileEntry[]>([]);
   const [wslPickerLoading, setWslPickerLoading] = useState(false);
   const [wslPickerError, setWslPickerError] = useState("");
+  const cliArgsHistorySuggestions = useMemo(
+    () => getCliArgsHistorySuggestions(cliArgsHistory, cliTool, undefined, cliArgs),
+    [cliArgsHistory, cliTool, cliArgs]
+  );
 
   useEffect(() => {
     void fetchSshHosts();
@@ -471,6 +481,13 @@ export function ConfigModal({ project, cloneFrom, defaultGroupId, onManageSshHos
         });
         toast.success(t("configModal.toast.created"));
       }
+      if (!isClone && trimmedCliArgs) {
+        try {
+          await recordCliArgsHistory(trimmedCliTool, trimmedCliArgs);
+        } catch (historyError) {
+          logWarn("Failed to persist CLI arguments history", historyError);
+        }
+      }
       onClose();
     } catch (err) {
       const description = String(err);
@@ -700,12 +717,22 @@ export function ConfigModal({ project, cloneFrom, defaultGroupId, onManageSshHos
               </div>
 
               {cliTool.trim() !== "" && (
-                <Field
-                  label={t("configModal.cliArgs")}
-                  value={cliArgs}
-                  onChange={setCliArgs}
-                  placeholder="--permission-mode bypassPermissions"
-                />
+                !isClone ? (
+                  <CliArgsHistoryField
+                    label={t("configModal.cliArgs")}
+                    value={cliArgs}
+                    onChange={setCliArgs}
+                    suggestions={cliArgsHistorySuggestions}
+                    placeholder="--permission-mode bypassPermissions"
+                  />
+                ) : (
+                  <Field
+                    label={t("configModal.cliArgs")}
+                    value={cliArgs}
+                    onChange={setCliArgs}
+                    placeholder="--permission-mode bypassPermissions"
+                  />
+                )
               )}
 
               {projectType === "ssh" && resolveSshToolSource(cliTool) && (
@@ -1326,6 +1353,144 @@ function GroupSelector({
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+function CliArgsHistoryField({
+  label,
+  value,
+  onChange,
+  suggestions,
+  placeholder,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  suggestions: CliArgsHistoryEntry[];
+  placeholder?: string;
+}) {
+  const { t } = useI18n();
+  const inputId = useId();
+  const listboxId = useId();
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const [open, setOpen] = useState(false);
+  const [activeIndex, setActiveIndex] = useState(0);
+
+  useEffect(() => {
+    setActiveIndex(0);
+    if (suggestions.length === 0) setOpen(false);
+  }, [suggestions]);
+
+  const selectSuggestion = (suggestion: CliArgsHistoryEntry) => {
+    onChange(suggestion.cliArgs);
+    setOpen(false);
+    inputRef.current?.focus();
+  };
+
+  const activeOptionId = open && suggestions[activeIndex]
+    ? `${listboxId}-option-${activeIndex}`
+    : undefined;
+
+  return (
+    <div className="relative" onBlur={(event) => {
+      const nextFocus = event.relatedTarget as Node | null;
+      if (!nextFocus || !event.currentTarget.contains(nextFocus)) setOpen(false);
+    }}>
+      <label htmlFor={inputId} className="ui-config-form-label">{label}</label>
+      <div className="relative">
+        <Input
+          id={inputId}
+          ref={inputRef}
+          type="text"
+          value={value}
+          onChange={(event) => {
+            onChange(event.target.value);
+            if (suggestions.length > 0) setOpen(true);
+          }}
+          onClick={() => suggestions.length > 0 && setOpen(true)}
+          onKeyDown={(event) => {
+            if (event.key === "ArrowDown" && suggestions.length > 0) {
+              event.preventDefault();
+              if (!open) {
+                setOpen(true);
+                setActiveIndex(0);
+              } else {
+                setActiveIndex((current) => (current + 1) % suggestions.length);
+              }
+            } else if (event.key === "ArrowUp" && suggestions.length > 0) {
+              event.preventDefault();
+              if (!open) {
+                setOpen(true);
+                setActiveIndex(suggestions.length - 1);
+              } else {
+                setActiveIndex((current) => (current - 1 + suggestions.length) % suggestions.length);
+              }
+            } else if (event.key === "Enter" && open && suggestions[activeIndex]) {
+              event.preventDefault();
+              selectSuggestion(suggestions[activeIndex]);
+            } else if (event.key === "Escape" && open) {
+              event.preventDefault();
+              event.stopPropagation();
+              setOpen(false);
+            } else if (event.key === "Tab") {
+              setOpen(false);
+            }
+          }}
+          placeholder={placeholder}
+          role="combobox"
+          aria-autocomplete="list"
+          aria-haspopup="listbox"
+          aria-expanded={open}
+          aria-controls={suggestions.length > 0 ? listboxId : undefined}
+          aria-activedescendant={activeOptionId}
+          className={`text-sm ${suggestions.length > 0 ? "pr-8" : ""}`}
+        />
+        {suggestions.length > 0 && (
+          <button
+            type="button"
+            tabIndex={-1}
+            aria-hidden="true"
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => {
+              setOpen((current) => !current);
+              inputRef.current?.focus();
+            }}
+            className="ui-focus-ring absolute right-1 top-1/2 flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-md text-text-muted outline-none transition-colors hover:bg-surface-container-highest hover:text-text-primary"
+          >
+            <ChevronDown
+              size={12}
+              strokeWidth={1.8}
+              className={`transition-transform ${open ? "rotate-180" : ""}`}
+            />
+          </button>
+        )}
+        {open && suggestions.length > 0 && (
+          <div
+            id={listboxId}
+            role="listbox"
+            aria-label={t("configModal.cliArgsHistory")}
+            className="ui-select-popover absolute left-0 top-full z-[60] mt-1 max-h-48 w-full overflow-y-auto rounded-xl border border-border bg-surface-container-high py-1 text-xs shadow-lg"
+          >
+            {suggestions.map((suggestion, index) => (
+              <button
+                id={`${listboxId}-option-${index}`}
+                key={`${suggestion.cliTool}\u0000${suggestion.cliArgs}`}
+                type="button"
+                role="option"
+                aria-selected={value.trim() === suggestion.cliArgs}
+                data-active={activeIndex === index ? "true" : undefined}
+                onMouseDown={(event) => event.preventDefault()}
+                onMouseEnter={() => setActiveIndex(index)}
+                onClick={() => selectSuggestion(suggestion)}
+                className="flex w-[calc(100%-8px)] cursor-pointer items-center gap-3 outline-none hover:bg-surface-container-highest hover:text-text-primary data-[active=true]:bg-surface-container-highest data-[active=true]:text-text-primary"
+              >
+                <span className="min-w-0 flex-1 truncate text-left font-mono">{suggestion.cliArgs}</span>
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
