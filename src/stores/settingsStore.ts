@@ -369,7 +369,6 @@ export interface Settings {
   codexHookConfigDir: string | null;
   piHookConfigDir: string | null;
   grokHookConfigDir: string | null;
-  ccSwitchDbPath: string | null;
   /** Git 变更树分组模式：directory（按目录树） / module（按顶层目录模块） */
   gitGroupBy: "directory" | "module";
   /** Git Diff 显示模式：左右分栏或统一单栏。 */
@@ -539,7 +538,6 @@ const DEFAULTS: Settings = {
   codexHookConfigDir: null,
   piHookConfigDir: null,
   grokHookConfigDir: null,
-  ccSwitchDbPath: null,
   gitGroupBy: "directory",
   gitDiffViewMode: "split",
   gitDiffOpenMode: "dialog",

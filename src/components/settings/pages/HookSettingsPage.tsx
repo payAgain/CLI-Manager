@@ -531,7 +531,6 @@ export function HookSettingsPage() {
   const taskbarAttentionMode = useSettingsStore((s) => s.taskbarAttentionMode);
   const taskbarAttentionFlashCount = useSettingsStore((s) => s.taskbarAttentionFlashCount);
   const hookSettingsSectionsExpanded = useSettingsStore((s) => s.hookSettingsSectionsExpanded);
-  const ccSwitchDbPath = useSettingsStore((s) => s.ccSwitchDbPath);
   const claudeHookAutoRepairKnownInstalled = useSettingsStore((s) => s.claudeHookAutoRepairKnownInstalled);
   const claudeHookAutoRepairNoticeShown = useSettingsStore((s) => s.claudeHookAutoRepairNoticeShown);
   const updateSetting = useSettingsStore((s) => s.update);
@@ -591,7 +590,6 @@ export function HookSettingsPage() {
         codexSelectedDir: codexDir,
         piSelectedDir: piDir,
         grokSelectedDir: grokDir,
-        ccSwitchDbPath: ccSwitchDbPath ?? undefined,
         autoRepair: claudeHookBridgeEnabled && claudeHookAutoRepairKnownInstalled,
       });
       setStatus(nextStatus);
@@ -695,7 +693,6 @@ export function HookSettingsPage() {
         codexSelectedDir: codexSelectedDirArg,
         piSelectedDir: piSelectedDirArg,
         grokSelectedDir: grokSelectedDirArg,
-        ccSwitchDbPath: ccSwitchDbPath ?? undefined,
       });
       setStatus(nextStatus);
       if (nextStatus.claude.configDir) setSelectedDir(nextStatus.claude.configDir);
@@ -719,7 +716,6 @@ export function HookSettingsPage() {
         codexSelectedDir: codexSelectedDirArg,
         piSelectedDir: piSelectedDirArg,
         grokSelectedDir: grokSelectedDirArg,
-        ccSwitchDbPath: ccSwitchDbPath ?? undefined,
       });
       setStatus(nextStatus);
       if (nextStatus.claude.configDir) setSelectedDir(nextStatus.claude.configDir);
@@ -741,7 +737,6 @@ export function HookSettingsPage() {
         codexSelectedDir: codexSelectedDirArg,
         piSelectedDir: piSelectedDirArg,
         grokSelectedDir: grokSelectedDirArg,
-        ccSwitchDbPath: ccSwitchDbPath ?? undefined,
       });
       setStatus(nextStatus);
       if (nextStatus.codex.configDir) setCodexSelectedDir(nextStatus.codex.configDir);
@@ -764,7 +759,6 @@ export function HookSettingsPage() {
         codexSelectedDir: codexSelectedDirArg,
         piSelectedDir: piSelectedDirArg,
         grokSelectedDir: grokSelectedDirArg,
-        ccSwitchDbPath: ccSwitchDbPath ?? undefined,
       });
       setStatus(nextStatus);
       if (nextStatus.codex.configDir) setCodexSelectedDir(nextStatus.codex.configDir);
@@ -799,7 +793,6 @@ export function HookSettingsPage() {
         codexSelectedDir: codexSelectedDirArg,
         piSelectedDir: piSelectedDirArg,
         grokSelectedDir: grokSelectedDirArg,
-        ccSwitchDbPath: ccSwitchDbPath ?? undefined,
       });
       setStatus(nextStatus);
       if (nextStatus.pi.configDir) setPiSelectedDir(nextStatus.pi.configDir);
@@ -821,7 +814,6 @@ export function HookSettingsPage() {
         codexSelectedDir: codexSelectedDirArg,
         piSelectedDir: piSelectedDirArg,
         grokSelectedDir: grokSelectedDirArg,
-        ccSwitchDbPath: ccSwitchDbPath ?? undefined,
       });
       setStatus(nextStatus);
       if (nextStatus.pi.configDir) setPiSelectedDir(nextStatus.pi.configDir);
@@ -862,7 +854,6 @@ export function HookSettingsPage() {
         codexSelectedDir: codexSelectedDirArg,
         piSelectedDir: piSelectedDirArg,
         grokSelectedDir: grokSelectedDirArg,
-        ccSwitchDbPath: ccSwitchDbPath ?? undefined,
       });
       setStatus(nextStatus);
       if (nextStatus.grok.configDir) setGrokSelectedDir(nextStatus.grok.configDir);
@@ -896,7 +887,6 @@ export function HookSettingsPage() {
         codexSelectedDir: codexSelectedDirArg,
         piSelectedDir: piSelectedDirArg,
         grokSelectedDir: grokSelectedDirArg,
-        ccSwitchDbPath: ccSwitchDbPath ?? undefined,
       });
       setStatus(nextStatus);
       if (nextStatus.grok.configDir) setGrokSelectedDir(nextStatus.grok.configDir);
@@ -948,7 +938,6 @@ export function HookSettingsPage() {
         codexSelectedDir: codexSelectedDirArg,
         piSelectedDir: piSelectedDirArg,
         grokSelectedDir: grokSelectedDirArg,
-        ccSwitchDbPath: ccSwitchDbPath ?? undefined,
         module,
       });
       syncStatusAfterMutation(nextStatus);
