@@ -24,11 +24,6 @@ import {
   type ThirdPartyHookTarget,
 } from "../lib/thirdPartyNotifications";
 import {
-  DESKTOP_PET_SIZE_DEFAULT_PERCENT,
-  normalizeDesktopPetSizePercent,
-  type DesktopPetSizePercent,
-} from "../lib/desktopPetSize";
-import {
   normalizeCliArgsHistory,
   recordCliArgsUsage,
   type CliArgsHistoryEntry,
@@ -39,13 +34,6 @@ import {
   sanitizeTerminalPaneMarkerSettings,
   type TerminalPaneMarkerSettings,
 } from "../lib/terminalPaneMarker";
-
-export {
-  DESKTOP_PET_SIZE_DEFAULT_PERCENT,
-  DESKTOP_PET_SIZE_MAX_PERCENT,
-  DESKTOP_PET_SIZE_MIN_PERCENT,
-  DESKTOP_PET_SIZE_STEP_PERCENT,
-} from "../lib/desktopPetSize";
 
 export type ThemeMode = "dark" | "light" | "system";
 export type LightThemePalette =
@@ -82,7 +70,6 @@ export const LINUX_GRAPHICS_MODES = ["auto", "system", "disable-dmabuf", "disabl
 export type LinuxGraphicsMode = (typeof LINUX_GRAPHICS_MODES)[number];
 type LastSettingsTab =
   | "general"
-  | "desktop-pet"
   | "developer"
   | "sidebar"
   | "terminal-theme"
@@ -187,34 +174,6 @@ export type UnsplitBehavior = "merge" | "close";
 export type FileExplorerIgnoredPaths = Record<string, string[]>;
 export type LanguagePreference = "auto" | "zh-CN" | "zh-TW" | "en-US";
 export type BatchLaunchPaneDirection = "vertical" | "horizontal";
-export type DesktopPetSize = DesktopPetSizePercent;
-export const DESKTOP_PET_WORK_BOUNCE_MIN_PX = 0;
-export const DESKTOP_PET_WORK_BOUNCE_MAX_PX = 5;
-
-export interface DesktopPetPosition {
-  x: number;
-  y: number;
-}
-
-export interface DesktopPetSettings {
-  enabled: boolean;
-  petId: string;
-  alwaysOnTop: boolean;
-  agentSessionsOnly: boolean;
-  size: DesktopPetSize;
-  showActionMenu: boolean;
-  openOnHover: boolean;
-  workingBounceEnabled: boolean;
-  workingBounceDistancePx: number;
-  showStatus: boolean;
-  showSessionName: boolean;
-  autoHideFullscreen: boolean;
-  lockPosition: boolean;
-  position: DesktopPetPosition | null;
-}
-
-export const BUILTIN_DESKTOP_PET_ID = "builtin.cli-cat";
-
 export type HookEventType =
   | "SessionStart"
   | "UserPromptSubmit"
@@ -464,7 +423,6 @@ export interface Settings {
   batchLaunchPaneDirection: BatchLaunchPaneDirection;
   projectScopedTerminalViewEnabled: boolean;
   workspanEnabled: boolean;
-  desktopPet: DesktopPetSettings;
 }
 
 interface SettingsStore extends Settings {
@@ -644,22 +602,6 @@ const DEFAULTS: Settings = {
   batchLaunchPaneDirection: "horizontal",
   projectScopedTerminalViewEnabled: false,
   workspanEnabled: true,
-  desktopPet: {
-    enabled: false,
-    petId: BUILTIN_DESKTOP_PET_ID,
-    alwaysOnTop: true,
-    agentSessionsOnly: true,
-    size: DESKTOP_PET_SIZE_DEFAULT_PERCENT,
-    showActionMenu: true,
-    openOnHover: true,
-    workingBounceEnabled: false,
-    workingBounceDistancePx: 5,
-    showStatus: true,
-    showSessionName: false,
-    autoHideFullscreen: true,
-    lockPosition: false,
-    position: null,
-  },
 };
 
 const LEGACY_LIGHT_PALETTE_MAP: Partial<Record<string, LightThemePalette>> = {
@@ -1075,66 +1017,6 @@ export function migrateTerminalBackground(value: unknown): TerminalBackgroundSet
   return { enabled, imagePath, imageSizeBytes, opacity, fit, position, blur, overlayDarken };
 }
 
-export function migrateDesktopPetSettings(value: unknown): DesktopPetSettings {
-  const defaults = DEFAULTS.desktopPet;
-  if (!value || typeof value !== "object") {
-    return { ...defaults, position: null };
-  }
-  const raw = value as Record<string, unknown>;
-  const rawPosition = raw.position;
-  const position = rawPosition && typeof rawPosition === "object"
-    ? (() => {
-        const candidate = rawPosition as Record<string, unknown>;
-        if (
-          typeof candidate.x !== "number" ||
-          !Number.isFinite(candidate.x) ||
-          typeof candidate.y !== "number" ||
-          !Number.isFinite(candidate.y)
-        ) {
-          return null;
-        }
-        return {
-          x: Math.round(clampNumber(candidate.x, -100_000, 100_000, 0)),
-          y: Math.round(clampNumber(candidate.y, -100_000, 100_000, 0)),
-        };
-      })()
-    : null;
-  const petId = typeof raw.petId === "string" && raw.petId.trim() && raw.petId.length <= 80
-    ? raw.petId.trim()
-    : defaults.petId;
-  const size = normalizeDesktopPetSizePercent(raw.size, defaults.size);
-  const workingBounceDistancePx = Math.round(clampNumber(
-    raw.workingBounceDistancePx,
-    DESKTOP_PET_WORK_BOUNCE_MIN_PX,
-    DESKTOP_PET_WORK_BOUNCE_MAX_PX,
-    defaults.workingBounceDistancePx
-  ));
-  return {
-    enabled: typeof raw.enabled === "boolean" ? raw.enabled : defaults.enabled,
-    petId,
-    alwaysOnTop: typeof raw.alwaysOnTop === "boolean" ? raw.alwaysOnTop : defaults.alwaysOnTop,
-    agentSessionsOnly:
-      typeof raw.agentSessionsOnly === "boolean"
-        ? raw.agentSessionsOnly
-        : defaults.agentSessionsOnly,
-    size,
-    showActionMenu:
-      typeof raw.showActionMenu === "boolean" ? raw.showActionMenu : defaults.showActionMenu,
-    openOnHover: typeof raw.openOnHover === "boolean" ? raw.openOnHover : defaults.openOnHover,
-    workingBounceEnabled:
-      typeof raw.workingBounceEnabled === "boolean"
-        ? raw.workingBounceEnabled
-        : defaults.workingBounceEnabled,
-    workingBounceDistancePx,
-    showStatus: typeof raw.showStatus === "boolean" ? raw.showStatus : defaults.showStatus,
-    showSessionName: typeof raw.showSessionName === "boolean" ? raw.showSessionName : defaults.showSessionName,
-    autoHideFullscreen:
-      typeof raw.autoHideFullscreen === "boolean" ? raw.autoHideFullscreen : defaults.autoHideFullscreen,
-    lockPosition: typeof raw.lockPosition === "boolean" ? raw.lockPosition : defaults.lockPosition,
-    position,
-  };
-}
-
 let store: Store | null = null;
 const TERMINAL_INPUT_SUGGESTION_USAGE_SAVE_DELAY_MS = 800;
 let terminalInputSuggestionUsageSaveTimer: number | null = null;
@@ -1313,7 +1195,6 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
     entries.systemResourceCardVisibility = migrateSystemResourceCardVisibility(entries.systemResourceCardVisibility);
     entries.systemResourceCardOrder = migrateSystemResourceCardOrder(entries.systemResourceCardOrder);
     entries.terminalBackground = migrateTerminalBackground(entries.terminalBackground);
-    entries.desktopPet = migrateDesktopPetSettings(entries.desktopPet);
     entries.terminalShellProfiles = migrateTerminalShellProfiles(entries.terminalShellProfiles);
     entries.terminalSettingsSectionsExpanded = migrateTerminalSettingsSectionsExpanded(
       entries.terminalSettingsSectionsExpanded

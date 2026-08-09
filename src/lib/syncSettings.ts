@@ -118,7 +118,6 @@ export const SETTING_BACKUP_POLICY = {
   batchLaunchPaneDirection: "preferences",
   projectScopedTerminalViewEnabled: "preferences",
   workspanEnabled: "excluded",
-  desktopPet: "excluded",
 } as const satisfies Record<keyof Settings, BackupSettingDomain>;
 
 function keysForDomain<D extends BackupSettingDomain>(domain: D) {
