@@ -45,7 +45,7 @@ import { useTerminalSearch } from "../hooks/useTerminalSearch";
 import { useTerminalContextMenu } from "../hooks/useTerminalContextMenu";
 import { useTerminalOsc } from "../hooks/useTerminalOsc";
 import { useTerminalDisplay } from "../hooks/useTerminalDisplay";
-import { useTerminalInput, type TerminalSuggestionGhostState } from "../hooks/useTerminalInput";
+import { useTerminalInput } from "../hooks/useTerminalInput";
 import { getTerminalCellWidth } from "../lib/terminalCellWidth";
 import { copyTextToClipboard } from "../lib/systemClipboard";
 import { hasCodexTuiViewport } from "../lib/terminalTuiDisplay";
@@ -435,8 +435,6 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
     : TERMINAL_SCROLLBACK_ROWS_DEFAULT;
   const lowMemoryMode = useSettingsStore((s) => s.lowMemoryMode);
   const disableHardwareAcceleration = useSettingsStore((s) => s.disableHardwareAcceleration);
-  const terminalInputSuggestionsEnabled = useSettingsStore((s) => s.terminalInputSuggestionsEnabled);
-  const terminalInputSuggestionProvider = useSettingsStore((s) => s.terminalInputSuggestionProvider);
   const hideCodexRuntimeCursor = useSettingsStore((s) => s.hideCodexRuntimeCursor);
   const hideCodexRuntimeCursorRef = useRef(hideCodexRuntimeCursor);
   hideCodexRuntimeCursorRef.current = hideCodexRuntimeCursor;
@@ -474,7 +472,6 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
 
   const [assetUrl, setAssetUrl] = useState<string | null>(null);
   const [visibilityRestorePending, setVisibilityRestorePending] = useState(false);
-  const [suggestionGhost, setSuggestionGhost] = useState<TerminalSuggestionGhostState | null>(null);
   const [linuxGraphicsConstrained, setLinuxGraphicsConstrained] = useState(false);
   const [linuxGraphicsDisableWebgl, setLinuxGraphicsDisableWebgl] = useState(false);
   const [markdownPreviewOpen, setMarkdownPreviewOpen] = useState(false);
@@ -578,8 +575,6 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
   const {
     isComposingRef,
     attachInputForwarding,
-    clearSuggestion: clearSuggestionGhost,
-    acceptSuggestion,
     attachPasteAndDrop,
     pasteText,
     readClipboardPasteText,
@@ -587,18 +582,14 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
     attachIme,
   } = useTerminalInput({
     sessionId,
-    wrapperRef,
     containerRef,
     isActiveRef,
     isVisibleRef,
     fontSize,
-    canShowSuggestionAtCurrentInputEnd,
     getTerminalRenderedCellSize,
-    setSuggestionGhost,
     getOsPlatformForPathQuoting,
   });
 
-  // Clear suggestions when search opens (must come after hook call to read searchOpen)
   useEffect(() => {
     if (terminalInputSuggestionsEnabled && !searchOpen) return;
     clearSuggestionGhost();
@@ -1498,44 +1489,12 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
       }
       if (
         e.type === "keydown" &&
-        e.key === "Tab" &&
-        !e.ctrlKey &&
-        !e.shiftKey &&
-        !e.altKey &&
-        !e.metaKey
-      ) {
-        if (acceptSuggestion(suggestionGhost?.suffix)) {
-          e.preventDefault();
-          return false;
-        }
-        return true;
-      }
-      if (
-        e.type === "keydown" &&
-        e.key === "ArrowRight" &&
-        !e.ctrlKey &&
-        !e.shiftKey &&
-        !e.altKey &&
-        !e.metaKey
-      ) {
-        if (acceptSuggestion()) {
-          e.preventDefault();
-          return false;
-        }
-        return true;
-      }
-      if (
-        e.type === "keydown" &&
         e.ctrlKey &&
         !e.shiftKey &&
         !e.altKey &&
         !e.metaKey &&
         (e.code === "Space" || e.key === " ")
       ) {
-        if (acceptSuggestion()) {
-          e.preventDefault();
-          return false;
-        }
       }
       if (e.type === "keydown" && e.ctrlKey && e.shiftKey && !e.altKey && !e.metaKey && e.key.toLowerCase() === "v") {
         e.preventDefault();
@@ -2014,24 +1973,7 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
           />
         </div>
       </div>
-      {terminalInputSuggestionsEnabled && isActive && isVisible && !searchOpen && suggestionGhost && (
-        <div
-          aria-hidden="true"
-          className="terminal-input-suggestion-ghost"
-          style={{
-            left: suggestionGhost.left,
-            top: suggestionGhost.top,
-            height: suggestionGhost.height,
-            maxWidth: suggestionGhost.maxWidth,
-            lineHeight: `${suggestionGhost.height}px`,
-            color: searchForeground,
-            fontFamily: effectiveFontFamily,
-            fontSize,
-          }}
-        >
-          {suggestionGhost.suffix}
-        </div>
-      )}
+
       {menuState && (
         <Portal>
           <div
