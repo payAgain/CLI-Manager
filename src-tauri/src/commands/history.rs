@@ -1,4 +1,4 @@
-use crate::commands::model_pricing::{find_cached_model_pricing, CachedModelPricingLookup};
+use crate::model_pricing::{find_cached_model_pricing, CachedModelPricingLookup};
 use crate::daemon::client::DaemonBridge;
 use crate::shell_resolver::silent_command;
 use crate::ssh_launch::SshLaunchPlan;
@@ -14755,8 +14755,8 @@ mod tests {
 
     #[test]
     fn history_stats_reprices_cached_usage_events_with_current_model_prices() {
-        crate::commands::model_pricing::model_prices_set_cache(vec![
-            crate::commands::model_pricing::ModelPriceEntry {
+        crate::model_pricing::model_prices_set_cache(vec![
+            crate::model_pricing::ModelPriceEntry {
                 model: "priced-model".to_string(),
                 input_per_1m: 2.5,
                 output_per_1m: 15.0,

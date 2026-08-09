@@ -2,6 +2,7 @@
 
 pub mod app_paths;
 mod ccswitch_db;
+mod model_pricing;
 mod claude_hook;
 pub mod codex_app_server_proxy;
 mod commands;
@@ -25,10 +26,8 @@ pub mod ssh_askpass;
 pub mod ssh_launch;
 pub mod ssh_proxy;
 pub mod ssh_transport;
-mod sync;
 mod text_encoding;
 mod third_party_notification;
-mod webdav;
 mod wsl;
 
 use log::LevelFilter;
@@ -1044,30 +1043,6 @@ pub fn run() {
             commands::history_sources::history_sources_list_descriptors,
             commands::history_sources::history_sources_detect,
             commands::history_sources::history_sources_validate,
-            commands::sync::sync_get_default_device_name,
-            commands::sync::sync_list_device_snapshots,
-            commands::sync::sync_test_connection,
-            commands::sync::sync_upload,
-            commands::sync::sync_download,
-            commands::sync::sync_local_export,
-            commands::sync::sync_local_import,
-            commands::sync::backup_upload,
-            commands::sync::backup_list,
-            commands::sync::backup_download,
-            commands::sync::backup_delete,
-            commands::sync::backup_import_legacy_cloud,
-            commands::sync::backup_local_export,
-            commands::sync::backup_local_import,
-            commands::sync::backup_outbox_save,
-            commands::sync::backup_outbox_list,
-            commands::sync::backup_outbox_remove,
-            commands::sync::backup_restore_safety_save,
-            commands::sync::backup_restore_safety_load,
-            commands::sync::backup_restore_safety_clear,
-            commands::sync::backup_restore_database,
-            commands::sync::sync_save_password,
-            commands::sync::sync_load_password,
-            commands::sync::sync_delete_password,
             commands::system_resources::system_resources_get_snapshot,
             commands::version::get_app_version,
             commands::version::get_os_platform,
@@ -1145,8 +1120,6 @@ pub fn run() {
         .expect("error while building tauri application")
         .run(|app, event| {
             if let tauri::RunEvent::Exit = &event {
-                app.state::<commands::cc_connect::CcConnectManager>()
-                    .shutdown();
                 crash_reporter::mark_graceful_exit();
             }
 

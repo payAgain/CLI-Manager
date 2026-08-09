@@ -202,7 +202,10 @@ fn path_kind(path: &str) -> String {
 }
 
 fn path_exists(path: &str) -> bool {
-    if let Some((distro, linux_path)) = crate::wsl::parse_wsl_unc_path(path) {
+    if crate::wsl::is_wsl_config_dir(path) {
+        let Some((distro, linux_path)) = crate::wsl::parse_wsl_unc_path(path) else {
+            return false;
+        };
         return wsl_path_exists(&distro, &linux_path);
     }
     Path::new(path).exists()

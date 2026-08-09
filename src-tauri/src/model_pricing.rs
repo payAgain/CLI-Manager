@@ -107,7 +107,7 @@ pub fn model_prices_set_cache(prices: Vec<ModelPriceEntry>) -> Result<(), String
         .write()
         .map_err(|_| "model price cache loaded flag lock poisoned".to_string())?;
     *loaded_guard = true;
-    super::history::invalidate_history_stats_caches();
+    crate::commands::history::invalidate_history_stats_caches();
     Ok(())
 }
 

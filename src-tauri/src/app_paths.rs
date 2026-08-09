@@ -112,7 +112,6 @@ pub struct CliManagerDataPaths {
     pub db_url: String,
     pub settings_store_path: String,
     pub sessions_store_path: String,
-    pub sync_store_path: String,
     pub external_session_sync_store_path: String,
     pub logs_dir: String,
     pub codex_providers_dir: String,
@@ -872,10 +871,6 @@ pub fn data_paths() -> Result<CliManagerDataPaths, String> {
             .into_owned(),
         sessions_store_path: data_dir
             .join(sessions_store_file_name(cfg!(dev)))
-            .to_string_lossy()
-            .into_owned(),
-        sync_store_path: data_dir
-            .join(SYNC_STORE_FILE_NAME)
             .to_string_lossy()
             .into_owned(),
         external_session_sync_store_path: data_dir

@@ -1,9 +1,7 @@
 pub mod app_data;
 pub mod background;
 pub mod ccusage;
-pub mod model_pricing;
 pub mod ccswitch;
-pub mod cc_connect;
 pub mod db_repair;
 pub mod fonts;
 pub mod fs;
@@ -25,7 +23,6 @@ pub mod ssh_files;
 pub mod ssh_git;
 pub mod ssh_integration;
 pub mod subagent_transcript;
-pub mod sync;
 pub mod system_notification;
 pub mod system_resources;
 pub mod terminal;
