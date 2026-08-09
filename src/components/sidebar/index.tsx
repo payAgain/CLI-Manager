@@ -20,15 +20,14 @@ import type { HistorySourceFilter, Project, TreeNode as TNode, Group, TerminalSc
 import { ConfigModal } from "../ConfigModal";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { useAppConfirm } from "../ui/useAppConfirm";
-import { ProviderSwitchModal } from "../ProviderSwitchModal";
 import { WorktreeFinishDialog } from "../worktree/WorktreeFinishDialog";
 import { openWindowsTerminal } from "../../lib/externalTerminal";
 import { resolveProjectStartupCommand } from "../../lib/projectStartupCommand";
 import { resolveHistoryProjectPath } from "../../lib/historyProjectPaths";
 import { resolveCliToolHistorySourceId } from "../../lib/cliTools";
 import { shouldSidebarBootstrapProjects } from "../../lib/projectLoadPolicy";
-import { getProviderSwitchAppType, parseProjectEnvVars } from "../../lib/providerSwitching";
-import { projectWithWorktreePath, projectWithWorktreeProviderOverrides } from "../../lib/terminalProject";
+import { parseProjectEnvVars } from "../../lib/projectEnv";
+import { projectWithWorktreePath } from "../../lib/terminalProject";
 import { ALL_TERMINALS_SCOPE, collectProjectIdsForGroup, sessionMatchesTerminalScope } from "../../lib/terminalScope";
 import { projectSupportsCapability, type ProjectCapability } from "../../lib/projectCapabilities";
 import { TreeContext, worktreeListCollapseId, type TreeActions } from "./TreeContext";
@@ -45,7 +44,6 @@ import { SidebarFooter } from "./SidebarFooter";
 import { groupSyncedExternalSessions } from "../../lib/externalSessionGrouping";
 import { FileExplorerSidebar } from "../files/FileExplorerSidebar";
 import {
-  ArrowLeftRight,
   Check,
   CircleStop,
   Copy,
@@ -220,7 +218,6 @@ export function Sidebar({
     groups,
     projectStoreLoaded,
     projectHealth,
-    providerBadges,
   } = useProjectStore(
     useShallow((s) => ({
       tree: s.tree,
@@ -229,7 +226,6 @@ export function Sidebar({
       groups: s.groups,
       projectStoreLoaded: s.loaded,
       projectHealth: s.projectHealth,
-      providerBadges: s.providerBadges,
     }))
   );
   const fetchAll = useProjectStore((s) => s.fetchAll);
@@ -292,11 +288,6 @@ export function Sidebar({
 
   const [editingProject, setEditingProject] = useState<Project | null>(null);
   const [cloningProject, setCloningProject] = useState<Project | null>(null);
-  const [providerSwitchTarget, setProviderSwitchTarget] = useState<
-    | { kind: "project"; project: Project }
-    | { kind: "worktree"; project: Project; worktree: WorktreeRecord }
-    | null
-  >(null);
   const [showAdd, setShowAdd] = useState(false);
   const [addToGroupId, setAddToGroupId] = useState<string | null>(null);
   const [projectFilter, setProjectFilter] = useState<ProjectListFilter>("all");
@@ -983,7 +974,7 @@ export function Sidebar({
     const launchItems = items.map((project) => ({
       cwd: project.path,
       title: project.name,
-      startupCmd: resolveProjectStartupCommand(project, { includeCodexProviderProfile: false }),
+      startupCmd: resolveProjectStartupCommand(project),
       shell: project.shell || undefined,
     }));
     await openWindowsTerminal(
@@ -1014,8 +1005,7 @@ export function Sidebar({
 
   const openWorktreeSession = async (project: Project, worktree: WorktreeRecord, targetPaneId?: string, startupCmd?: string, title?: string) => {
     if (rejectMissingWorktree(worktree)) return false;
-    const projectOptions = projectWithWorktreeProviderOverrides(project, worktree);
-    const options = buildProjectSplitOptions(projectOptions);
+    const options = buildProjectSplitOptions(project);
     await createSession(
       options.projectId,
       worktree.path,
@@ -1775,8 +1765,7 @@ export function Sidebar({
       collapsedIds,
       renamingGroupId,
       renamingProjectId,
-      providerBadges,
-      onSelectProject: handleSelectProject,
+        onSelectProject: handleSelectProject,
       onSelectProjectByKeyboard: handleSelectProjectByKeyboard,
       onSelectGroup: handleSelectGroup,
       onSelectGroupScope: handleSelectGroupScope,
@@ -1812,8 +1801,7 @@ export function Sidebar({
       collapsedIds,
       renamingGroupId,
       renamingProjectId,
-      providerBadges,
-      handleSelectProject,
+        handleSelectProject,
       handleSelectProjectByKeyboard,
       handleSelectGroup,
       handleSelectGroupScope,
@@ -2004,13 +1992,6 @@ export function Sidebar({
       },
     };
   })();
-
-  const providerSwitchProject = providerSwitchTarget
-    ? projects.find((project) => project.id === providerSwitchTarget.project.id) ?? providerSwitchTarget.project
-    : null;
-  const providerSwitchWorktree = providerSwitchTarget?.kind === "worktree"
-    ? worktrees.find((worktree) => worktree.id === providerSwitchTarget.worktree.id) ?? providerSwitchTarget.worktree
-    : undefined;
 
   return (
     <aside
@@ -2259,19 +2240,6 @@ export function Sidebar({
                   <ListClockIcon size={14} />
                   {t("sidebar.menu.sessionHistory")}
                 </button>
-                  {!showProjectBatchContextMenu && getProviderSwitchAppType(contextMenu.project) && projectSupportsCapability(contextMenu.project, "providerSwitch") && (
-                  <button
-                    className="context-menu-item"
-                    role="menuitem"
-                    onClick={() => {
-                      setProviderSwitchTarget({ kind: "project", project: contextMenu.project });
-                      setContextMenu(null);
-                    }}
-                  >
-                    <ArrowLeftRight size={14} strokeWidth={1.5} />
-                    {t("sidebar.menu.switchProvider")}
-                  </button>
-                )}
                 <button
                   className="context-menu-item"
                   hidden={showProjectBatchContextMenu}
@@ -2407,23 +2375,6 @@ export function Sidebar({
                   <FileCode size={14} strokeWidth={1.5} />
                   {t("sidebar.menu.browseFiles")}
                 </button>
-                {getProviderSwitchAppType(contextMenu.project) && projectSupportsCapability(contextMenu.project, "providerSwitch") && (
-                  <button
-                    className="context-menu-item"
-                    role="menuitem"
-                    onClick={() => {
-                      setProviderSwitchTarget({
-                        kind: "worktree",
-                        project: contextMenu.project,
-                        worktree: contextMenu.worktree,
-                      });
-                      setContextMenu(null);
-                    }}
-                  >
-                    <ArrowLeftRight size={14} strokeWidth={1.5} />
-                    {t("sidebar.menu.switchProvider")}
-                  </button>
-                )}
                 <button
                   className="context-menu-item"
                   role="menuitem"
@@ -2821,13 +2772,6 @@ export function Sidebar({
         <BatchShellDialog
           preselectedIds={batchShellPreselected}
           onClose={() => setBatchShellPreselected(null)}
-        />
-      )}
-      {providerSwitchTarget && providerSwitchProject && (
-        <ProviderSwitchModal
-          project={providerSwitchProject}
-          worktree={providerSwitchWorktree}
-          onClose={() => setProviderSwitchTarget(null)}
         />
       )}
       <ConfirmDialog

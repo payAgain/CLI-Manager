@@ -1,5 +1,4 @@
 import { resolveCliToolHistorySourceId } from "./cliTools";
-import { getProviderSwitchAppType } from "./providerSwitching";
 import type { HistorySessionSummary, Project, WorktreeRecord } from "./types";
 
 function normalizePathKey(value: string): string {
@@ -31,7 +30,7 @@ function claudeProjectKeyFromPath(path: string): string {
 
 export function matchesHistoryProjectSource(project: Project, source: string): boolean {
   const registeredSource = resolveCliToolHistorySourceId(project.cli_tool);
-  return registeredSource ? registeredSource === source : getProviderSwitchAppType(project) === source;
+  return registeredSource ? registeredSource === source : project.cli_tool.trim().toLowerCase().includes(source);
 }
 
 export function findLocalHistoryResumeProjects(

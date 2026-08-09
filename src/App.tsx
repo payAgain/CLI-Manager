@@ -34,16 +34,12 @@ import {
 import { useProjectStore } from "./stores/projectStore";
 import { useSessionStore } from "./stores/sessionStore";
 import { flushTerminalSnapshotsNow } from "./lib/sessionSnapshotPersistence";
-import { useSyncStore } from "./stores/syncStore";
 import { useHistoryStore } from "./stores/historyStore";
 import { useExternalSessionSyncStore } from "./stores/externalSessionSyncStore";
 import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
-import { useDesktopPetCoordinator } from "./hooks/useDesktopPetCoordinator";
-import { useRemoteHandoffCoordinator } from "./hooks/useRemoteHandoffCoordinator";
 import { useUpdateStore } from "./stores/updateStore";
 import { useReplayStore } from "./stores/replayStore";
 import { useTerminalStore, type CliHookPayload } from "./stores/terminalStore";
-import { useModelPricingStore } from "./stores/modelPricingStore";
 import { useWorktreeStore } from "./stores/worktreeStore";
 import { debugConsoleWarn } from "./lib/debugConsole";
 import { createPerfMarker, logInfo, logWarn } from "./lib/logger";
@@ -108,10 +104,6 @@ const TERMINAL_PANEL_SEMANTIC_COLORS = {
     blue: "#2563EB",
   },
 } as const;
-// 关闭期自动同步上限：封顶最坏退出时间（WebDAV 客户端本身有 30s HTTP 超时）。
-const CLOSE_SYNC_TIMEOUT_MS = 8000;
-// 退出遮罩上 conflict/error 提示的停留时长，之后继续退出流程。
-const EXIT_NOTICE_DISPLAY_MS = 1200;
 const STARTUP_STAGE_TIMEOUT_MS = 15_000;
 const REQUEST_LOG_SYNC_INTERVAL_MS = 60_000;
 const IN_TAURI = isTauri();
@@ -473,9 +465,6 @@ function runDeferredStartupTasks(openSettings?: (tab?: SettingsTab) => void): vo
       await useProjectStore.getState().refreshProjectDiagnostics().catch((err) => {
         logWarn("Failed to refresh deferred project diagnostics", err);
       });
-
-      await useSyncStore.getState().load();
-      await useSyncStore.getState().retryOutbox();
     })();
 
     if (!startupUpdateChecked) {
@@ -560,7 +549,19 @@ function App() {
   const pendingExitSourceRef = useRef("window close");
 
   const handleOpenSettings = useCallback((tab?: SettingsTab) => {
-    const nextTab = tab ?? lastSettingsTab;
+    const allowedTabs: readonly SettingsTab[] = [
+      "general",
+      "developer",
+      "sidebar",
+      "terminal-theme",
+      "shortcuts",
+      "templates",
+      "ssh-hosts",
+      "history-sources",
+      "hooks",
+      "about",
+    ];
+    const nextTab: SettingsTab = tab ?? (allowedTabs.includes(lastSettingsTab as SettingsTab) ? lastSettingsTab as SettingsTab : "general");
     preloadSettingsModal();
     setSettingsInitialTab(nextTab);
     if (tab && tab !== useSettingsStore.getState().lastSettingsTab) {
@@ -653,37 +654,6 @@ function App() {
     if (!IN_TAURI || !debugMode) return;
     return startRuntimeDiagnostics();
   }, [debugMode]);
-
-  // 关闭期自动备份：先落本地 outbox，再在 8s 内尝试上传；超时后下次启动重试。
-  const runCloseAutoSync = useCallback(async () => {
-    const showExitNotice = async (message: string) => {
-      setExitNotice(message);
-      await new Promise((resolve) => setTimeout(resolve, EXIT_NOTICE_DISPLAY_MS));
-    };
-
-    let timeoutId: ReturnType<typeof setTimeout> | undefined;
-    const timeoutPromise = new Promise<"timeout">((resolve) => {
-      timeoutId = setTimeout(() => resolve("timeout"), CLOSE_SYNC_TIMEOUT_MS);
-    });
-    try {
-      await useSyncStore.getState().load();
-      const result = await Promise.race([useSyncStore.getState().runCloseAutoBackup(), timeoutPromise]);
-      if (result === "timeout") {
-        logWarn("Close auto sync timed out, continuing exit", { timeoutMs: CLOSE_SYNC_TIMEOUT_MS });
-        await showExitNotice(t("app.exitProgress.syncTimeout"));
-        return;
-      }
-      if (result === "error") {
-        logWarn("Close auto backup failed, continuing exit");
-        await showExitNotice(t("app.exitProgress.syncFailed"));
-      }
-    } catch (err) {
-      logWarn("Close auto sync threw, continuing exit", err);
-      await showExitNotice(t("app.exitProgress.syncFailed"));
-    } finally {
-      if (timeoutId !== undefined) clearTimeout(timeoutId);
-    }
-  }, [t]);
 
   const handleOpenStats = useCallback(() => {
     // 历史用量分析（StatsPanel）不需要 hook，直接打开
@@ -792,14 +762,6 @@ function App() {
     }
   }, []);
 
-  useRemoteHandoffCoordinator(startupReady);
-
-  useDesktopPetCoordinator({
-    appReady: startupReady,
-    terminalFullscreen,
-    onOpenSettings: () => handleOpenSettings("desktop-pet"),
-    onActivateSession: handleActivateHookNotificationTarget,
-  });
 
   useKeyboardShortcuts({
     onToggleSidebar: handleToggleSidebarShortcut,
@@ -955,13 +917,6 @@ function App() {
         await useSessionStore.getState().load().catch((err) => {
           logWarn("Failed to load persisted sessions during startup", err);
         });
-        await useSyncStore.getState().load().catch((err) => {
-          logWarn("Failed to load sync store during startup", err);
-        });
-      });
-
-      void useModelPricingStore.getState().load().catch((err) => {
-        logWarn("Failed to preload model pricing", err);
       });
 
       // 2. 加载项目列表与 worktree 记录
@@ -1308,10 +1263,8 @@ function App() {
       // 全程保持窗口可见并显示进度遮罩；destroy 前不复位 exitPhase。
       flushSync(() => {
         setExitNotice(null);
-        setExitPhase("syncing");
+        setExitPhase("closing");
       });
-      await runCloseAutoSync();
-      setExitPhase("closing");
       // Issue #123：正常退出前把各终端最终画面强制落盘，供下次启动问询式恢复。
       // 必须在 PtyHost closeAll 之前，避免关闭 PTY 触发的重绘/清屏影响 serialize 结果；
       // 此处不再 clear() 工作区快照——那会让"关闭后恢复"永远拿不到数据。
@@ -1374,7 +1327,7 @@ function App() {
         setExitNotice(null);
       });
     }
-  }, [exitApp, runCloseAutoSync]);
+  }, [exitApp]);
 
   // Issue #123 Phase 1/2：转入后台。
   // daemon 可用 → 真退出应用，任务由守护进程续跑（下次启动 attach 回放）；

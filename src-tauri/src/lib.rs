@@ -4,7 +4,6 @@ pub mod app_paths;
 mod ccswitch_db;
 mod claude_hook;
 pub mod codex_app_server_proxy;
-pub mod codex_statusline;
 mod commands;
 mod conpty_sideload;
 mod crash_reporter;
@@ -26,8 +25,6 @@ pub mod ssh_askpass;
 pub mod ssh_launch;
 pub mod ssh_proxy;
 pub mod ssh_transport;
-pub mod statusline;
-pub mod statusline_profiles;
 mod sync;
 mod text_encoding;
 mod third_party_notification;
@@ -785,9 +782,6 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
-            if commands::cc_connect::handle_single_instance_args(app, &args) {
-                return;
-            }
             if let Some(session_id) = background_session_arg(&args) {
                 set_pending_background_session(app, session_id);
             }
@@ -862,16 +856,6 @@ pub fn run() {
                     Err(err) => log::warn!("pty daemon skipped (no data dir): {err}"),
                 });
             }
-            // 注入 appLocalData 目录用于历史索引磁盘缓存（加速冷启动加载）。
-            {
-                let handle = app.handle().clone();
-                std::thread::spawn(move || {
-                    std::thread::sleep(std::time::Duration::from_millis(750));
-                    if let Err(err) = commands::cc_connect::auto_start(&handle) {
-                        log::warn!("cc-connect auto-start skipped: {err}");
-                    }
-                });
-            }
             if let Ok(dir) = app_paths::history_cache_dir() {
                 commands::history::set_history_index_cache_dir(dir);
             }
@@ -937,7 +921,6 @@ pub fn run() {
         .manage(file_watcher::FileWatcherBridge::new())
         .manage(git_watcher::GitWatcherBridge::new())
         .manage(commands::subagent_transcript::SubagentTranscriptBridge::new())
-        .manage(commands::cc_connect::CcConnectManager::new())
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(
             SqlBuilder::default()
@@ -958,36 +941,7 @@ pub fn run() {
             commands::app_data::app_get_data_storage_status,
             commands::app_data::app_inspect_data_dir,
             commands::app_data::app_prepare_data_dir_switch,
-            commands::cc_connect::cc_connect_get_status,
-            commands::cc_connect::cc_connect_inspect_executable,
-            commands::cc_connect::cc_connect_check_update,
-            commands::cc_connect::cc_connect_update,
-            commands::cc_connect::cc_connect_save_profile,
-            commands::cc_connect::cc_connect_clear_credentials,
-            commands::cc_connect::cc_connect_weixin_authorization_start,
-            commands::cc_connect::cc_connect_weixin_authorization_status,
-            commands::cc_connect::cc_connect_weixin_authorization_cancel,
-            commands::cc_connect::cc_connect_start,
-            commands::cc_connect::cc_connect_stop,
-            commands::cc_connect::cc_connect_restart,
-            commands::cc_connect::cc_connect_get_logs,
-            commands::cc_connect::handoff::cc_connect_handoff_status,
-            commands::cc_connect::handoff::cc_connect_handoff_platforms,
-            commands::cc_connect::handoff::cc_connect_handoff_preflight,
-            commands::cc_connect::handoff::cc_connect_handoff_start,
-            commands::cc_connect::handoff::cc_connect_handoff_cancel,
-            commands::cc_connect::handoff_notification::cc_connect_handoff_notification_status,
             take_pending_background_session,
-            commands::desktop_pet::desktop_pet_catalog,
-            commands::desktop_pet::desktop_pet_list_installed,
-            commands::desktop_pet::desktop_pet_get_installed,
-            commands::desktop_pet::desktop_pet_install,
-            commands::desktop_pet::desktop_pet_import,
-            commands::desktop_pet::desktop_pet_uninstall,
-            commands::desktop_pet::desktop_pet_window_sync,
-            commands::desktop_pet::desktop_pet_window_set_bounds,
-            commands::desktop_pet::desktop_pet_window_hide,
-            commands::desktop_pet::desktop_pet_window_reset_position,
             commands::terminal_shell::terminal_shell_scan,
             commands::terminal_shell::terminal_shell_icon,
             commands::ssh::ssh_client_status,
@@ -1138,21 +1092,7 @@ pub fn run() {
             commands::ccusage::ccusage_get_status,
             commands::ccusage::ccusage_install_tools,
             commands::ccusage::ccusage_refresh_report,
-            commands::ccswitch::ccswitch_list_providers,
-            commands::ccswitch::ccswitch_get_project_provider,
-            commands::ccswitch::ccswitch_apply_provider,
-            commands::ccswitch::ccswitch_reset_project_provider,
-            commands::ccswitch::ccswitch_prepare_claude_provider,
-            commands::ccswitch::ccswitch_prepare_codex_provider,
-            commands::ccswitch::ccswitch_test_provider_model,
-            commands::ccswitch::ccswitch_cleanup_codex_profiles,
-            commands::ccswitch::ccswitch_probe_projects,
-            commands::ccswitch::ccswitch_list_common_configs,
-            commands::command_suggestion::command_suggestion_test_model,
-            commands::command_suggestion::command_suggestion_generate,
-            commands::command_suggestion::command_suggestion_list_path_entries,
-            commands::command_suggestion::command_suggestion_resolve_directory,
-            commands::git::get_current_git_branch,
+                                                                                                                                    commands::git::get_current_git_branch,
             commands::git::git_get_changes,
             commands::git::git_list_repositories,
             commands::git::git_get_file_diff,
@@ -1192,39 +1132,10 @@ pub fn run() {
             commands::subagent_transcript::subagent_transcript_unsubscribe,
             commands::subagent_transcript::subagent_transcript_discover,
             commands::subagent_transcript::codex_subagent_transcript_discover,
-            commands::model_pricing::model_prices_set_cache,
-            commands::model_pricing::model_prices_sync,
-            commands::system_notification::is_wsl,
+                                    commands::system_notification::is_wsl,
             commands::system_notification::send_notification_via_windows,
             commands::system_notification::send_interactive_system_notification,
             commands::system_notification::set_taskbar_attention,
-            statusline::statusline_get_status,
-            statusline::statusline_load_settings,
-            statusline::statusline_save_settings,
-            statusline::statusline_import_legacy,
-            statusline::statusline_render_preview,
-            statusline::statusline_install,
-            statusline::statusline_uninstall,
-            statusline::statusline_sync_ccswitch,
-            statusline::statusline_get_catalog,
-            statusline::statusline_powerline_font_status,
-            statusline::statusline_powerline_install_fonts,
-            codex_statusline::codex_statusline_load,
-            codex_statusline::codex_statusline_save,
-            codex_statusline::codex_statusline_sync_ccswitch,
-            statusline_profiles::statusline_profiles_load,
-            statusline_profiles::statusline_backup_export,
-            statusline_profiles::statusline_backup_restore,
-            statusline_profiles::statusline_profiles_create,
-            statusline_profiles::statusline_profiles_save,
-            statusline_profiles::statusline_profiles_switch,
-            statusline_profiles::statusline_profiles_rename,
-            statusline_profiles::statusline_profiles_duplicate,
-            statusline_profiles::statusline_profiles_delete,
-            statusline_profiles::statusline_profiles_capture_external,
-            statusline_profiles::statusline_profiles_export,
-            statusline_profiles::statusline_profiles_analyze_import,
-            statusline_profiles::statusline_profiles_commit_import,
             crash_reporter::crash_context_update,
             crash_reporter::frontend_crash_report,
             app_show_main_window,

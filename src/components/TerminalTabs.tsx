@@ -48,7 +48,6 @@ import { SplitTerminalView } from "./SplitTerminalView";
 import { XTermTerminal } from "./XTermTerminal";
 import { CommandTemplatePanel } from "./CommandTemplatePanel";
 import { BackgroundTasksPanel, type BackgroundTaskMeta } from "./BackgroundTasksPanel";
-import { CliCat } from "./desktop-pet/CliCat";
 import { SystemResourcesPanel } from "./terminal/SystemResourcesPanel";
 import {
   ResizableTerminalPanelFrame,
@@ -56,7 +55,6 @@ import {
   TERMINAL_SIDE_PANEL_TAB_ORDER,
   type TerminalSidePanelTab,
 } from "./terminal/TerminalSidePanel";
-import { RemoteHandoffOverlay } from "./terminal/RemoteHandoffOverlay";
 import { WorktreeFinishDialog } from "./worktree/WorktreeFinishDialog";
 import { FileExplorerSidebar } from "./files/FileExplorerSidebar";
 import { openWindowsTerminal } from "../lib/externalTerminal";
@@ -64,7 +62,7 @@ import { normalizeDirectCodexStartupCommand, resolveProjectStartupCommand } from
 import { projectSupportsCapability, resolveProjectCapabilities, type ProjectCapability } from "../lib/projectCapabilities";
 import { resolveCliToolHistorySourceId, resolveCliToolIconKey, type CliToolIconKey } from "../lib/cliTools";
 import { resolveHistoryProjectPath } from "../lib/historyProjectPaths";
-import { parseProjectEnvVars } from "../lib/providerSwitching";
+import { parseProjectEnvVars } from "../lib/projectEnv";
 import { Activity, Terminal, TerminalSquare, Sparkles, Plus, ListClockIcon, X, Copy, Maximize2, Minimize2, ChevronDown, ChevronRight, BarChart3, GitBranch, Folder, FolderOpen, Hash, Check, Cpu, Cloud, Undo2 } from "./icons";
 import { WorktreeIcon } from "./WorktreeIcon";
 import { VendorIcon, inferVendor, type VendorKey } from "./VendorIcon";
@@ -101,7 +99,6 @@ import { getTerminalSidePanelSkinStyle } from "./stats/termStatsUi";
 import {
   findWorktreeForSession,
   isSameProjectFileContext,
-  projectWithWorktreeProviderOverrides,
   resolveProjectForSessionFileContext,
 } from "../lib/terminalProject";
 import { ALL_TERMINALS_SCOPE, collectProjectIdsForGroup, sessionMatchesTerminalScope } from "../lib/terminalScope";
@@ -1945,8 +1942,6 @@ function PaneLeafView({
                   isVisible={!historyActive && isLayoutVisible && session.id === effectivePaneActiveSessionId}
                 />
               </Suspense>
-            ) : session.remoteHandoff ? (
-              <RemoteHandoffOverlay session={session} />
             ) : (
               <XTermTerminal
                 sessionId={session.id}
@@ -2431,7 +2426,7 @@ function CpuCatIndicator({
       aria-label={label}
       style={{ "--cpu-cat-speed": speed, "--cpu-cat-color": color } as CSSProperties}
     >
-      <CliCat />
+      <span aria-hidden="true">🐱</span>
     </button>
   );
 }
@@ -3038,7 +3033,7 @@ export function TerminalTabs({
     if (terminalScopeValue.kind === "worktree") {
       if (!scopedWorktree) return;
       if (rejectMissingWorktree(scopedWorktree)) return;
-      const options = buildProjectSplitOptions(projectWithWorktreeProviderOverrides(scopedProject, scopedWorktree));
+      const options = buildProjectSplitOptions(scopedProject);
       await createSession(
         options.projectId,
         scopedWorktree.path,

@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
 import { BarChart3, Settings } from "../icons";
-import { SyncStatusIndicator } from "./SyncStatusIndicator";
 import type { SettingsTab } from "../SettingsModal";
 import { getErrorMessage, getPiHookErrorMessage } from "../../lib/hookErrors";
 import { useSettingsStore, type SidebarToolbarVisibilitySettings } from "../../stores/settingsStore";
@@ -243,7 +242,6 @@ export function SidebarFooter({ collapsed, onOpenSettings, onOpenStats, toolbarV
     return (
       <div className="px-2 py-2">
         <div className="flex flex-col items-center gap-1.5">
-          <SyncStatusIndicator collapsed onOpenSettings={onOpenSettings} />
           {statsButton}
           <HookStatusLight onOpenSettings={onOpenSettings} />
           {settingsButton}
@@ -255,9 +253,6 @@ export function SidebarFooter({ collapsed, onOpenSettings, onOpenStats, toolbarV
   return (
     <div className="px-2.5 py-2.5">
       <div className="flex items-center gap-2">
-        <div className="min-w-0 flex-1">
-          <SyncStatusIndicator onOpenSettings={onOpenSettings} />
-        </div>
         {statsButton}
         <HookStatusLight onOpenSettings={onOpenSettings} />
         {settingsButton}

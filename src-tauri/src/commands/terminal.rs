@@ -1,7 +1,3 @@
-use crate::commands::ccswitch::{
-    apply_codex_provider_launch_env, refresh_claude_provider_launch_settings,
-    ClaudeProviderLaunchConfig, CodexProviderLaunchConfig,
-};
 use crate::daemon::client::{DaemonBridge, DaemonClient};
 use crate::daemon::protocol::{ClientFrame, SessionMeta, FEATURE_WS_BINARY_OUTPUT};
 use crate::pty::manager::{PtyOrphanCleanupSummary, PtyProcessStatus};
@@ -17,21 +13,6 @@ use uuid::Uuid;
 const DAEMON_READY_WAIT_ATTEMPTS: usize = 60;
 const DAEMON_READY_WAIT_INTERVAL: Duration = Duration::from_millis(100);
 static DAEMON_UPGRADE_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-
-fn provider_launch_configs(
-    is_ssh: bool,
-    claude: Option<ClaudeProviderLaunchConfig>,
-    codex: Option<CodexProviderLaunchConfig>,
-) -> (
-    Option<ClaudeProviderLaunchConfig>,
-    Option<CodexProviderLaunchConfig>,
-) {
-    if is_ssh {
-        (None, None)
-    } else {
-        (claude, codex)
-    }
-}
 
 async fn wait_for_daemon(daemon_bridge: &DaemonBridge) -> Option<Arc<DaemonClient>> {
     for attempt in 0..DAEMON_READY_WAIT_ATTEMPTS {
@@ -92,17 +73,10 @@ pub async fn pty_prepare_create(
     env_vars: Option<HashMap<String, String>>,
     shell: Option<String>,
     hook_env_enabled: Option<bool>,
-    claude_provider: Option<ClaudeProviderLaunchConfig>,
-    codex_provider: Option<CodexProviderLaunchConfig>,
     ssh_launch: Option<SshLaunchPlan>,
 ) -> Result<PreparedPtyCreate, String> {
     let session_id = Uuid::new_v4().to_string();
     let mut env_vars = env_vars.unwrap_or_default();
-    let (claude_provider, codex_provider) =
-        provider_launch_configs(ssh_launch.is_some(), claude_provider, codex_provider);
-    refresh_claude_provider_launch_settings(&app_handle, claude_provider).await?;
-    apply_codex_provider_launch_env(&app_handle, codex_provider, shell.as_deref(), &mut env_vars)
-        .await?;
     env_vars.insert("CLI_MANAGER_TAB_ID".to_string(), session_id.clone());
     let mut ssh_launch = ssh_launch;
     if let Some(plan) = ssh_launch.as_mut() {
@@ -360,42 +334,8 @@ pub async fn pty_daemon_sessions(
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        daemon_contract_is_current, provider_launch_configs, ClaudeProviderLaunchConfig,
-        CodexProviderLaunchConfig,
-    };
+    use super::daemon_contract_is_current;
     use crate::daemon::protocol::FEATURE_WS_BINARY_OUTPUT;
-
-    fn configs() -> (
-        Option<ClaudeProviderLaunchConfig>,
-        Option<CodexProviderLaunchConfig>,
-    ) {
-        (
-            Some(ClaudeProviderLaunchConfig {
-                project_id: "project".to_string(),
-                provider_id: "claude-provider".to_string(),
-                db_path: Some("provider.db".to_string()),
-            }),
-            Some(CodexProviderLaunchConfig {
-                provider_id: "codex-provider".to_string(),
-                db_path: Some("provider.db".to_string()),
-                codex_config_dir: Some("codex".to_string()),
-            }),
-        )
-    }
-
-    #[test]
-    fn ssh_launch_discards_provider_configs() {
-        let (claude, codex) = configs();
-        let (claude, codex) = provider_launch_configs(true, claude, codex);
-        assert!(claude.is_none());
-        assert!(codex.is_none());
-
-        let (claude, codex) = configs();
-        let (claude, codex) = provider_launch_configs(false, claude, codex);
-        assert!(claude.is_some());
-        assert!(codex.is_some());
-    }
 
     #[test]
     fn daemon_contract_requires_matching_version_and_binary_transport() {

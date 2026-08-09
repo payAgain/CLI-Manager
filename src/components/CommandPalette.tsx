@@ -12,7 +12,7 @@ import { toast } from "sonner";
 import { logError } from "../lib/logger";
 import { openWindowsTerminal } from "../lib/externalTerminal";
 import { resolveProjectStartupCommand } from "../lib/projectStartupCommand";
-import { parseProjectEnvVars } from "../lib/providerSwitching";
+import { parseProjectEnvVars } from "../lib/projectEnv";
 import { terminalProcessManager } from "../terminal/core/TerminalProcessManager";
 
 export const useCommandPaletteStore = create<{
@@ -157,7 +157,7 @@ export function CommandPalette() {
             void openWindowsTerminal([{
               cwd: p.path,
               title: p.name,
-              startupCmd: resolveProjectStartupCommand(p, { includeCodexProviderProfile: false }),
+              startupCmd: resolveProjectStartupCommand(p),
               shell: p.shell || undefined,
             }]);
             return;

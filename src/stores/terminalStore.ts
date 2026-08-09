@@ -23,14 +23,7 @@ import { normalizeHexColor } from "../lib/terminalColor";
 import { useSettingsStore } from "./settingsStore";
 import { useSessionStore } from "./sessionStore";
 import { defaultShellForOs, getOsPlatform, normalizeShellForOs, normalizeShellKey, type OsPlatform, type ShellKey } from "../lib/shell";
-import {
-  getClaudeProviderOverride,
-  getCodexProviderOverride,
-  getProviderSwitchAppType,
-  isExactCodexProject,
-  parseProjectEnvVars,
-  withCodexProviderOverride,
-} from "../lib/providerSwitching";
+import { parseProjectEnvVars } from "../lib/projectEnv";
 import { useProjectStore } from "./projectStore";
 import { useSshHostStore } from "./sshHostStore";
 import { useSshAgentIntegrationStore } from "./sshAgentIntegrationStore";
@@ -45,7 +38,6 @@ import { translateCurrent } from "../lib/i18n";
 import {
   findProjectByPath,
   findWorktreeByPath,
-  resolveProjectForProviderLaunch,
 } from "../lib/terminalProject";
 import { terminalProcessManager } from "../terminal/core/TerminalProcessManager";
 import {
@@ -1119,13 +1111,13 @@ export function detectCliResumeKind(
   project: Project | undefined
 ): "claude" | "codex" | "grok" | null {
   const cmd = startupCmd?.trim() ?? "";
-  const projectKind = project ? getProviderSwitchAppType(project) : null;
+  const projectKind = project ? project.cli_tool.trim().toLowerCase() : "";
   const cliTool = project?.cli_tool?.trim().toLowerCase() ?? "";
   // codex 优先：codex 项目可能带自定义 startupCmd，仍应当 codex resume。
-  if (projectKind === "codex" || (project ? isExactCodexProject(project) : false) || CODEX_COMMAND_PATTERN.test(cmd)) {
+  if (projectKind === "codex" || CODEX_COMMAND_PATTERN.test(cmd)) {
     return "codex";
   }
-  if (projectKind === "claude" || CLAUDE_COMMAND_PATTERN.test(cmd)) {
+  if (projectKind.includes("claude") || CLAUDE_COMMAND_PATTERN.test(cmd)) {
     return "claude";
   }
   if (cliTool.includes("grok") || GROK_COMMAND_PATTERN.test(cmd)) {
@@ -1186,12 +1178,6 @@ export interface DetachedPtyLaunchResult {
   sessionId: string;
   shell: string | null;
   startupCmd?: string;
-}
-
-interface CodexProviderProfileResponse {
-  providerId: string;
-  providerName: string;
-  profileName: string;
 }
 
 function applySshExitState(session: TerminalSession, payload: PtyStatusPayload): TerminalSession {
@@ -1258,8 +1244,6 @@ interface ResolvedPtyLaunch {
     envVars: Record<string, string> | null;
     shell: string | null;
     hookEnvEnabled: boolean;
-    claudeProvider: ReturnType<typeof getClaudeProviderLaunchConfig>;
-    codexProvider: ReturnType<typeof getCodexProviderLaunchConfig>;
     terminalColors: ReturnType<typeof getCurrentTerminalColors>;
     sshLaunch: SshLaunchPayload | null;
   };
@@ -1335,13 +1319,6 @@ function buildPtyEnvVars(
   return Object.keys(next).length > 0 ? next : null;
 }
 
-function getProviderLaunchProject(projectId?: string, worktreeId?: string) {
-  if (!projectId) return null;
-  const projectState = useProjectStore.getState();
-  const project = projectState.projects.find((item) => item.id === projectId);
-  return project ? resolveProjectForProviderLaunch(project, projectState.worktrees, worktreeId) : null;
-}
-
 function getProjectAgentTerminalMetadata(projectId?: string) {
   const project = projectId
     ? useProjectStore.getState().projects.find((item) => item.id === projectId)
@@ -1359,33 +1336,6 @@ function getRestoredAgentTerminalMetadata(
   return resolveAgentTerminalMetadata(session, project);
 }
 
-function getCodexProviderLaunchConfig(projectId?: string, startupCmd?: string | null, worktreeId?: string) {
-  const project = getProviderLaunchProject(projectId, worktreeId);
-  if (!project || !isExactCodexProject(project) || project.startup_cmd.trim() || !startupCmd?.trim()) {
-    return null;
-  }
-  const override = getCodexProviderOverride(project);
-  if (!override) return null;
-  const settings = useSettingsStore.getState();
-  return {
-    providerId: override.providerId,
-    dbPath: settings.ccSwitchDbPath ?? undefined,
-    codexConfigDir: settings.codexHookConfigDir ?? undefined,
-  };
-}
-
-function getClaudeProviderLaunchConfig(projectId?: string, worktreeId?: string) {
-  const project = getProviderLaunchProject(projectId, worktreeId);
-  if (!project || getProviderSwitchAppType(project) !== "claude") return null;
-  const override = getClaudeProviderOverride(project);
-  if (!override) return null;
-  const settings = useSettingsStore.getState();
-  return {
-    projectId: project.id,
-    providerId: override.providerId,
-    dbPath: settings.ccSwitchDbPath ?? undefined,
-  };
-}
 
 async function resolvePtyLaunch(options: DetachedPtyLaunchOptions, os: OsPlatform): Promise<ResolvedPtyLaunch> {
   const project = options.projectId
@@ -1411,7 +1361,7 @@ async function resolvePtyLaunch(options: DetachedPtyLaunchOptions, os: OsPlatfor
     const host = hosts.find((candidate) => candidate.id === sshHostId);
     if (!host) throw new Error("ssh_host_not_found");
     const resolvedStartupCmd = options.startupCmd === undefined && project?.environment_type === "ssh"
-      ? resolveProjectStartupCommand(project, { includeProviderOverrides: false })
+      ? resolveProjectStartupCommand(project)
       : options.startupCmd?.trim() || undefined;
     const resolvedEnvironmentOverrides = options.envVars === undefined && project?.environment_type === "ssh"
       ? parseProjectEnvVars(project) ?? {}
@@ -1465,8 +1415,6 @@ async function resolvePtyLaunch(options: DetachedPtyLaunchOptions, os: OsPlatfor
         envVars: null,
         shell: null,
         hookEnvEnabled: false,
-        claudeProvider: null,
-        codexProvider: null,
         terminalColors: getCurrentTerminalColors(),
         sshLaunch: {
           ...buildSshConnectionSpec(host, hosts),
@@ -1498,8 +1446,6 @@ async function resolvePtyLaunch(options: DetachedPtyLaunchOptions, os: OsPlatfor
       envVars: buildPtyEnvVars(options.envVars ?? null, resolvedShell),
       shell: resolvedShell,
       hookEnvEnabled: await shouldEnableHookEnv(),
-      claudeProvider: getClaudeProviderLaunchConfig(options.projectId, options.worktreeId),
-      codexProvider: getCodexProviderLaunchConfig(options.projectId, options.startupCmd, options.worktreeId),
       terminalColors: getCurrentTerminalColors(),
       sshLaunch: null,
     },
@@ -1711,51 +1657,6 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
 
     const os = await getOsPlatform();
     let resumeProject = project;
-    let providerProject = project;
-    let codexProvider: ReturnType<typeof getCodexProviderLaunchConfig> = null;
-    const recordedProviderId = lockedSession.remoteHandoff.providerId?.trim() || null;
-    if (!sshHandoff) {
-      providerProject = resolveProjectForProviderLaunch(
-        project,
-        projectState.worktrees,
-        lockedSession.worktreeId
-      );
-      resumeProject = providerProject;
-      codexProvider = getCodexProviderLaunchConfig(
-        lockedSession.projectId,
-        lockedSession.startupCmd,
-        lockedSession.worktreeId
-      );
-    }
-    if (!sshHandoff && recordedProviderId) {
-      const settings = useSettingsStore.getState();
-      const prepared = await invoke<CodexProviderProfileResponse>(
-        "ccswitch_prepare_codex_provider",
-        {
-          providerId: recordedProviderId,
-          dbPath: settings.ccSwitchDbPath ?? undefined,
-          codexConfigDir: settings.codexHookConfigDir ?? undefined,
-        }
-      );
-      if (prepared.providerId.trim() !== recordedProviderId) {
-        throw new Error("remote_handoff_provider_mismatch");
-      }
-      resumeProject = {
-        ...providerProject,
-        startup_cmd: "",
-        cli_args: providerProject.startup_cmd.trim() ? "" : providerProject.cli_args,
-        provider_overrides: withCodexProviderOverride(providerProject.provider_overrides, {
-          providerId: prepared.providerId,
-          providerName: prepared.providerName,
-          profileName: prepared.profileName,
-        }),
-      };
-      codexProvider = {
-        providerId: recordedProviderId,
-        dbPath: settings.ccSwitchDbPath ?? undefined,
-        codexConfigDir: settings.codexHookConfigDir ?? undefined,
-      };
-    }
     const resumeCommand = buildCliResumeStartupCommand(
       "codex",
       lockedSession.remoteHandoff.cliSessionId || lockedSession.cliSessionId,
@@ -1784,8 +1685,6 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
               envVars: buildPtyEnvVars(lockedSession.envVars ?? null, resolvedShell),
               shell: resolvedShell,
               hookEnvEnabled: false,
-              claudeProvider: null,
-              codexProvider,
               terminalColors: getCurrentTerminalColors(),
               sshLaunch: null,
             },

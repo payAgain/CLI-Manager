@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import {
   Terminal,
-  type IBufferLine,
   type IBufferRange,
   type IDisposable,
   type ILink,
@@ -46,7 +45,6 @@ import { useTerminalContextMenu } from "../hooks/useTerminalContextMenu";
 import { useTerminalOsc } from "../hooks/useTerminalOsc";
 import { useTerminalDisplay } from "../hooks/useTerminalDisplay";
 import { useTerminalInput } from "../hooks/useTerminalInput";
-import { getTerminalCellWidth } from "../lib/terminalCellWidth";
 import { copyTextToClipboard } from "../lib/systemClipboard";
 import { hasCodexTuiViewport } from "../lib/terminalTuiDisplay";
 import { createTerminalTuiColorSyncController } from "../lib/terminalTuiColorSync";
@@ -243,29 +241,6 @@ const createTerminalLinkHoverIcon = (
   };
 };
 
-const lineHasVisibleTextAfterColumn = (line: IBufferLine, column: number, cols: number) => {
-  const width = Math.min(cols, line.length);
-  for (let index = Math.max(0, column); index < width; index += 1) {
-    if (line.getCell(index)?.getChars().trim()) return true;
-  }
-  return false;
-};
-
-const canShowSuggestionAtCurrentInputEnd = (terminal: Terminal, input: string) => {
-  const inputCellWidth = getTerminalCellWidth(input);
-  if (inputCellWidth <= 0) return false;
-
-  const buffer = terminal.buffer.active;
-  if (buffer.cursorX < inputCellWidth) return false;
-
-  const line = buffer.getLine(buffer.baseY + buffer.cursorY);
-  if (!line) return false;
-
-  if (lineHasVisibleTextAfterColumn(line, buffer.cursorX, terminal.cols)) return false;
-
-  const beforeCursor = line.translateToString(false, 0, Math.min(buffer.cursorX, line.length));
-  return beforeCursor.endsWith(input);
-};
 
 // When search is active, SearchAddon calls terminal.select() on each match to
 // position it. A visible selection color would then cover the yellow match
@@ -589,15 +564,6 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
     getTerminalRenderedCellSize,
     getOsPlatformForPathQuoting,
   });
-
-  useEffect(() => {
-    if (terminalInputSuggestionsEnabled && !searchOpen) return;
-    clearSuggestionGhost();
-  }, [searchOpen, terminalInputSuggestionsEnabled]);
-
-  useEffect(() => {
-    clearSuggestionGhost();
-  }, [terminalInputSuggestionProvider]);
 
   useEffect(() => () => {
     markdownPreviewDragCleanupRef.current?.();

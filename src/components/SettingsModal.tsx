@@ -1,22 +1,14 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import {
   ClipboardList,
-  Coins,
   Code2,
   History,
   Info,
   Keyboard,
   PanelLeft,
-  PawPrint,
-  RadioTower,
-  Server,
-  RefreshCw,
-  ServerCog,
   Settings2,
-  Sparkles,
   Terminal,
   Webhook,
-  PanelsTopLeft,
   type LucideIcon,
 } from "lucide-react";
 import "@mantine/core/styles.css";
@@ -29,16 +21,9 @@ import { SidebarSettingsPage } from "./settings/pages/SidebarSettingsPage";
 import { ThemeSettingsPage } from "./settings/pages/ThemeSettingsPage";
 import { ShortcutSettingsPage } from "./settings/pages/ShortcutSettingsPage";
 import { TemplateSettingsPage } from "./settings/pages/TemplateSettingsPage";
-import { SyncSettingsPage } from "./settings/pages/SyncSettingsPage";
 import { HistorySourceSettingsPage } from "./settings/pages/HistorySourceSettingsPage";
 import { HookSettingsPage } from "./settings/pages/HookSettingsPage";
-import { StatuslineSettingsPage } from "./settings/pages/StatuslineSettingsPage";
-import { CommandSuggestionSettingsPage } from "./settings/pages/CommandSuggestionSettingsPage";
-import { ProviderSettingsPage } from "./settings/pages/ProviderSettingsPage";
-import { ModelPricingSettingsPage } from "./settings/pages/ModelPricingSettingsPage";
 import { AboutSettingsPage } from "./settings/pages/AboutSettingsPage";
-import { DesktopPetSettingsPage } from "./settings/pages/DesktopPetSettingsPage";
-import { CcConnectSettingsPage } from "./settings/pages/CcConnectSettingsPage";
 import { SshHostsSettingsPage } from "./settings/pages/SshHostsSettingsPage";
 import { useSettingsStore } from "../stores/settingsStore";
 import { useI18n, type TranslationKey } from "../lib/i18n";
@@ -46,21 +31,14 @@ import { normalizeFontFamilyStack } from "../lib/systemFonts";
 
 export type SettingsTab =
   | "general"
-  | "desktop-pet"
   | "developer"
   | "sidebar"
   | "terminal-theme"
   | "shortcuts"
   | "templates"
-  | "providers"
-  | "model-pricing"
-  | "cc-connect"
   | "ssh-hosts"
-  | "sync"
   | "history-sources"
   | "hooks"
-  | "statusline"
-  | "command-suggestions"
   | "about";
 
 interface SettingsTabConfig {
@@ -76,17 +54,10 @@ const SETTINGS_TAB_ORDER: SettingsTab[] = [
   "terminal-theme",
   "shortcuts",
   "templates",
-  "providers",
-  "model-pricing",
-  "cc-connect",
   "ssh-hosts",
-  "sync",
   "history-sources",
   "hooks",
-  "statusline",
-  "command-suggestions",
   "sidebar",
-  "desktop-pet",
   "developer",
   "about",
 ];
@@ -97,12 +68,6 @@ const SETTINGS_TAB_CONFIG: Record<SettingsTab, SettingsTabConfig> = {
     title: "settings.tabs.general.title",
     description: "settings.tabs.general.description",
     icon: Settings2,
-  },
-  "desktop-pet": {
-    label: "settings.tabs.desktopPet.label",
-    title: "settings.tabs.desktopPet.title",
-    description: "settings.tabs.desktopPet.description",
-    icon: PawPrint,
   },
   developer: {
     label: "settings.tabs.developer.label",
@@ -136,38 +101,12 @@ const SETTINGS_TAB_CONFIG: Record<SettingsTab, SettingsTabConfig> = {
     icon: ClipboardList,
     searchPlaceholder: "settings.tabs.templates.search",
   },
-  providers: {
-    label: "settings.tabs.providers.label",
-    title: "settings.tabs.providers.title",
-    description: "settings.tabs.providers.description",
-    icon: ServerCog,
-    searchPlaceholder: "settings.tabs.providers.search",
-  },
-  "model-pricing": {
-    label: "settings.tabs.modelPricing.label",
-    title: "settings.tabs.modelPricing.title",
-    description: "settings.tabs.modelPricing.description",
-    icon: Coins,
-    searchPlaceholder: "settings.tabs.modelPricing.search",
-  },
-  "cc-connect": {
-    label: "settings.tabs.ccConnect.label",
-    title: "settings.tabs.ccConnect.title",
-    description: "settings.tabs.ccConnect.description",
-    icon: RadioTower,
-  },
   "ssh-hosts": {
     label: "settings.tabs.sshHosts.label",
     title: "settings.tabs.sshHosts.title",
     description: "settings.tabs.sshHosts.description",
-    icon: Server,
+    icon: Terminal,
     searchPlaceholder: "settings.tabs.sshHosts.search",
-  },
-  sync: {
-    label: "settings.tabs.sync.label",
-    title: "settings.tabs.sync.title",
-    description: "settings.tabs.sync.description",
-    icon: RefreshCw,
   },
   "history-sources": {
     label: "settings.tabs.historySources.label",
@@ -180,19 +119,6 @@ const SETTINGS_TAB_CONFIG: Record<SettingsTab, SettingsTabConfig> = {
     title: "settings.tabs.hooks.title",
     description: "settings.tabs.hooks.description",
     icon: Webhook,
-  },
-  statusline: {
-    label: "settings.tabs.statusline.label",
-    title: "settings.tabs.statusline.title",
-    description: "settings.tabs.statusline.description",
-    icon: PanelsTopLeft,
-    searchPlaceholder: "settings.tabs.statusline.search",
-  },
-  "command-suggestions": {
-    label: "settings.tabs.commandSuggestions.label",
-    title: "settings.tabs.commandSuggestions.title",
-    description: "settings.tabs.commandSuggestions.description",
-    icon: Sparkles,
   },
   about: {
     label: "settings.tabs.about.label",
@@ -278,21 +204,14 @@ export function SettingsModal({ open, onClose, onAfterClose, initialTab, onActiv
   const activeConfig = SETTINGS_TAB_CONFIG[activeTab];
   const activeContent = (() => {
     if (activeTab === "general") return <GeneralSettingsPage />;
-    if (activeTab === "desktop-pet") return <DesktopPetSettingsPage />;
     if (activeTab === "developer") return <DeveloperSettingsPage />;
     if (activeTab === "sidebar") return <SidebarSettingsPage />;
     if (activeTab === "terminal-theme") return <ThemeSettingsPage />;
     if (activeTab === "shortcuts") return <ShortcutSettingsPage searchValue={searchValue} />;
     if (activeTab === "templates") return <TemplateSettingsPage searchValue={searchValue} />;
-    if (activeTab === "providers") return <ProviderSettingsPage searchValue={searchValue} />;
-    if (activeTab === "model-pricing") return <ModelPricingSettingsPage searchValue={searchValue} />;
-    if (activeTab === "cc-connect") return <CcConnectSettingsPage />;
     if (activeTab === "ssh-hosts") return <SshHostsSettingsPage searchValue={searchValue} onTerminalOpened={onClose} />;
-    if (activeTab === "sync") return <SyncSettingsPage />;
     if (activeTab === "history-sources") return <HistorySourceSettingsPage />;
     if (activeTab === "hooks") return <HookSettingsPage />;
-    if (activeTab === "statusline") return <StatuslineSettingsPage searchValue={searchValue} />;
-    if (activeTab === "command-suggestions") return <CommandSuggestionSettingsPage />;
     if (activeTab === "about") return <AboutSettingsPage />;
     return null;
   })();

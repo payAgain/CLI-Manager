@@ -26,7 +26,6 @@ import {
   registerTerminalDropZone,
   updateTerminalFileDragPointFromEvent,
 } from "../lib/terminalFileDrag";
-import { resolveSubmittedDirectoryChange, } from "../lib/terminalInputSuggestions";
 import { resolveManualDirectCodexEnterData } from "../lib/codexManualInput";
 import { getTerminalCellWidth, resolveCursorIndexFromCellOffset } from "../lib/terminalCellWidth";
 import { trimTerminalPasteBoundaryLineBreaks } from "../lib/terminalKeyboard";
@@ -51,7 +50,6 @@ import { defaultShellForOs } from "../lib/shell";
 import { sshRemoteAttachFiles } from "../lib/sshRemoteFiles";
 import type { OsPlatform } from "../lib/shell";
 import { formatShellPathList, normalizeShellForKnownOs } from "../lib/terminalShellPath";
-import type { TerminalSession } from "../lib/types";
 import { useProjectStore } from "../stores/projectStore";
 import { useSettingsStore } from "../stores/settingsStore";
 import { terminalProcessManager } from "../terminal/core/TerminalProcessManager";
@@ -178,15 +176,11 @@ export function useTerminalInput({
 
   const updateInputBufferFromTerminalData = (
     data: string,
-    updateSessionCwdIfChanged: (cwd: string | null) => void,
+    _updateSessionCwdIfChanged: (cwd: string | null) => void,
   ) => {
     if (data === "\r") {
       const command = inputBufferRef.current;
       if (command.trim()) {
-        const submittedCwd = useTerminalStore.getState().sessions.find((item) => item.id === sessionId)?.cwd ?? null;
-        void resolveSubmittedDirectoryChange(command, submittedCwd)
-          .then((cwd) => updateSessionCwdIfChanged(cwd))
-          .catch(() => {});
         useTerminalStore.getState().handleShellRuntimeEvent({
           sessionId,
           event: "command_started",
@@ -263,9 +257,6 @@ export function useTerminalInput({
       clearKeyboardInputSelection();
       clearSelectedInputSnapshot();
     };
-    const clearSuggestion = () => clearSuggestionRef.current();
-    const cancelAiSuggestionRefresh = () => cancelAiSuggestionRefreshRef.current();
-
     // Ctrl+U only deletes before the cursor, so move to the tracked input end first.
     const buildKillCurrentInputSequence = () => {
       const currentInput = inputBufferRef.current;
@@ -293,8 +284,6 @@ export function useTerminalInput({
       terminal.clearSelection();
       clearInputSelectionState();
       markAttentionInputHandled();
-      clearSuggestion();
-      cancelAiSuggestionRefresh();
       terminalProcessManager.write(sessionId, killCurrentInput + nextInput + cursorRestore)
         .catch((err) => reportPtyWriteError(stage, err));
     };
@@ -471,8 +460,6 @@ export function useTerminalInput({
       clearSelectedInputSnapshot();
       inputCursorIndexRef.current = targetCursorIndex;
       renderKeyboardInputSelection(currentInput, nextSelection);
-      clearSuggestion();
-      cancelAiSuggestionRefresh();
       markAttentionInputHandled();
       terminalProcessManager.write(sessionId, direction < 0 ? "\x1b[D" : "\x1b[C")
         .catch((err) => reportPtyWriteError("keyboard_selection", err));
@@ -497,8 +484,6 @@ export function useTerminalInput({
       clearInputSelectionState();
       inputCursorIndexRef.current = targetCursorIndex;
       terminal.clearSelection();
-      clearSuggestion();
-      cancelAiSuggestionRefresh();
       markAttentionInputHandled();
       if (data) {
         terminalProcessManager.write(sessionId, data)
@@ -746,8 +731,8 @@ export function useTerminalInput({
       fontSize,
       getTerminalRenderedCellSize,
       forwardNativeInput: (data) => forwarding.forwardTerminalInput(data, "nativeTextInput"),
-      clearSuggestion: () => clearSuggestionRef.current(),
-      updateSuggestionPosition: () => updateSuggestionGhostPositionRef.current(),
+      clearSuggestion: () => {},
+      updateSuggestionPosition: () => {},
       scheduleFit,
       onCompositionCommitted,
       resolveCompositionAnchor,
@@ -1035,8 +1020,7 @@ export function useTerminalInput({
     isComposingRef,
     attachInputForwarding,
     attachIme,
-    onCommandSubmitted: (command) => {
-    },
+    onCommandSubmitted: () => {},
     attachPasteAndDrop,
     pasteText,
     readClipboardPasteText,

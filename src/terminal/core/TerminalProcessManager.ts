@@ -13,17 +13,7 @@ const OUTPUT_BACKLOG_RECOVERY_BYTES = OUTPUT_BACKLOG_WARN_BYTES / 2;
 const OUTPUT_BACKLOG_RECOVERY_FRAMES = OUTPUT_BACKLOG_WARN_FRAMES / 2;
 const DIAGNOSTIC_SESSION_LIMIT = 5;
 
-export interface TerminalClaudeProviderLaunchConfig {
-  projectId: string;
-  providerId: string;
-  dbPath?: string;
-}
 
-export interface TerminalCodexProviderLaunchConfig {
-  providerId: string;
-  dbPath?: string;
-  codexConfigDir?: string;
-}
 
 export interface TerminalColors {
   foreground: string;
@@ -35,8 +25,6 @@ export interface TerminalCreateRequest extends Record<string, unknown> {
   envVars: Record<string, string> | null;
   shell: string | null;
   hookEnvEnabled: boolean;
-  claudeProvider: TerminalClaudeProviderLaunchConfig | null;
-  codexProvider: TerminalCodexProviderLaunchConfig | null;
   sshLaunch: unknown | null;
   terminalColors: TerminalColors;
 }

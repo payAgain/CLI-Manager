@@ -18,9 +18,6 @@ fn main() {
         let event = arg_value(&args, "--event").unwrap_or_else(|| "Notification".to_string());
         cli_manager_lib::hook_client::run_and_exit(&source, &event);
     }
-    if args.get(1).map(String::as_str) == Some("__statusline") {
-        cli_manager_lib::statusline::run_and_exit();
-    }
     if args.get(1).map(String::as_str) == Some("__daemon") {
         cli_manager_lib::run_daemon_and_exit();
     }

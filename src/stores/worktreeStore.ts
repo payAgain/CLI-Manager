@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { create } from "zustand";
 import { getDb } from "../lib/db";
 import { logWarn } from "../lib/logger";
-import { hasConfiguredCliTool } from "../lib/providerSwitching";
+import { hasConfiguredCliTool } from "../lib/projectCli";
 import { projectSupportsCapability } from "../lib/projectCapabilities";
 import type { Project, TerminalSession, WorktreeIsolationStrategy, WorktreeRecord } from "../lib/types";
 import { useProjectStore } from "./projectStore";
@@ -61,7 +61,6 @@ interface WorktreeStore {
     sessions: TerminalSession[]
   ) => WorktreeIsolationDecision;
   validateProjectGit: (project: Project) => Promise<boolean>;
-  updateWorktreeProviderOverrides: (worktreeId: string, providerOverrides: string) => Promise<void>;
   checkDeps: (worktree: WorktreeRecord) => Promise<GitWorktreeDepsCheckResult>;
   dismissDepsPrompt: (worktreeId: string) => Promise<void>;
   mergeWorktree: (worktree: WorktreeRecord) => Promise<GitWorktreeMergeResult>;
@@ -267,25 +266,6 @@ export const useWorktreeStore = create<WorktreeStore>((set, get) => ({
       },
     }));
     return valid;
-  },
-
-  updateWorktreeProviderOverrides: async (worktreeId, providerOverrides) => {
-    const db = await getDb();
-    const ts = Date.now().toString();
-    await db.execute("UPDATE worktrees SET provider_overrides = $1, updated_at = $2 WHERE id = $3", [
-      providerOverrides,
-      ts,
-      worktreeId,
-    ]);
-    set((state) => ({
-      worktrees: state.worktrees.map((worktree) =>
-        worktree.id === worktreeId
-          ? { ...worktree, provider_overrides: providerOverrides, updated_at: ts }
-          : worktree
-      ),
-    }));
-    await useProjectStore.getState().fetchAll("interactive");
-    await useProjectStore.getState().cleanupUnusedCodexProfiles();
   },
 
   checkDeps: async (worktree) => {

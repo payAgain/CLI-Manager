@@ -7,15 +7,6 @@ import { defaultShellForOs, getOsPlatform, isWindowsOnlyShellKey } from "../lib/
 import { getCliManagerDataPaths } from "../lib/appPaths";
 import { singleFlight } from "../lib/singleFlight";
 import {
-  DEFAULT_TERMINAL_INPUT_SUGGESTION_USAGE,
-  TERMINAL_INPUT_SUGGESTION_AI_MODEL,
-  mergeTerminalInputSuggestionUsage,
-  type TerminalInputSuggestionAiAttempt,
-  type TerminalInputSuggestionModelTestResult,
-  type TerminalInputSuggestionProvider,
-  type TerminalInputSuggestionUsageStats,
-} from "../lib/terminalInputSuggestions";
-import {
   migrateTerminalShellProfiles,
   type TerminalShellProfile,
 } from "../lib/terminalShellProfiles";
@@ -75,17 +66,10 @@ type LastSettingsTab =
   | "terminal-theme"
   | "shortcuts"
   | "templates"
-  | "providers"
-  | "model-pricing"
-  | "cc-connect"
   | "ssh-hosts"
-  | "sync"
   | "history-sources"
   | "hooks"
-  | "statusline"
-  | "command-suggestions"
   | "about";
-export type StatuslineEditorSource = "claude" | "codex";
 export type TerminalSidePanelSkin = "terminal" | "classic-terminal" | "warm-paper" | "sunrise" | "linen" | "latte";
 export type TerminalStatsCardKey =
   | "session"
@@ -174,6 +158,7 @@ export type UnsplitBehavior = "merge" | "close";
 export type FileExplorerIgnoredPaths = Record<string, string[]>;
 export type LanguagePreference = "auto" | "zh-CN" | "zh-TW" | "en-US";
 export type BatchLaunchPaneDirection = "vertical" | "horizontal";
+
 export type HookEventType =
   | "SessionStart"
   | "UserPromptSubmit"
@@ -309,7 +294,6 @@ export interface Settings {
   uiFontSize: number;
   uiTextColor: string;
   lastSettingsTab: LastSettingsTab;
-  statuslineEditorSource: StatuslineEditorSource;
   defaultShell: string;
   sidebarWidth: number;
   historySidebarWidth: number;
@@ -360,16 +344,6 @@ export interface Settings {
   /** 终端设置页各可折叠区块的展开状态记忆。 */
   terminalSettingsSectionsExpanded: TerminalSettingsSectionsExpanded;
   terminalPaneMarker: TerminalPaneMarkerSettings;
-  terminalInputSuggestionsEnabled: boolean;
-  terminalInputSuggestionProvider: TerminalInputSuggestionProvider;
-  terminalInputSuggestionLlmEnabled: boolean;
-  terminalInputSuggestionBaseUrl: string;
-  terminalInputSuggestionApiKey: string;
-  terminalInputSuggestionModel: string;
-  terminalInputSuggestionUseBuiltinPrompt: boolean;
-  terminalInputSuggestionCustomPrompt: string;
-  terminalInputSuggestionUsage: TerminalInputSuggestionUsageStats;
-  terminalInputSuggestionLastTest: TerminalInputSuggestionModelTestResult | null;
   cliArgsHistory: CliArgsHistoryEntry[];
   hookPopupNotificationsEnabled: boolean;
   hookPopupAutoCloseEnabled: boolean;
@@ -389,18 +363,12 @@ export interface Settings {
   hookSettingsSectionsExpanded: HookSettingsSectionsExpanded;
   thirdPartyHookNotificationsEnabled: boolean;
   thirdPartyHookTargets: ThirdPartyHookTarget[];
-  remoteHandoffNotificationsEnabled: boolean;
-  remoteHandoffCompletionNotificationsEnabled: boolean;
-  remoteHandoffPermissionNotificationsEnabled: boolean;
-  remoteHandoffProgressNotificationsEnabled: boolean;
-  remoteHandoffProgressIntervalMinutes: number;
   claudeHookConfigDir: string | null;
   claudeHookAutoRepairKnownInstalled: boolean;
   claudeHookAutoRepairNoticeShown: boolean;
   codexHookConfigDir: string | null;
   piHookConfigDir: string | null;
   grokHookConfigDir: string | null;
-  /** cc-switch 数据库路径；null 表示使用默认路径 ~/.cc-switch/cc-switch.db */
   ccSwitchDbPath: string | null;
   /** Git 变更树分组模式：directory（按目录树） / module（按顶层目录模块） */
   gitGroupBy: "directory" | "module";
@@ -432,7 +400,6 @@ interface SettingsStore extends Settings {
   terminalBackgroundMissing: boolean;
   load: () => Promise<void>;
   update: <K extends keyof Settings>(key: K, value: Settings[K]) => Promise<void>;
-  recordTerminalInputSuggestionUsage: (event: TerminalInputSuggestionAiAttempt | { accepted: true }) => void;
   recordCliArgsHistory: (cliTool: string, cliArgs: string) => Promise<void>;
   setTheme: (mode: ThemeMode) => Promise<void>;
   setTerminalThemeMode: (mode: TerminalThemeMode) => Promise<void>;
@@ -457,7 +424,6 @@ const DEFAULTS: Settings = {
   uiFontSize: UI_FONT_SIZE_DEFAULT,
   uiTextColor: "",
   lastSettingsTab: "general",
-  statuslineEditorSource: "claude",
   defaultShell: "powershell.exe",
   sidebarWidth: 248,
   historySidebarWidth: 276,
@@ -542,16 +508,6 @@ const DEFAULTS: Settings = {
   terminalShellProfiles: [],
   terminalSettingsSectionsExpanded: { ...TERMINAL_SETTINGS_SECTIONS_EXPANDED_DEFAULT },
   terminalPaneMarker: { ...DEFAULT_TERMINAL_PANE_MARKER_SETTINGS },
-  terminalInputSuggestionsEnabled: true,
-  terminalInputSuggestionProvider: "local",
-  terminalInputSuggestionLlmEnabled: false,
-  terminalInputSuggestionBaseUrl: "",
-  terminalInputSuggestionApiKey: "",
-  terminalInputSuggestionModel: TERMINAL_INPUT_SUGGESTION_AI_MODEL,
-  terminalInputSuggestionUseBuiltinPrompt: true,
-  terminalInputSuggestionCustomPrompt: "",
-  terminalInputSuggestionUsage: { ...DEFAULT_TERMINAL_INPUT_SUGGESTION_USAGE },
-  terminalInputSuggestionLastTest: null,
   cliArgsHistory: [],
   hookPopupNotificationsEnabled: true,
   hookPopupAutoCloseEnabled: true,
@@ -577,11 +533,6 @@ const DEFAULTS: Settings = {
   hookSettingsSectionsExpanded: { ...HOOK_SETTINGS_SECTIONS_EXPANDED_DEFAULT },
   thirdPartyHookNotificationsEnabled: true,
   thirdPartyHookTargets: [],
-  remoteHandoffNotificationsEnabled: true,
-  remoteHandoffCompletionNotificationsEnabled: true,
-  remoteHandoffPermissionNotificationsEnabled: true,
-  remoteHandoffProgressNotificationsEnabled: true,
-  remoteHandoffProgressIntervalMinutes: 5,
   claudeHookConfigDir: null,
   claudeHookAutoRepairKnownInstalled: false,
   claudeHookAutoRepairNoticeShown: false,
@@ -620,21 +571,14 @@ const LEGACY_TERMINAL_THEME_MAP: Partial<Record<string, string>> = {
 
 const LAST_SETTINGS_TABS: readonly LastSettingsTab[] = [
   "general",
-  "desktop-pet",
   "developer",
   "sidebar",
   "terminal-theme",
   "shortcuts",
   "templates",
-  "providers",
-  "model-pricing",
-  "cc-connect",
   "ssh-hosts",
-  "sync",
   "history-sources",
   "hooks",
-  "statusline",
-  "command-suggestions",
   "about",
 ];
 
@@ -915,72 +859,6 @@ function migrateFileExplorerIgnoredPaths(value: unknown): FileExplorerIgnoredPat
   return result;
 }
 
-function migrateTerminalInputSuggestionProvider(value: unknown): TerminalInputSuggestionProvider {
-  return value === "local" || value === "ai" ? value : DEFAULTS.terminalInputSuggestionProvider;
-}
-
-function migrateTerminalInputSuggestionUsage(value: unknown): TerminalInputSuggestionUsageStats {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    return { ...DEFAULT_TERMINAL_INPUT_SUGGESTION_USAGE };
-  }
-  const raw = value as Record<string, unknown>;
-  return {
-    requestCount: clampNumber(raw.requestCount, 0, Number.MAX_SAFE_INTEGER, 0),
-    successCount: clampNumber(raw.successCount, 0, Number.MAX_SAFE_INTEGER, 0),
-    failureCount: clampNumber(raw.failureCount, 0, Number.MAX_SAFE_INTEGER, 0),
-    fallbackCount: clampNumber(raw.fallbackCount, 0, Number.MAX_SAFE_INTEGER, 0),
-    acceptedCount: clampNumber(raw.acceptedCount, 0, Number.MAX_SAFE_INTEGER, 0),
-    totalResponseTimeMs: clampNumber(raw.totalResponseTimeMs, 0, Number.MAX_SAFE_INTEGER, 0),
-    totalInputTokens: clampNumber(raw.totalInputTokens, 0, Number.MAX_SAFE_INTEGER, 0),
-    totalOutputTokens: clampNumber(raw.totalOutputTokens, 0, Number.MAX_SAFE_INTEGER, 0),
-    totalTokens: clampNumber(raw.totalTokens, 0, Number.MAX_SAFE_INTEGER, 0),
-    lastStatus:
-      raw.lastStatus === "operational" ||
-      raw.lastStatus === "degraded" ||
-      raw.lastStatus === "failed" ||
-      raw.lastStatus === "fallback"
-        ? raw.lastStatus
-        : null,
-    lastMessage: typeof raw.lastMessage === "string" ? raw.lastMessage : null,
-    lastResponseTimeMs:
-      typeof raw.lastResponseTimeMs === "number" && Number.isFinite(raw.lastResponseTimeMs)
-        ? Math.max(0, raw.lastResponseTimeMs)
-        : null,
-    lastUsedAt:
-      typeof raw.lastUsedAt === "number" && Number.isFinite(raw.lastUsedAt)
-        ? Math.max(0, raw.lastUsedAt)
-        : null,
-    lastAcceptedAt:
-      typeof raw.lastAcceptedAt === "number" && Number.isFinite(raw.lastAcceptedAt)
-        ? Math.max(0, raw.lastAcceptedAt)
-        : null,
-  };
-}
-
-function migrateTerminalInputSuggestionLastTest(value: unknown): TerminalInputSuggestionModelTestResult | null {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
-  const raw = value as Record<string, unknown>;
-  if (raw.status !== "operational" && raw.status !== "degraded" && raw.status !== "failed") return null;
-  if (typeof raw.success !== "boolean" || typeof raw.message !== "string") return null;
-  return {
-    status: raw.status,
-    success: raw.success,
-    message: raw.message,
-    responseTimeMs:
-      typeof raw.responseTimeMs === "number" && Number.isFinite(raw.responseTimeMs)
-        ? Math.max(0, raw.responseTimeMs)
-        : undefined,
-    httpStatus:
-      typeof raw.httpStatus === "number" && Number.isFinite(raw.httpStatus)
-        ? Math.max(0, Math.round(raw.httpStatus))
-        : undefined,
-    testedAt:
-      typeof raw.testedAt === "number" && Number.isFinite(raw.testedAt)
-        ? Math.max(0, raw.testedAt)
-        : Math.floor(Date.now() / 1000),
-  };
-}
-
 export function migrateTerminalBackground(value: unknown): TerminalBackgroundSettings {
   const defaults = DEFAULTS.terminalBackground;
   if (typeof value !== "object" || value === null) {
@@ -1018,8 +896,6 @@ export function migrateTerminalBackground(value: unknown): TerminalBackgroundSet
 }
 
 let store: Store | null = null;
-const TERMINAL_INPUT_SUGGESTION_USAGE_SAVE_DELAY_MS = 800;
-let terminalInputSuggestionUsageSaveTimer: number | null = null;
 
 async function getStore() {
   if (!store) {
@@ -1287,43 +1163,6 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
     entries.linuxGraphicsMode = LINUX_GRAPHICS_MODES.includes(entries.linuxGraphicsMode as LinuxGraphicsMode)
       ? entries.linuxGraphicsMode as LinuxGraphicsMode
       : DEFAULTS.linuxGraphicsMode;
-    entries.terminalInputSuggestionsEnabled =
-      typeof entries.terminalInputSuggestionsEnabled === "boolean"
-        ? entries.terminalInputSuggestionsEnabled
-        : DEFAULTS.terminalInputSuggestionsEnabled;
-    const storedTerminalInputSuggestionProvider = entries.terminalInputSuggestionProvider;
-    const storedTerminalInputSuggestionLlmEnabled = entries.terminalInputSuggestionLlmEnabled;
-    entries.terminalInputSuggestionProvider = "local";
-    entries.terminalInputSuggestionLlmEnabled = false;
-    if (
-      migrateTerminalInputSuggestionProvider(storedTerminalInputSuggestionProvider) !== "local" ||
-      storedTerminalInputSuggestionLlmEnabled === true
-    ) {
-      persistSetting("terminalInputSuggestionProvider", "local");
-      persistSetting("terminalInputSuggestionLlmEnabled", false);
-    }
-    entries.terminalInputSuggestionBaseUrl =
-      typeof entries.terminalInputSuggestionBaseUrl === "string"
-        ? entries.terminalInputSuggestionBaseUrl
-        : DEFAULTS.terminalInputSuggestionBaseUrl;
-    entries.terminalInputSuggestionApiKey =
-      typeof entries.terminalInputSuggestionApiKey === "string"
-        ? entries.terminalInputSuggestionApiKey
-        : DEFAULTS.terminalInputSuggestionApiKey;
-    entries.terminalInputSuggestionModel =
-      typeof entries.terminalInputSuggestionModel === "string" && entries.terminalInputSuggestionModel.trim()
-        ? entries.terminalInputSuggestionModel
-        : DEFAULTS.terminalInputSuggestionModel;
-    entries.terminalInputSuggestionUseBuiltinPrompt =
-      typeof entries.terminalInputSuggestionUseBuiltinPrompt === "boolean"
-        ? entries.terminalInputSuggestionUseBuiltinPrompt
-        : DEFAULTS.terminalInputSuggestionUseBuiltinPrompt;
-    entries.terminalInputSuggestionCustomPrompt =
-      typeof entries.terminalInputSuggestionCustomPrompt === "string"
-        ? entries.terminalInputSuggestionCustomPrompt
-        : DEFAULTS.terminalInputSuggestionCustomPrompt;
-    entries.terminalInputSuggestionUsage = migrateTerminalInputSuggestionUsage(entries.terminalInputSuggestionUsage);
-    entries.terminalInputSuggestionLastTest = migrateTerminalInputSuggestionLastTest(entries.terminalInputSuggestionLastTest);
     entries.cliArgsHistory = normalizeCliArgsHistory(entries.cliArgsHistory);
 
     entries.hookPopupNotificationsEnabled =
@@ -1381,27 +1220,6 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
         ? entries.thirdPartyHookNotificationsEnabled
         : DEFAULTS.thirdPartyHookNotificationsEnabled;
     entries.thirdPartyHookTargets = sanitizeThirdPartyHookTargets(entries.thirdPartyHookTargets);
-    entries.remoteHandoffNotificationsEnabled =
-      typeof entries.remoteHandoffNotificationsEnabled === "boolean"
-        ? entries.remoteHandoffNotificationsEnabled
-        : DEFAULTS.remoteHandoffNotificationsEnabled;
-    entries.remoteHandoffCompletionNotificationsEnabled =
-      typeof entries.remoteHandoffCompletionNotificationsEnabled === "boolean"
-        ? entries.remoteHandoffCompletionNotificationsEnabled
-        : DEFAULTS.remoteHandoffCompletionNotificationsEnabled;
-    entries.remoteHandoffPermissionNotificationsEnabled =
-      typeof entries.remoteHandoffPermissionNotificationsEnabled === "boolean"
-        ? entries.remoteHandoffPermissionNotificationsEnabled
-        : DEFAULTS.remoteHandoffPermissionNotificationsEnabled;
-    entries.remoteHandoffProgressNotificationsEnabled =
-      typeof entries.remoteHandoffProgressNotificationsEnabled === "boolean"
-        ? entries.remoteHandoffProgressNotificationsEnabled
-        : DEFAULTS.remoteHandoffProgressNotificationsEnabled;
-    entries.remoteHandoffProgressIntervalMinutes =
-      typeof entries.remoteHandoffProgressIntervalMinutes === "number"
-        && Number.isFinite(entries.remoteHandoffProgressIntervalMinutes)
-        ? Math.min(60, Math.max(1, Math.round(entries.remoteHandoffProgressIntervalMinutes)))
-        : DEFAULTS.remoteHandoffProgressIntervalMinutes;
     entries.claudeHookConfigDir =
       typeof entries.claudeHookConfigDir === "string" && entries.claudeHookConfigDir.trim()
         ? entries.claudeHookConfigDir
@@ -1425,10 +1243,6 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
     entries.grokHookConfigDir =
       typeof entries.grokHookConfigDir === "string" && entries.grokHookConfigDir.trim()
         ? entries.grokHookConfigDir
-        : null;
-    entries.ccSwitchDbPath =
-      typeof entries.ccSwitchDbPath === "string" && entries.ccSwitchDbPath.trim()
-        ? entries.ccSwitchDbPath
         : null;
     entries.confirmBeforeClosingTerminalTab =
       typeof entries.confirmBeforeClosingTerminalTab === "boolean"
@@ -1544,20 +1358,6 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
     if (key === "debugMode") {
       void applyDebugMode(value as boolean);
     }
-  },
-
-  recordTerminalInputSuggestionUsage: (event) => {
-    const next = mergeTerminalInputSuggestionUsage(get().terminalInputSuggestionUsage, event);
-    set({ terminalInputSuggestionUsage: next });
-    if (terminalInputSuggestionUsageSaveTimer !== null) {
-      window.clearTimeout(terminalInputSuggestionUsageSaveTimer);
-    }
-    terminalInputSuggestionUsageSaveTimer = window.setTimeout(() => {
-      terminalInputSuggestionUsageSaveTimer = null;
-      void getStore()
-        .then((s) => s.set("terminalInputSuggestionUsage", get().terminalInputSuggestionUsage))
-        .catch(() => {});
-    }, TERMINAL_INPUT_SUGGESTION_USAGE_SAVE_DELAY_MS);
   },
 
   recordCliArgsHistory: async (cliTool, cliArgs) => {
