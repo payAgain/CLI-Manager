@@ -57,11 +57,6 @@ test("explicit enabled state is preserved and invalid values fall back to disabl
   assert.equal(sanitizeTerminalPaneMarkerSettings({ style: "full" }).enabled, false);
 });
 
-test("Pane marker settings participate in preference sync", () => {
-  const syncSettings = readFileSync(new URL("../src/lib/syncSettings.ts", import.meta.url), "utf8");
-  assert.match(syncSettings, /terminalPaneMarker:\s*"preferences"/);
-});
-
 test("Pane marker overlay is anchored inside terminal content instead of the Tab bar", () => {
   const terminalTabs = readFileSync(new URL("../src/components/TerminalTabs.tsx", import.meta.url), "utf8");
   assert.match(

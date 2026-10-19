@@ -1,6 +1,6 @@
 //! PTY 守护进程（Issue #123 Phase 2）。
 //!
-//! 契约见 `.trellis/spec/backend/pty-daemon-contracts.md`：
+//! 生命周期与手动验证见 `docs/pty-daemon-manual.md`：
 //! - UI 进程是客户端，daemon 持有 PTY 会话与 scrollback，应用退出后任务续跑；
 //! - 仅监听 127.0.0.1，首帧 token 鉴权，NDJSON 帧；
 //! - 无会话且无客户端 10 分钟自灭，物理防孤儿（Job Object / 进程组）。

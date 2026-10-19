@@ -1636,209 +1636,7 @@ pub(super) async fn search_sessions(
     Ok(merge_search_results(v2, legacy, max_hits))
 }
 
-fn stats_summary_matches_project_path(
-    summary: &HistorySessionSummary,
-    target_project_path: &str,
-) -> bool {
-    let file_ref = SessionFileRef {
-        source: summary.source.clone(),
-        project_key: summary.project_key.clone(),
-        path: PathBuf::from(&summary.file_path),
-    };
-    session_matches_project_path(&file_ref, target_project_path)
-        || summary
-            .cwd
-            .as_deref()
-            .is_some_and(|cwd| opencode_cwd_matches_project_path(cwd, target_project_path))
-}
 
-pub(super) async fn stats_session_facts(
-    roots: &HistoryRoots,
-    source_filter: Option<&str>,
-    target_project: Option<&str>,
-    target_project_paths: &[String],
-    target_source_instance: Option<&str>,
-) -> Result<Vec<HistoryStatsSessionFact>, String> {
-    let mut conn = open_catalog().await?;
-    stats_session_facts_from_v2(
-        &mut conn,
-        roots,
-        source_filter,
-        target_project,
-        target_project_paths,
-        target_source_instance,
-    )
-    .await
-}
-
-async fn stats_session_facts_from_v2(
-    conn: &mut SqliteConnection,
-    _roots: &HistoryRoots,
-    source_filter: Option<&str>,
-    target_project: Option<&str>,
-    target_project_paths: &[String],
-    target_source_instance: Option<&str>,
-) -> Result<Vec<HistoryStatsSessionFact>, String> {
-    let source_filter = source_filter
-        .map(str::trim)
-        .filter(|value| !value.is_empty() && !value.eq_ignore_ascii_case("all"));
-    let target_project = target_project
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-    let target_source_instance = target_source_instance
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-    let mut sql = String::from(
-        "SELECT hs.id, i.id AS source_instance_id, i.source_id AS source, hs.source_session_id AS session_id,
-                hs.project_key, hs.title,
-                COALESCE(hs.primary_path, hs.database_path, hs.raw_key, hs.source_session_id) AS file_path,
-                hs.cwd, hs.created_at, hs.updated_at, hs.message_count, hs.branch,
-                hs.input_tokens AS session_input_tokens,
-                hs.output_tokens AS session_output_tokens,
-                hs.cache_read_tokens AS session_cache_read_tokens,
-                hs.cache_creation_tokens AS session_cache_creation_tokens,
-                hs.total_cost_usd AS session_total_cost_usd,
-                hs.dominant_model AS session_model,
-                ue.event_index, ue.timestamp_ms, ue.model AS event_model,
-                ue.input_tokens AS event_input_tokens,
-                ue.output_tokens AS event_output_tokens,
-                ue.cache_read_tokens AS event_cache_read_tokens,
-                ue.cache_creation_tokens AS event_cache_creation_tokens,
-                ue.cost_usd AS event_cost_usd
-         FROM history_sessions hs
-         JOIN history_source_instances i ON i.id = hs.source_instance_id
-         LEFT JOIN history_usage_events ue ON ue.session_id = hs.id
-         WHERE i.activation_state = 'active' AND hs.parse_status = 'ok'
-           AND (i.transport_kind <> 'ssh' OR hs.storage_kind = 'remote')",
-    );
-    if target_source_instance.is_some() {
-        sql.push_str(" AND hs.source_instance_id = ?");
-    }
-    if source_filter.is_some() {
-        sql.push_str(" AND i.source_id = ?");
-    }
-    if target_project.is_some() {
-        sql.push_str(" AND hs.project_key = ?");
-    }
-    sql.push_str(" ORDER BY hs.updated_at DESC, hs.id ASC, ue.event_index ASC");
-
-    let mut query = sqlx::query(&sql);
-    if let Some(source_instance_id) = target_source_instance {
-        query = query.bind(source_instance_id);
-    }
-    if let Some(source) = source_filter {
-        query = query.bind(source);
-    }
-    if let Some(project) = target_project {
-        query = query.bind(project);
-    }
-    let rows = query
-        .fetch_all(&mut *conn)
-        .await
-        .map_err(|err| err.to_string())?;
-
-    let mut facts = Vec::new();
-    for row in rows {
-        let summary = HistorySessionSummary {
-            session_id: row.try_get("session_id").map_err(|err| err.to_string())?,
-            source: row.try_get("source").map_err(|err| err.to_string())?,
-            project_key: row.try_get("project_key").map_err(|err| err.to_string())?,
-            title: row.try_get("title").map_err(|err| err.to_string())?,
-            file_path: row.try_get("file_path").map_err(|err| err.to_string())?,
-            cwd: row.try_get("cwd").map_err(|err| err.to_string())?,
-            created_at: row.try_get("created_at").map_err(|err| err.to_string())?,
-            updated_at: row.try_get("updated_at").map_err(|err| err.to_string())?,
-            message_count: row
-                .try_get::<i64, _>("message_count")
-                .map_err(|err| err.to_string())?
-                .max(0) as usize,
-            branch: row.try_get("branch").map_err(|err| err.to_string())?,
-        };
-        if !target_project_paths.is_empty()
-            && !target_project_paths
-                .iter()
-                .any(|project_path| stats_summary_matches_project_path(&summary, project_path))
-        {
-            continue;
-        }
-        let event_index = row
-            .try_get::<Option<i64>, _>("event_index")
-            .map_err(|err| err.to_string())?;
-        let (occurred_at, model, usage) = if event_index.is_some() {
-            let timestamp_ms = row
-                .try_get::<Option<i64>, _>("timestamp_ms")
-                .map_err(|err| err.to_string())?;
-            let model = row
-                .try_get::<Option<String>, _>("event_model")
-                .map_err(|err| err.to_string())?;
-            let usage = UsageStatsScan {
-                input_tokens: row
-                    .try_get::<Option<i64>, _>("event_input_tokens")
-                    .map_err(|err| err.to_string())?
-                    .unwrap_or(0)
-                    .max(0) as u64,
-                output_tokens: row
-                    .try_get::<Option<i64>, _>("event_output_tokens")
-                    .map_err(|err| err.to_string())?
-                    .unwrap_or(0)
-                    .max(0) as u64,
-                cache_read_tokens: row
-                    .try_get::<Option<i64>, _>("event_cache_read_tokens")
-                    .map_err(|err| err.to_string())?
-                    .unwrap_or(0)
-                    .max(0) as u64,
-                cache_creation_tokens: row
-                    .try_get::<Option<i64>, _>("event_cache_creation_tokens")
-                    .map_err(|err| err.to_string())?
-                    .unwrap_or(0)
-                    .max(0) as u64,
-                total_cost_usd: row
-                    .try_get::<Option<f64>, _>("event_cost_usd")
-                    .map_err(|err| err.to_string())?
-                    .unwrap_or(0.0),
-                unpriced_tokens: 0,
-            };
-            (timestamp_ms.unwrap_or(summary.updated_at), model, usage)
-        } else {
-            let model = row
-                .try_get::<Option<String>, _>("session_model")
-                .map_err(|err| err.to_string())?;
-            let usage = UsageStatsScan {
-                input_tokens: row
-                    .try_get::<i64, _>("session_input_tokens")
-                    .map_err(|err| err.to_string())?
-                    .max(0) as u64,
-                output_tokens: row
-                    .try_get::<i64, _>("session_output_tokens")
-                    .map_err(|err| err.to_string())?
-                    .max(0) as u64,
-                cache_read_tokens: row
-                    .try_get::<i64, _>("session_cache_read_tokens")
-                    .map_err(|err| err.to_string())?
-                    .max(0) as u64,
-                cache_creation_tokens: row
-                    .try_get::<i64, _>("session_cache_creation_tokens")
-                    .map_err(|err| err.to_string())?
-                    .max(0) as u64,
-                total_cost_usd: row
-                    .try_get::<f64, _>("session_total_cost_usd")
-                    .map_err(|err| err.to_string())?,
-                unpriced_tokens: 0,
-            };
-            (summary.updated_at, model, usage)
-        };
-        if usage_stats_total_tokens(usage) == 0 {
-            continue;
-        }
-        facts.push(HistoryStatsSessionFact {
-            summary,
-            occurred_at,
-            stats: reprice_usage_stats(model.as_deref(), usage),
-            model,
-        });
-    }
-    Ok(facts)
-}
 
 fn v2_raw_pointer_line_index(raw_pointers_json: Option<String>) -> Option<usize> {
     let raw = raw_pointers_json?;
@@ -1945,7 +1743,6 @@ async fn get_session_detail_from_v2_with_conn(
                 .try_get::<i64, _>("cache_creation_tokens")
                 .map_err(|err| err.to_string())?
                 .max(0) as u64,
-            explicit_cost_usd: None,
         };
         if usage_total_tokens(usage) > 0 {
             token_trend.push(usage_trend_point(
@@ -1967,7 +1764,6 @@ async fn get_session_detail_from_v2_with_conn(
                 output_tokens,
                 cache_read_tokens,
                 cache_creation_tokens,
-                explicit_cost_usd: None,
             },
             dominant_model.clone(),
         ));
@@ -2149,9 +1945,7 @@ async fn get_session_detail_from_v2_with_conn(
             output_tokens,
             cache_read_tokens,
             cache_creation_tokens,
-            total_cost_usd: row
-                .try_get("total_cost_usd")
-                .map_err(|err| err.to_string())?,
+
             dominant_model,
             current_model: row
                 .try_get("current_model")
@@ -3163,7 +2957,7 @@ async fn replace_v2_session(
     .bind(stats.output_tokens as i64)
     .bind(stats.cache_read_tokens as i64)
     .bind(stats.cache_creation_tokens as i64)
-    .bind(stats.total_cost_usd)
+    .bind(0.0_f64)
     .bind(
         if stats.input_tokens > 0
             || stats.output_tokens > 0
@@ -3175,11 +2969,7 @@ async fn replace_v2_session(
             "unknown"
         },
     )
-    .bind(if stats.total_cost_usd > 0.0 {
-        "reported"
-    } else {
-        "unknown"
-    })
+    .bind("unknown")
     .bind(&session_ref.fingerprint_value)
     .bind(&stats.dominant_model)
     .bind(&stats.current_model)
@@ -3236,7 +3026,7 @@ async fn replace_v2_session(
         .bind(event.usage.output_tokens as i64)
         .bind(event.usage.cache_read_tokens as i64)
         .bind(event.usage.cache_creation_tokens as i64)
-        .bind(event.usage.total_cost_usd)
+        .bind(0.0_f64)
         .execute(&mut *tx)
         .await
         .map_err(|err| err.to_string())?;
@@ -3254,7 +3044,7 @@ async fn replace_v2_session(
         .bind(usage.output_tokens as i64)
         .bind(usage.cache_read_tokens as i64)
         .bind(usage.cache_creation_tokens as i64)
-        .bind(usage.total_cost_usd)
+        .bind(0.0_f64)
         .execute(&mut *tx)
         .await
         .map_err(|err| err.to_string())?;
@@ -4748,184 +4538,6 @@ mod tests {
         assert_eq!(hits.len(), 2);
         assert_eq!(hits[0].session_id, "search-v2");
         assert_eq!(hits[1].session_id, "search-legacy");
-    }
-
-    #[tokio::test]
-    async fn stats_session_facts_reads_all_active_v2_sources() {
-        let mut conn = SqliteConnection::connect("sqlite::memory:").await.unwrap();
-        ensure_schema(&mut conn).await.unwrap();
-        let temp_dir = tempfile::TempDir::new().unwrap();
-        let claude_root = temp_dir.path().join(".claude");
-        let roots = HistoryRoots {
-            claude_config_dir: Some(claude_root.clone()),
-            codex_config_dir: None,
-        };
-        let file = claude_root
-            .join("projects")
-            .join("proj")
-            .join("stats-v2.jsonl");
-
-        sqlx::query(
-            "INSERT INTO history_source_instances(
-                id, source_id, environment_kind, environment_key, storage_kind,
-                locations_json, settings_hash, activation_state, created_at, updated_at
-             ) VALUES (
-                'claude-default', 'claude', 'windows', 'windows', 'file',
-                '{}', 'settings', 'active', 1, 1
-             )",
-        )
-        .execute(&mut conn)
-        .await
-        .unwrap();
-        sqlx::query(
-            "INSERT INTO history_source_instances(
-                id, source_id, environment_kind, environment_key, storage_kind,
-                locations_json, settings_hash, activation_state, created_at, updated_at
-             ) VALUES (
-                'gemini-custom', 'gemini', 'windows', 'windows', 'file',
-                '{\"configRoot\":\"D:/custom-gemini\"}', 'gemini-settings', 'active', 1, 1
-             )",
-        )
-        .execute(&mut conn)
-        .await
-        .unwrap();
-        sqlx::query(
-            "INSERT INTO history_source_instances(
-                id, source_id, environment_kind, environment_key, storage_kind,
-                locations_json, settings_hash, activation_state, created_at, updated_at
-             ) VALUES (
-                'codex-stats', 'codex', 'windows', 'windows', 'file',
-                '{}', 'codex-settings', 'active', 1, 1
-             )",
-        )
-        .execute(&mut conn)
-        .await
-        .unwrap();
-        let gemini_result = sqlx::query(
-            "INSERT INTO history_sessions(
-                source_instance_id, source_session_id, storage_kind, primary_path,
-                project_key, cwd, cwd_normalized, title, created_at, updated_at,
-                message_count, input_tokens, output_tokens, cache_read_tokens,
-                cache_creation_tokens, fingerprint_kind, fingerprint_value, parser_version,
-                model_version, parse_status, last_seen_generation, indexed_at
-             ) VALUES (
-                'gemini-custom', 'gemini-v2', 'file', 'D:/custom-gemini/session.json',
-                'gemini-proj', 'D:/work/gemini', 'd:/work/gemini', 'Gemini stats', 10, 30,
-                1, 7, 4, 0, 0, 'file-stat', 'gemini-fp', 1, 1, 'ok', 1, 1
-             )",
-        )
-        .execute(&mut conn)
-        .await
-        .unwrap();
-        sqlx::query(
-            "INSERT INTO history_usage_events(
-                session_id, event_index, timestamp_ms, model, input_tokens,
-                output_tokens, cache_read_tokens, cache_creation_tokens, cost_usd
-             ) VALUES (?1, 0, 2000, 'gemini-2.5-pro', 7, 4, 0, 0, 0)",
-        )
-        .bind(gemini_result.last_insert_rowid())
-        .execute(&mut conn)
-        .await
-        .unwrap();
-        let codex_result = sqlx::query(
-            "INSERT INTO history_sessions(
-                source_instance_id, source_session_id, storage_kind, primary_path,
-                project_key, cwd, cwd_normalized, title, created_at, updated_at,
-                message_count, input_tokens, output_tokens, cache_read_tokens,
-                cache_creation_tokens, fingerprint_kind, fingerprint_value, parser_version,
-                model_version, parse_status, last_seen_generation, indexed_at
-             ) VALUES (
-                'codex-stats', 'codex-v2', 'file', 'D:/codex/session.jsonl',
-                'codex-proj', 'D:/work/codex', 'd:/work/codex', 'Codex stats', 10, 30,
-                1, 9, 2, 3, 0, 'file-stat', 'codex-fp', 1, 1, 'ok', 1, 1
-             )",
-        )
-        .execute(&mut conn)
-        .await
-        .unwrap();
-        sqlx::query(
-            "INSERT INTO history_usage_events(
-                session_id, event_index, timestamp_ms, model, input_tokens,
-                output_tokens, cache_read_tokens, cache_creation_tokens, cost_usd
-             ) VALUES (?1, 0, 2000, 'gpt-5.4', 9, 2, 3, 0, 0)",
-        )
-        .bind(codex_result.last_insert_rowid())
-        .execute(&mut conn)
-        .await
-        .unwrap();
-        let result = sqlx::query(
-            "INSERT INTO history_sessions(
-                source_instance_id, source_session_id, storage_kind, primary_path,
-                project_key, cwd, cwd_normalized, title, created_at, updated_at,
-                message_count, input_tokens, output_tokens, cache_read_tokens,
-                cache_creation_tokens, fingerprint_kind, fingerprint_value, parser_version,
-                model_version, parse_status, last_seen_generation, indexed_at
-             ) VALUES (
-                'claude-default', 'stats-v2', 'file', ?1,
-                'proj', 'C:/work/proj', 'c:/work/proj', 'v2 stats', 10, 30,
-                2, 10, 5, 3, 2, 'file-stat', 'fp', 1, 1, 'ok', 1, 1
-             )",
-        )
-        .bind(file.to_string_lossy().to_string())
-        .execute(&mut conn)
-        .await
-        .unwrap();
-        sqlx::query(
-            "INSERT INTO history_usage_events(
-                session_id, event_index, timestamp_ms, model, input_tokens,
-                output_tokens, cache_read_tokens, cache_creation_tokens, cost_usd
-             ) VALUES (?1, 0, 1000, 'claude-sonnet-4-5', 10, 5, 3, 2, 0)",
-        )
-        .bind(result.last_insert_rowid())
-        .execute(&mut conn)
-        .await
-        .unwrap();
-
-        let facts = stats_session_facts_from_v2(&mut conn, &roots, None, None, &[], None)
-            .await
-            .unwrap();
-
-        assert_eq!(facts.len(), 3);
-        let claude = facts
-            .iter()
-            .find(|fact| fact.summary.session_id == "stats-v2")
-            .unwrap();
-        assert_eq!(claude.occurred_at, 1000);
-        assert_eq!(claude.stats.input_tokens, 10);
-        assert_eq!(claude.stats.output_tokens, 5);
-        assert_eq!(claude.stats.cache_read_tokens, 3);
-        assert_eq!(claude.stats.cache_creation_tokens, 2);
-        let gemini = facts
-            .iter()
-            .find(|fact| fact.summary.session_id == "gemini-v2")
-            .unwrap();
-        assert_eq!(gemini.summary.source, "gemini");
-        assert_eq!(gemini.stats.input_tokens, 7);
-        let codex = facts
-            .iter()
-            .find(|fact| fact.summary.session_id == "codex-v2")
-            .unwrap();
-        assert_eq!(codex.occurred_at, 2000);
-
-        let codex_only =
-            stats_session_facts_from_v2(&mut conn, &roots, None, None, &[], Some("codex-stats"))
-                .await
-                .unwrap();
-        assert_eq!(codex_only.len(), 1);
-        assert_eq!(codex_only[0].summary.session_id, "codex-v2");
-
-        let all_source =
-            stats_session_facts_from_v2(&mut conn, &roots, Some("all"), None, &[], None)
-                .await
-                .unwrap();
-        assert_eq!(all_source.len(), 3);
-
-        let codex_source =
-            stats_session_facts_from_v2(&mut conn, &roots, Some("codex"), None, &[], None)
-                .await
-                .unwrap();
-        assert_eq!(codex_source.len(), 1);
-        assert_eq!(codex_source[0].summary.session_id, "codex-v2");
     }
 
     #[tokio::test]

@@ -1,6 +1,6 @@
 [package]
 name = "cli-manager"
-version = "1.3.4"
+version = "0.1.0"
 description = "A lightweight desktop app for managing CLI tools across multiple projects"
 authors = ["tianhao.zhao", "zhang.yuan"]
 license = "AGPL-3.0-or-later"
@@ -52,7 +52,6 @@ quick-xml = "0.39.4"
 memchr = "2"
 encoding_rs = "0.8.35"
 chardetng = "1.0.0"
-tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 tauri-plugin-single-instance = { version = "2.4.2", features = ["semver"] }
 # 只读解析 cc-switch.db；复用 tauri-plugin-sql 依赖树中既有的 sqlx/libsqlite3-sys，无新增原生依赖

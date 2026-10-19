@@ -77,8 +77,7 @@ export type TerminalStatsCardKey =
   | "tokenTrend"
   | "modelContext"
   | "tools"
-  | "latestChanges"
-  | "todayUsage";
+  | "latestChanges";
 export type SystemResourceCardKey =
   | "system"
   | "cpu"
@@ -195,7 +194,6 @@ export interface TerminalToolbarVisibilitySettings {
 }
 
 export interface SidebarToolbarVisibilitySettings {
-  stats: boolean;
   gitChanges: boolean;
 }
 
@@ -211,7 +209,6 @@ export const TERMINAL_STATS_CARD_KEYS: readonly TerminalStatsCardKey[] = [
   "modelContext",
   "tools",
   "latestChanges",
-  "todayUsage",
 ];
 
 export const SYSTEM_RESOURCE_CARD_KEYS: readonly SystemResourceCardKey[] = [
@@ -327,8 +324,6 @@ export interface Settings {
   systemResourceCardOrder: SystemResourceCardOrderSettings;
   systemResourceMonitoringEnabled: boolean;
   shellRuntimeMonitoringEnabled: boolean;
-  ccusageAnalyticsEnabled: boolean;
-  ccusageUseWsl: boolean;
   windowsConptyCompatibilityFixEnabled: boolean;
   hideCodexRuntimeCursor: boolean;
   terminalSessionRestoreEnabled: boolean;
@@ -453,7 +448,6 @@ const DEFAULTS: Settings = {
     showText: false,
   },
   sidebarToolbarVisibility: {
-    stats: true,
     gitChanges: true,
   },
   terminalToolbarOrder: ["new", "templates", "fullscreen", "sessionHistory", "replay", "files", "gitChanges", "stats", "systemResources", "backgroundTasks"],
@@ -468,7 +462,6 @@ const DEFAULTS: Settings = {
     modelContext: true,
     tools: true,
     latestChanges: true,
-    todayUsage: true,
   },
   terminalStatsCardOrder: [...TERMINAL_STATS_CARD_KEYS],
   systemResourceCardVisibility: {
@@ -483,8 +476,6 @@ const DEFAULTS: Settings = {
   systemResourceCardOrder: [...SYSTEM_RESOURCE_CARD_KEYS],
   systemResourceMonitoringEnabled: false,
   shellRuntimeMonitoringEnabled: false,
-  ccusageAnalyticsEnabled: false,
-  ccusageUseWsl: false,
   windowsConptyCompatibilityFixEnabled: true,
   hideCodexRuntimeCursor: false,
   terminalSessionRestoreEnabled: true,
@@ -696,7 +687,6 @@ export function migrateSidebarToolbarVisibility(value: unknown): SidebarToolbarV
   const raw = value as Record<string, unknown>;
 
   return {
-    stats: typeof raw.stats === "boolean" ? raw.stats : defaults.stats,
     gitChanges: typeof raw.gitChanges === "boolean" ? raw.gitChanges : defaults.gitChanges,
   };
 }
@@ -1117,14 +1107,6 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
       typeof entries.backgroundIncludeFinishedTasks === "boolean"
         ? entries.backgroundIncludeFinishedTasks
         : DEFAULTS.backgroundIncludeFinishedTasks;
-    entries.ccusageAnalyticsEnabled =
-      typeof entries.ccusageAnalyticsEnabled === "boolean"
-        ? entries.ccusageAnalyticsEnabled
-        : DEFAULTS.ccusageAnalyticsEnabled;
-    entries.ccusageUseWsl =
-      typeof entries.ccusageUseWsl === "boolean"
-        ? entries.ccusageUseWsl
-        : DEFAULTS.ccusageUseWsl;
     entries.windowsConptyCompatibilityFixEnabled =
       typeof entries.windowsConptyCompatibilityFixEnabled === "boolean"
         ? entries.windowsConptyCompatibilityFixEnabled

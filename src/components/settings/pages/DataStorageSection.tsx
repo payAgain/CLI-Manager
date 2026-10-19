@@ -10,7 +10,6 @@ import { getOsPlatform } from "../../../lib/shell";
 import { useBackgroundOperationStore } from "../../../stores/backgroundOperationStore";
 import { useSshAgentIntegrationStore } from "../../../stores/sshAgentIntegrationStore";
 import { useTerminalStore } from "../../../stores/terminalStore";
-import { useUpdateStore } from "../../../stores/updateStore";
 import {
   Dialog,
   DialogContent,
@@ -81,11 +80,9 @@ export function DataStorageSection() {
   const hasRunningAgentInstall = useSshAgentIntegrationStore((state) =>
     Object.values(state.agentInstallJobs).some((job) => job.status === "running")
   );
-  const updateBusy = useUpdateStore((state) => state.checking || state.downloading || state.installing);
   const tasksActive = activeTerminalCount > 0
     || hasRunningBackgroundOperation
-    || hasRunningAgentInstall
-    || updateBusy;
+    || hasRunningAgentInstall;
 
   useEffect(() => {
     let cancelled = false;

@@ -1,4 +1,3 @@
-use crate::model_pricing::{find_cached_model_pricing, CachedModelPricingLookup};
 use crate::daemon::client::DaemonBridge;
 use crate::shell_resolver::silent_command;
 use crate::ssh_launch::SshLaunchPlan;
@@ -12,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::{Connection, Row, SqliteConnection};
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::env;
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
@@ -24,7 +23,6 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
 mod catalog;
-pub(crate) mod request_logs;
 
 use super::history_backup::{
     create_file_backup_snapshot, default_backup_root, ensure_source_mutation_unlocked,
@@ -36,7 +34,7 @@ const READ_BUF_CAPACITY: usize = 64 * 1024;
 /// collect_session_files 的 TTL：避免分析看板/搜索短时间内反复全树扫盘。
 const SESSION_FILES_TTL_MS: i64 = 60_000;
 const OOM_HISTORY_DETAIL_WARN_BYTES: usize = 10 * 1024 * 1024;
-const OOM_HISTORY_STATS_WARN_BYTES: usize = 5 * 1024 * 1024;
+
 const OOM_HISTORY_MESSAGES_WARN_COUNT: usize = 2_000;
 const CODEX_HISTORY_INDEX_TEXT_MAX_CHARS: usize = 4_000;
 const HISTORY_INDEX_V2_ADAPTER_PARSER_VERSION: i64 = 3;
@@ -116,64 +114,6 @@ fn log_history_detail_oom_diagnostic(phase: &str, detail: &HistorySessionDetail,
     }
 }
 
-fn estimate_history_stats_response_bytes(response: &HistoryStatsResponse) -> usize {
-    serde_json::to_vec(response).map_or(0, |value| value.len())
-}
-
-fn stats_session_ref_count(response: &HistoryStatsResponse) -> usize {
-    response
-        .heatmap
-        .iter()
-        .map(|item| item.session_refs.len())
-        .sum::<usize>()
-        + response
-            .hourly_activity
-            .iter()
-            .map(|item| item.session_refs.len())
-            .sum::<usize>()
-}
-
-fn log_history_stats_oom_diagnostic(
-    phase: &str,
-    response: &HistoryStatsResponse,
-    elapsed_ms: u128,
-) {
-    let response_bytes = estimate_history_stats_response_bytes(response);
-    let session_ref_count = stats_session_ref_count(response);
-    let threshold_exceeded = response_bytes >= OOM_HISTORY_STATS_WARN_BYTES;
-    if threshold_exceeded {
-        warn!(
-            "[oom-diagnostics:backend] area=history phase={phase} range_days={} total_sessions={} total_messages={} response_bytes={} project_ranking={} model_distribution={} heatmap_days={} daily_series={} hourly_activity={} session_refs={} elapsed_ms={} threshold_exceeded=true",
-            response.range_days,
-            response.total_sessions,
-            response.total_messages,
-            response_bytes,
-            response.project_ranking.len(),
-            response.model_distribution.len(),
-            response.heatmap.len(),
-            response.daily_series.len(),
-            response.hourly_activity.len(),
-            session_ref_count,
-            elapsed_ms
-        );
-    } else {
-        debug!(
-            "[oom-diagnostics:backend] area=history phase={phase} range_days={} total_sessions={} total_messages={} response_bytes={} project_ranking={} model_distribution={} heatmap_days={} daily_series={} hourly_activity={} session_refs={} elapsed_ms={} threshold_exceeded=false",
-            response.range_days,
-            response.total_sessions,
-            response.total_messages,
-            response_bytes,
-            response.project_ranking.len(),
-            response.model_distribution.len(),
-            response.heatmap.len(),
-            response.daily_series.len(),
-            response.hourly_activity.len(),
-            session_ref_count,
-            elapsed_ms
-        );
-    }
-}
-
 #[derive(Clone, Default, PartialEq, Eq)]
 pub(crate) struct HistoryRoots {
     claude_config_dir: Option<PathBuf>,
@@ -218,8 +158,7 @@ struct SessionStatsScan {
     output_tokens: u64,
     cache_read_tokens: u64,
     cache_creation_tokens: u64,
-    total_cost_usd: f64,
-    unpriced_tokens: u64,
+
     dominant_model: Option<String>,
     current_model: Option<String>,
     model_usage: HashMap<String, UsageStatsScan>,
@@ -348,25 +287,6 @@ struct SessionFilesCache {
     by_source: HashMap<String, CachedSessionFiles>,
 }
 
-#[derive(Clone)]
-struct CachedHistoryStatsAggregation {
-    response: HistoryStatsResponse,
-    cached_at: i64,
-}
-
-#[derive(Default)]
-struct HistoryStatsAggregationCache {
-    entries: HashMap<String, CachedHistoryStatsAggregation>,
-}
-
-#[derive(Clone)]
-struct HistoryStatsSessionFact {
-    summary: HistorySessionSummary,
-    occurred_at: i64,
-    stats: UsageStatsScan,
-    model: Option<String>,
-}
-
 struct OpenCodeParsedSession {
     file_ref: SessionFileRef,
     fingerprint: SessionFileFingerprint,
@@ -376,29 +296,10 @@ struct OpenCodeParsedSession {
     tool_events: Vec<HistoryToolEvent>,
 }
 
-#[derive(Clone)]
-struct CachedHistoryStatsDailyIndex {
-    days: BTreeMap<i64, Vec<HistoryStatsSessionFact>>,
-    cached_at: i64,
-}
-
-#[derive(Default)]
-struct HistoryStatsDailyIndexCache {
-    entries: HashMap<String, CachedHistoryStatsDailyIndex>,
-}
-
-const HOUR_MS: i64 = 60 * 60 * 1000;
-const DAY_MS: i64 = 24 * HOUR_MS;
-const MAX_STATS_RANGE_DAYS: usize = 366;
-const HISTORY_STATS_AGGREGATION_CACHE_MAX: usize = 32;
-const HISTORY_STATS_DAILY_INDEX_CACHE_MAX: usize = 16;
 static SESSION_PROJECT_CACHE: OnceLock<Mutex<SessionProjectCache>> = OnceLock::new();
 static SESSION_FILES_CACHE: OnceLock<Mutex<SessionFilesCache>> = OnceLock::new();
 static WSL_SESSION_FINGERPRINT_CACHE: OnceLock<Mutex<WslSessionFingerprintCache>> = OnceLock::new();
-static HISTORY_STATS_AGGREGATION_CACHE: OnceLock<Mutex<HistoryStatsAggregationCache>> =
-    OnceLock::new();
-static HISTORY_STATS_DAILY_INDEX_CACHE: OnceLock<Mutex<HistoryStatsDailyIndexCache>> =
-    OnceLock::new();
+
 static REMOTE_HISTORY_DETAIL_CACHE: OnceLock<Mutex<RemoteHistoryDetailCache>> = OnceLock::new();
 
 const REMOTE_HISTORY_DETAIL_CACHE_MAX: usize = 20;
@@ -563,7 +464,7 @@ pub struct HistorySessionUsage {
     pub output_tokens: u64,
     pub cache_read_tokens: u64,
     pub cache_creation_tokens: u64,
-    pub total_cost_usd: f64,
+
     pub dominant_model: Option<String>,
     pub current_model: Option<String>,
     pub context_window: Option<u64>,
@@ -769,146 +670,12 @@ pub struct HistoryPromptItem {
     pub timestamp: Option<String>,
 }
 
-#[derive(Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct HistoryStatsProjectItem {
-    pub project_key: String,
-    pub sessions: usize,
-    pub messages: usize,
-    pub input_tokens: u64,
-    pub output_tokens: u64,
-    pub cache_read_tokens: u64,
-    pub cache_creation_tokens: u64,
-    pub total_cost_usd: f64,
-    pub unpriced_tokens: u64,
-}
-
-#[derive(Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct HistoryStatsModelItem {
-    pub model: String,
-    pub sessions: usize,
-    pub ratio: f64,
-    pub input_tokens: u64,
-    pub output_tokens: u64,
-    pub cache_read_tokens: u64,
-    pub cache_creation_tokens: u64,
-    pub total_cost_usd: f64,
-    pub unpriced_tokens: u64,
-}
-
-#[derive(Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct HistoryStatsHeatmapDay {
-    pub day_start_utc: i64,
-    pub sessions: usize,
-    pub messages: usize,
-    pub level: u8,
-    pub session_refs: Vec<HistorySessionSummary>,
-}
-
-#[derive(Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct HistoryStatsDailySeriesItem {
-    pub day_start_utc: i64,
-    pub sessions: usize,
-    pub messages: usize,
-    pub input_tokens: u64,
-    pub output_tokens: u64,
-    pub cache_read_tokens: u64,
-    pub cache_creation_tokens: u64,
-    pub total_cost_usd: f64,
-    pub unpriced_tokens: u64,
-}
-
-#[derive(Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct HistoryStatsSourceItem {
-    pub source: String,
-    pub sessions: usize,
-    pub messages: usize,
-    pub input_tokens: u64,
-    pub output_tokens: u64,
-    pub cache_read_tokens: u64,
-    pub cache_creation_tokens: u64,
-    pub total_cost_usd: f64,
-    pub unpriced_tokens: u64,
-}
-
-#[derive(Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct HistoryStatsProjectEfficiencyItem {
-    pub project_key: String,
-    pub sessions: usize,
-    pub messages: usize,
-    pub input_tokens: u64,
-    pub output_tokens: u64,
-    pub cache_read_tokens: u64,
-    pub cache_creation_tokens: u64,
-    pub total_cost_usd: f64,
-    pub unpriced_tokens: u64,
-    pub avg_messages_per_session: f64,
-}
-
-#[derive(Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct HistoryStatsHourlyActivityItem {
-    pub hour: u8,
-    pub hour_start_utc: i64,
-    pub sessions: usize,
-    pub messages: usize,
-    pub level: u8,
-    pub input_tokens: u64,
-    pub output_tokens: u64,
-    pub cache_read_tokens: u64,
-    pub cache_creation_tokens: u64,
-    pub total_cost_usd: f64,
-    pub unpriced_tokens: u64,
-    pub session_refs: Vec<HistorySessionSummary>,
-}
-
-#[derive(Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct HistoryStatsResponse {
-    pub range_days: usize,
-    pub total_sessions: usize,
-    pub total_messages: usize,
-    pub total_input_tokens: u64,
-    pub total_output_tokens: u64,
-    pub total_cache_read_tokens: u64,
-    pub total_cache_creation_tokens: u64,
-    pub total_cost_usd: f64,
-    pub total_unpriced_tokens: u64,
-    pub project_ranking: Vec<HistoryStatsProjectItem>,
-    pub model_distribution: Vec<HistoryStatsModelItem>,
-    pub heatmap: Vec<HistoryStatsHeatmapDay>,
-    pub daily_series: Vec<HistoryStatsDailySeriesItem>,
-    pub source_distribution: Vec<HistoryStatsSourceItem>,
-    pub project_efficiency: Vec<HistoryStatsProjectEfficiencyItem>,
-    pub hourly_activity: Vec<HistoryStatsHourlyActivityItem>,
-}
-
-#[derive(Default)]
-struct DayStatsAggregate {
-    sessions: usize,
-    messages: usize,
-    input_tokens: u64,
-    output_tokens: u64,
-    cache_read_tokens: u64,
-    cache_creation_tokens: u64,
-    total_cost_usd: f64,
-    unpriced_tokens: u64,
-    session_refs: Vec<HistorySessionSummary>,
-}
-
 #[derive(Clone, Copy, Default, Serialize, Deserialize)]
 struct UsageStatsScan {
     input_tokens: u64,
     output_tokens: u64,
     cache_read_tokens: u64,
     cache_creation_tokens: u64,
-    total_cost_usd: f64,
-    unpriced_tokens: u64,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -917,29 +684,17 @@ struct UsageTokenScan {
     output_tokens: u64,
     cache_read_tokens: u64,
     cache_creation_tokens: u64,
-    explicit_cost_usd: Option<f64>,
 }
 
-#[derive(Clone, Default)]
-struct HourStatsAggregate {
-    sessions: usize,
-    messages: usize,
-    input_tokens: u64,
-    output_tokens: u64,
-    cache_read_tokens: u64,
-    cache_creation_tokens: u64,
-    total_cost_usd: f64,
-    unpriced_tokens: u64,
-    session_refs: Vec<HistorySessionSummary>,
-}
-
-#[derive(Clone, Copy)]
-struct StatsTimeBounds {
-    start_at: i64,
-    end_at: i64,
-    start_day: i64,
-    range_days: usize,
-    explicit: bool,
+impl From<UsageTokenScan> for UsageStatsScan {
+    fn from(usage: UsageTokenScan) -> Self {
+        Self {
+            input_tokens: usage.input_tokens,
+            output_tokens: usage.output_tokens,
+            cache_read_tokens: usage.cache_read_tokens,
+            cache_creation_tokens: usage.cache_creation_tokens,
+        }
+    }
 }
 
 #[tauri::command]
@@ -1374,7 +1129,7 @@ fn finalize_opencode_detail(
         output_tokens: parsed.computed.stats.output_tokens,
         cache_read_tokens: parsed.computed.stats.cache_read_tokens,
         cache_creation_tokens: parsed.computed.stats.cache_creation_tokens,
-        total_cost_usd: parsed.computed.stats.total_cost_usd,
+
         dominant_model: parsed.computed.stats.dominant_model.clone(),
         current_model: parsed.computed.stats.current_model.clone(),
         context_window: parsed.computed.stats.context_window,
@@ -1966,7 +1721,6 @@ pub async fn history_remote_sync(
         if let Ok(mut cache) = remote_history_detail_cache().lock() {
             cache.invalidate_instance(&result.source_instance_id);
         }
-        invalidate_history_stats_caches();
     }
     let mut value = serde_json::to_value(result).map_err(|err| err.to_string())?;
     value["applied"] = Value::Bool(applied);
@@ -2566,229 +2320,6 @@ pub async fn history_list_prompts(
     Ok(prompts)
 }
 
-#[tauri::command]
-pub async fn history_list_stats_projects(
-    source: Option<String>,
-    claude_config_dir: Option<String>,
-    codex_config_dir: Option<String>,
-) -> Result<Vec<String>, String> {
-    let source_for_opencode = source.clone();
-    let mut projects: Vec<String> = tokio::task::spawn_blocking(move || {
-        let roots = history_roots(claude_config_dir, codex_config_dir);
-        let source_filter = source.map(|v| v.to_lowercase());
-        let mut projects = BTreeSet::new();
-
-        for entry in refresh_history_index(&roots) {
-            if let Some(filter) = &source_filter {
-                if &entry.file_ref.source != filter {
-                    continue;
-                }
-            }
-            if !entry.file_ref.project_key.trim().is_empty() {
-                projects.insert(entry.file_ref.project_key);
-            }
-        }
-
-        Ok::<Vec<String>, String>(projects.into_iter().collect())
-    })
-    .await
-    .map_err(|err| err.to_string())??;
-
-    if source_includes(&source_for_opencode, "opencode") {
-        let mut merged: BTreeSet<String> = projects.into_iter().collect();
-        for parsed in opencode_catalog_sessions().await?.unwrap_or_default() {
-            if !parsed.file_ref.project_key.trim().is_empty() {
-                merged.insert(parsed.file_ref.project_key);
-            }
-        }
-        projects = merged.into_iter().collect();
-    }
-
-    Ok(projects)
-}
-
-#[tauri::command]
-pub async fn history_get_stats(
-    source: Option<String>,
-    claude_config_dir: Option<String>,
-    codex_config_dir: Option<String>,
-    project_key: Option<String>,
-    project_path: Option<String>,
-    project_paths: Option<Vec<String>>,
-    source_instance_id: Option<String>,
-    range_days: Option<usize>,
-    start_at: Option<i64>,
-    end_at: Option<i64>,
-    force: Option<bool>,
-) -> Result<HistoryStatsResponse, String> {
-    let started_at = Instant::now();
-    let roots = history_roots(claude_config_dir, codex_config_dir);
-    let source_filter = source.map(|v| v.to_lowercase());
-    let target_project = project_key
-        .map(|v| v.trim().to_string())
-        .filter(|v| !v.is_empty());
-    let target_project_paths = normalize_history_stats_project_paths(project_path, project_paths);
-    let target_source_instance = source_instance_id
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty());
-    if target_source_instance
-        .as_ref()
-        .is_some_and(|value| value.len() > 512 || value.contains(['\0', '\r', '\n']))
-    {
-        return Err("history_source_instance_invalid".to_string());
-    }
-    let bounds = resolve_stats_time_bounds(range_days, start_at, end_at)?;
-    let force = force.unwrap_or(false);
-    let include_opencode = target_source_instance.is_none()
-        && source_filter
-            .as_deref()
-            .map(|source| source == "opencode")
-            .unwrap_or(true);
-    let index = if target_source_instance.is_some() {
-        None
-    } else {
-        Some(refresh_history_index_snapshot(&roots, force))
-    };
-    let index_generation = index.as_ref().map(|index| index.generation).unwrap_or(0);
-    let cache_key = make_history_stats_aggregation_cache_key(
-        &roots,
-        source_filter.as_deref(),
-        target_project.as_deref(),
-        &target_project_paths,
-        target_source_instance.as_deref(),
-        bounds,
-        index_generation,
-    );
-
-    if !force && !include_opencode {
-        if let Some(response) = stats_aggregation_cache_get(&cache_key) {
-            log_history_stats_oom_diagnostic(
-                "history_get_stats_cache_hit",
-                &response,
-                started_at.elapsed().as_millis(),
-            );
-            return Ok(response);
-        }
-    }
-
-    let mut days = if target_source_instance.is_some() {
-        BTreeMap::new()
-    } else {
-        let index = index.expect("local stats require a history index");
-        let daily_index_key = make_history_stats_daily_index_cache_key(
-            &roots,
-            source_filter.as_deref(),
-            target_project.as_deref(),
-            &target_project_paths,
-            target_source_instance.as_deref(),
-            bounds,
-            index_generation,
-        );
-        let daily_index = if !force {
-            stats_daily_index_cache_get(&daily_index_key).unwrap_or_else(|| {
-                let daily_index = build_history_stats_daily_index(
-                    index.entries,
-                    source_filter.as_deref(),
-                    target_project.as_deref(),
-                    &target_project_paths,
-                    bounds,
-                );
-                stats_daily_index_cache_set(daily_index_key, daily_index.clone());
-                daily_index
-            })
-        } else {
-            let daily_index = build_history_stats_daily_index(
-                index.entries,
-                source_filter.as_deref(),
-                target_project.as_deref(),
-                &target_project_paths,
-                bounds,
-            );
-            stats_daily_index_cache_set(daily_index_key, daily_index.clone());
-            daily_index
-        };
-        daily_index.days
-    };
-    if include_opencode {
-        for fact in opencode_stats_facts(
-            source_filter.as_deref(),
-            target_project.as_deref(),
-            &target_project_paths,
-            bounds,
-        )
-        .await?
-        {
-            let day_start =
-                stats_day_start_with_offset(fact.occurred_at, stats_day_start_offset(bounds));
-            days.entry(day_start).or_default().push(fact);
-        }
-    }
-    match catalog::stats_session_facts(
-        &roots,
-        source_filter.as_deref(),
-        target_project.as_deref(),
-        &target_project_paths,
-        target_source_instance.as_deref(),
-    )
-    .await
-    {
-        Ok(v2_facts) if !v2_facts.is_empty() => {
-            let v2_session_keys: HashSet<String> = v2_facts
-                .iter()
-                .map(|fact| history_stats_session_key(&fact.summary))
-                .collect();
-            for facts in days.values_mut() {
-                facts.retain(|fact| {
-                    !v2_session_keys.contains(&history_stats_session_key(&fact.summary))
-                });
-            }
-            let day_offset = stats_day_start_offset(bounds);
-            for fact in v2_facts {
-                let day_start = stats_day_start_with_offset(fact.occurred_at, day_offset);
-                days.entry(day_start).or_default().push(fact);
-            }
-        }
-        Ok(_) => {}
-        Err(err) => warn!("history v2 stats fallback: {err}"),
-    }
-
-    let response = build_history_stats_response(&days, bounds);
-    log_history_stats_oom_diagnostic(
-        "history_get_stats",
-        &response,
-        started_at.elapsed().as_millis(),
-    );
-    if !include_opencode {
-        stats_aggregation_cache_set(cache_key, response.clone());
-    }
-    Ok(response)
-}
-
-fn normalize_history_stats_project_paths(
-    project_path: Option<String>,
-    project_paths: Option<Vec<String>>,
-) -> Vec<String> {
-    let mut normalized = project_paths.unwrap_or_default();
-    if let Some(project_path) = project_path {
-        normalized.push(project_path);
-    }
-    let mut normalized = normalized
-        .into_iter()
-        .map(|path| normalize_history_path(&path))
-        .filter(|path| !path.is_empty())
-        .collect::<Vec<_>>();
-    normalized.sort_unstable();
-    normalized.dedup();
-    normalized
-}
-
-fn history_stats_project_paths_cache_key(project_paths: &[String]) -> String {
-    if project_paths.is_empty() {
-        return "__all__".to_string();
-    }
-    serde_json::to_string(project_paths).unwrap_or_else(|_| project_paths.join("\u{1f}"))
-}
-
 fn source_includes(source: &Option<String>, target: &str) -> bool {
     source
         .as_deref()
@@ -2876,716 +2407,6 @@ async fn opencode_list_prompts(
     Ok(prompts)
 }
 
-async fn opencode_stats_facts(
-    source_filter: Option<&str>,
-    target_project: Option<&str>,
-    target_project_paths: &[String],
-    bounds: StatsTimeBounds,
-) -> Result<Vec<HistoryStatsSessionFact>, String> {
-    if source_filter.is_some_and(|source| source != "opencode") {
-        return Ok(Vec::new());
-    }
-    let mut facts = Vec::new();
-    for parsed in opencode_catalog_sessions().await?.unwrap_or_default() {
-        if target_project.is_some_and(|project| parsed.file_ref.project_key != project) {
-            continue;
-        }
-        if !target_project_paths.is_empty()
-            && !target_project_paths.iter().any(|project_path| {
-                parsed
-                    .cwd
-                    .as_deref()
-                    .is_some_and(|cwd| opencode_cwd_matches_project_path(cwd, project_path))
-            })
-        {
-            continue;
-        }
-        let summary = opencode_summary_from_parsed(&parsed);
-        for event in stats_usage_events_or_fallback(&summary, &parsed.computed.stats) {
-            let occurred_at = event.timestamp_ms.unwrap_or(summary.updated_at);
-            if occurred_at < bounds.start_at || occurred_at > bounds.end_at {
-                continue;
-            }
-            facts.push(HistoryStatsSessionFact {
-                summary: summary.clone(),
-                occurred_at,
-                stats: reprice_usage_stats(event.model.as_deref(), event.usage),
-                model: event.model,
-            });
-        }
-    }
-    Ok(facts)
-}
-
-fn opencode_summary_from_parsed(parsed: &OpenCodeParsedSession) -> HistorySessionSummary {
-    HistorySessionSummary {
-        session_id: parsed.computed.session_id.clone(),
-        source: "opencode".to_string(),
-        project_key: parsed.file_ref.project_key.clone(),
-        title: parsed.computed.title.clone(),
-        file_path: parsed.file_ref.path.to_string_lossy().to_string(),
-        cwd: parsed.cwd.clone(),
-        created_at: parsed.computed.created_at,
-        updated_at: parsed.computed.updated_at,
-        message_count: parsed.computed.message_count,
-        branch: None,
-    }
-}
-
-fn opencode_cwd_matches_project_path(cwd: &str, target_project_path: &str) -> bool {
-    let cwd = normalize_history_path(cwd);
-    cwd_matches_target(&cwd, target_project_path)
-        || crate::wsl::windows_path_to_wsl(target_project_path)
-            .as_deref()
-            .is_some_and(|target| cwd_matches_target(&cwd, target))
-        || crate::wsl::parse_wsl_unc_path(target_project_path)
-            .map(|(_, target)| cwd_matches_target(&cwd, &target))
-            .unwrap_or(false)
-}
-
-fn build_history_stats_daily_index(
-    entries: Vec<HistoryIndexEntry>,
-    source_filter: Option<&str>,
-    target_project: Option<&str>,
-    target_project_paths: &[String],
-    bounds: StatsTimeBounds,
-) -> CachedHistoryStatsDailyIndex {
-    let mut days: BTreeMap<i64, Vec<HistoryStatsSessionFact>> = BTreeMap::new();
-    let day_offset = stats_day_start_offset(bounds);
-
-    for entry in entries {
-        if let Some(filter) = source_filter {
-            if entry.file_ref.source != filter {
-                continue;
-            }
-        }
-        if let Some(project) = target_project {
-            if entry.file_ref.project_key != project {
-                continue;
-            }
-        }
-        if !target_project_paths.is_empty()
-            && !target_project_paths
-                .iter()
-                .any(|project_path| session_matches_project_path(&entry.file_ref, project_path))
-        {
-            continue;
-        }
-
-        let computed = entry.computed;
-        let summary = summary_from_computation(&entry.file_ref, &computed);
-        let usage_events = stats_usage_events_or_fallback(&summary, &computed.stats);
-        for event in usage_events {
-            let occurred_at = event.timestamp_ms.unwrap_or(summary.updated_at);
-            let repriced_stats = reprice_usage_stats(event.model.as_deref(), event.usage);
-            let day_start = stats_day_start_with_offset(occurred_at, day_offset);
-            days.entry(day_start)
-                .or_default()
-                .push(HistoryStatsSessionFact {
-                    summary: summary.clone(),
-                    occurred_at,
-                    stats: repriced_stats,
-                    model: event.model,
-                });
-        }
-    }
-
-    CachedHistoryStatsDailyIndex {
-        days,
-        cached_at: now_millis(),
-    }
-}
-
-fn build_history_stats_response(
-    daily_index: &BTreeMap<i64, Vec<HistoryStatsSessionFact>>,
-    bounds: StatsTimeBounds,
-) -> HistoryStatsResponse {
-    let mut total_sessions = 0usize;
-    let mut total_messages = 0usize;
-    let mut total_input_tokens = 0u64;
-    let mut total_output_tokens = 0u64;
-    let mut total_cache_read_tokens = 0u64;
-    let mut total_cache_creation_tokens = 0u64;
-    let mut total_cost_usd = 0.0f64;
-    let mut total_unpriced_tokens = 0u64;
-    let mut project_map: HashMap<String, HistoryStatsProjectItem> = HashMap::new();
-    let mut model_map: HashMap<String, HistoryStatsModelItem> = HashMap::new();
-    let mut source_map: HashMap<String, HistoryStatsSourceItem> = HashMap::new();
-    let mut day_map: BTreeMap<i64, DayStatsAggregate> = BTreeMap::new();
-    let mut hourly_map: Vec<HourStatsAggregate> = vec![HourStatsAggregate::default(); 24];
-    let mut seen_total_sessions: HashSet<String> = HashSet::new();
-    let mut seen_project_sessions: HashSet<String> = HashSet::new();
-    let mut seen_source_sessions: HashSet<String> = HashSet::new();
-    let mut seen_model_sessions: HashSet<String> = HashSet::new();
-    let mut seen_day_sessions: HashSet<String> = HashSet::new();
-    let mut seen_hour_sessions: Vec<HashSet<String>> = (0..24).map(|_| HashSet::new()).collect();
-
-    for day_idx in 0..bounds.range_days {
-        let day_start = bounds.start_day + day_idx as i64 * DAY_MS;
-        let Some(facts) = daily_index.get(&day_start) else {
-            continue;
-        };
-
-        for fact in facts {
-            if fact.occurred_at < bounds.start_at || fact.occurred_at > bounds.end_at {
-                continue;
-            }
-
-            let summary = &fact.summary;
-            let stats = &fact.stats;
-            let session_key = history_stats_session_key(summary);
-
-            if seen_total_sessions.insert(session_key.clone()) {
-                total_sessions += 1;
-                total_messages += summary.message_count;
-            }
-            total_input_tokens = total_input_tokens.saturating_add(stats.input_tokens);
-            total_output_tokens = total_output_tokens.saturating_add(stats.output_tokens);
-            total_cache_read_tokens =
-                total_cache_read_tokens.saturating_add(stats.cache_read_tokens);
-            total_cache_creation_tokens =
-                total_cache_creation_tokens.saturating_add(stats.cache_creation_tokens);
-            total_cost_usd += stats.total_cost_usd;
-            total_unpriced_tokens = total_unpriced_tokens.saturating_add(stats.unpriced_tokens);
-
-            let hour = hour_of_day_for_stats(fact.occurred_at, bounds);
-            let hour_session_key = format!("{hour}|{session_key}");
-            if seen_hour_sessions[hour].insert(hour_session_key) {
-                hourly_map[hour].sessions += 1;
-                hourly_map[hour].messages += summary.message_count;
-                hourly_map[hour].session_refs.push(summary.clone());
-            }
-            hourly_map[hour].input_tokens = hourly_map[hour]
-                .input_tokens
-                .saturating_add(stats.input_tokens);
-            hourly_map[hour].output_tokens = hourly_map[hour]
-                .output_tokens
-                .saturating_add(stats.output_tokens);
-            hourly_map[hour].cache_read_tokens = hourly_map[hour]
-                .cache_read_tokens
-                .saturating_add(stats.cache_read_tokens);
-            hourly_map[hour].cache_creation_tokens = hourly_map[hour]
-                .cache_creation_tokens
-                .saturating_add(stats.cache_creation_tokens);
-            hourly_map[hour].total_cost_usd += stats.total_cost_usd;
-            hourly_map[hour].unpriced_tokens = hourly_map[hour]
-                .unpriced_tokens
-                .saturating_add(stats.unpriced_tokens);
-
-            let project_entry =
-                project_map
-                    .entry(summary.project_key.clone())
-                    .or_insert(HistoryStatsProjectItem {
-                        project_key: summary.project_key.clone(),
-                        sessions: 0,
-                        messages: 0,
-                        input_tokens: 0,
-                        output_tokens: 0,
-                        cache_read_tokens: 0,
-                        cache_creation_tokens: 0,
-                        total_cost_usd: 0.0,
-                        unpriced_tokens: 0,
-                    });
-            let project_session_key = format!("{}|{}", summary.project_key, session_key);
-            if seen_project_sessions.insert(project_session_key) {
-                project_entry.sessions += 1;
-                project_entry.messages += summary.message_count;
-            }
-            project_entry.input_tokens = project_entry
-                .input_tokens
-                .saturating_add(stats.input_tokens);
-            project_entry.output_tokens = project_entry
-                .output_tokens
-                .saturating_add(stats.output_tokens);
-            project_entry.cache_read_tokens = project_entry
-                .cache_read_tokens
-                .saturating_add(stats.cache_read_tokens);
-            project_entry.cache_creation_tokens = project_entry
-                .cache_creation_tokens
-                .saturating_add(stats.cache_creation_tokens);
-            project_entry.total_cost_usd += stats.total_cost_usd;
-            project_entry.unpriced_tokens = project_entry
-                .unpriced_tokens
-                .saturating_add(stats.unpriced_tokens);
-
-            let source_entry =
-                source_map
-                    .entry(summary.source.clone())
-                    .or_insert(HistoryStatsSourceItem {
-                        source: summary.source.clone(),
-                        sessions: 0,
-                        messages: 0,
-                        input_tokens: 0,
-                        output_tokens: 0,
-                        cache_read_tokens: 0,
-                        cache_creation_tokens: 0,
-                        total_cost_usd: 0.0,
-                        unpriced_tokens: 0,
-                    });
-            let source_session_key = format!("{}|{}", summary.source, session_key);
-            if seen_source_sessions.insert(source_session_key) {
-                source_entry.sessions += 1;
-                source_entry.messages += summary.message_count;
-            }
-            source_entry.input_tokens =
-                source_entry.input_tokens.saturating_add(stats.input_tokens);
-            source_entry.output_tokens = source_entry
-                .output_tokens
-                .saturating_add(stats.output_tokens);
-            source_entry.cache_read_tokens = source_entry
-                .cache_read_tokens
-                .saturating_add(stats.cache_read_tokens);
-            source_entry.cache_creation_tokens = source_entry
-                .cache_creation_tokens
-                .saturating_add(stats.cache_creation_tokens);
-            source_entry.total_cost_usd += stats.total_cost_usd;
-            source_entry.unpriced_tokens = source_entry
-                .unpriced_tokens
-                .saturating_add(stats.unpriced_tokens);
-
-            let model_name = fact.model.clone().unwrap_or_else(|| "unknown".to_string());
-            let model_entry =
-                model_map
-                    .entry(model_name.clone())
-                    .or_insert(HistoryStatsModelItem {
-                        model: model_name,
-                        sessions: 0,
-                        ratio: 0.0,
-                        input_tokens: 0,
-                        output_tokens: 0,
-                        cache_read_tokens: 0,
-                        cache_creation_tokens: 0,
-                        total_cost_usd: 0.0,
-                        unpriced_tokens: 0,
-                    });
-            let model_session_key = format!("{}|{}", model_entry.model, session_key);
-            if seen_model_sessions.insert(model_session_key) {
-                model_entry.sessions += 1;
-            }
-            model_entry.input_tokens = model_entry.input_tokens.saturating_add(stats.input_tokens);
-            model_entry.output_tokens = model_entry
-                .output_tokens
-                .saturating_add(stats.output_tokens);
-            model_entry.cache_read_tokens = model_entry
-                .cache_read_tokens
-                .saturating_add(stats.cache_read_tokens);
-            model_entry.cache_creation_tokens = model_entry
-                .cache_creation_tokens
-                .saturating_add(stats.cache_creation_tokens);
-            model_entry.total_cost_usd += stats.total_cost_usd;
-            model_entry.unpriced_tokens = model_entry
-                .unpriced_tokens
-                .saturating_add(stats.unpriced_tokens);
-
-            let day_entry = day_map.entry(day_start).or_insert(DayStatsAggregate {
-                sessions: 0,
-                messages: 0,
-                input_tokens: 0,
-                output_tokens: 0,
-                cache_read_tokens: 0,
-                cache_creation_tokens: 0,
-                total_cost_usd: 0.0,
-                unpriced_tokens: 0,
-                session_refs: Vec::new(),
-            });
-            let day_session_key = format!("{day_start}|{session_key}");
-            if seen_day_sessions.insert(day_session_key) {
-                day_entry.sessions += 1;
-                day_entry.messages += summary.message_count;
-                day_entry.session_refs.push(summary.clone());
-            }
-            day_entry.input_tokens = day_entry.input_tokens.saturating_add(stats.input_tokens);
-            day_entry.output_tokens = day_entry.output_tokens.saturating_add(stats.output_tokens);
-            day_entry.cache_read_tokens = day_entry
-                .cache_read_tokens
-                .saturating_add(stats.cache_read_tokens);
-            day_entry.cache_creation_tokens = day_entry
-                .cache_creation_tokens
-                .saturating_add(stats.cache_creation_tokens);
-            day_entry.total_cost_usd += stats.total_cost_usd;
-            day_entry.unpriced_tokens = day_entry
-                .unpriced_tokens
-                .saturating_add(stats.unpriced_tokens);
-        }
-    }
-
-    let mut project_ranking: Vec<HistoryStatsProjectItem> = project_map.into_values().collect();
-    project_ranking.sort_by(|a, b| {
-        b.sessions
-            .cmp(&a.sessions)
-            .then(b.messages.cmp(&a.messages))
-            .then(a.project_key.cmp(&b.project_key))
-    });
-
-    let mut model_distribution: Vec<HistoryStatsModelItem> = model_map
-        .into_values()
-        .map(|mut item| {
-            item.ratio = if total_sessions == 0 {
-                0.0
-            } else {
-                item.sessions as f64 / total_sessions as f64
-            };
-            item
-        })
-        .collect();
-    model_distribution.sort_by(|a, b| {
-        b.sessions
-            .cmp(&a.sessions)
-            .then_with(|| history_stats_total_tokens(b).cmp(&history_stats_total_tokens(a)))
-            .then(a.model.cmp(&b.model))
-    });
-
-    let mut source_distribution: Vec<HistoryStatsSourceItem> = source_map.into_values().collect();
-    source_distribution.sort_by(|a, b| {
-        b.sessions
-            .cmp(&a.sessions)
-            .then(b.messages.cmp(&a.messages))
-            .then(a.source.cmp(&b.source))
-    });
-
-    let mut project_efficiency: Vec<HistoryStatsProjectEfficiencyItem> = project_ranking
-        .iter()
-        .map(|item| HistoryStatsProjectEfficiencyItem {
-            project_key: item.project_key.clone(),
-            sessions: item.sessions,
-            messages: item.messages,
-            input_tokens: item.input_tokens,
-            output_tokens: item.output_tokens,
-            cache_read_tokens: item.cache_read_tokens,
-            cache_creation_tokens: item.cache_creation_tokens,
-            total_cost_usd: item.total_cost_usd,
-            unpriced_tokens: item.unpriced_tokens,
-            avg_messages_per_session: if item.sessions == 0 {
-                0.0
-            } else {
-                item.messages as f64 / item.sessions as f64
-            },
-        })
-        .collect();
-    project_efficiency.sort_by(|a, b| {
-        b.sessions
-            .cmp(&a.sessions)
-            .then_with(|| {
-                b.avg_messages_per_session
-                    .total_cmp(&a.avg_messages_per_session)
-            })
-            .then(a.project_key.cmp(&b.project_key))
-    });
-
-    let max_hour_sessions = hourly_map
-        .iter()
-        .map(|item| item.sessions)
-        .max()
-        .unwrap_or(0);
-    let hourly_activity: Vec<HistoryStatsHourlyActivityItem> = hourly_map
-        .into_iter()
-        .enumerate()
-        .map(|(hour, mut agg)| {
-            agg.session_refs.sort_by(|a, b| {
-                b.updated_at
-                    .cmp(&a.updated_at)
-                    .then(a.session_id.cmp(&b.session_id))
-            });
-            HistoryStatsHourlyActivityItem {
-                hour: hour as u8,
-                hour_start_utc: bounds.start_day + hour as i64 * HOUR_MS,
-                sessions: agg.sessions,
-                messages: agg.messages,
-                level: calc_heat_level(agg.sessions, max_hour_sessions),
-                input_tokens: agg.input_tokens,
-                output_tokens: agg.output_tokens,
-                cache_read_tokens: agg.cache_read_tokens,
-                cache_creation_tokens: agg.cache_creation_tokens,
-                total_cost_usd: agg.total_cost_usd,
-                unpriced_tokens: agg.unpriced_tokens,
-                session_refs: agg.session_refs,
-            }
-        })
-        .collect();
-
-    let max_day_sessions = day_map
-        .values()
-        .map(|item| item.sessions)
-        .max()
-        .unwrap_or(0);
-    let mut heatmap = Vec::with_capacity(bounds.range_days);
-    let mut daily_series = Vec::with_capacity(bounds.range_days);
-    for day_idx in 0..bounds.range_days {
-        let day_start = bounds.start_day + day_idx as i64 * DAY_MS;
-        if let Some(mut day) = day_map.remove(&day_start) {
-            day.session_refs.sort_by(|a, b| {
-                b.updated_at
-                    .cmp(&a.updated_at)
-                    .then(a.session_id.cmp(&b.session_id))
-            });
-            let level = calc_heat_level(day.sessions, max_day_sessions);
-            heatmap.push(HistoryStatsHeatmapDay {
-                day_start_utc: day_start,
-                sessions: day.sessions,
-                messages: day.messages,
-                level,
-                session_refs: day.session_refs,
-            });
-            daily_series.push(HistoryStatsDailySeriesItem {
-                day_start_utc: day_start,
-                sessions: day.sessions,
-                messages: day.messages,
-                input_tokens: day.input_tokens,
-                output_tokens: day.output_tokens,
-                cache_read_tokens: day.cache_read_tokens,
-                cache_creation_tokens: day.cache_creation_tokens,
-                total_cost_usd: day.total_cost_usd,
-                unpriced_tokens: day.unpriced_tokens,
-            });
-        } else {
-            heatmap.push(HistoryStatsHeatmapDay {
-                day_start_utc: day_start,
-                sessions: 0,
-                messages: 0,
-                level: 0,
-                session_refs: Vec::new(),
-            });
-            daily_series.push(HistoryStatsDailySeriesItem {
-                day_start_utc: day_start,
-                sessions: 0,
-                messages: 0,
-                input_tokens: 0,
-                output_tokens: 0,
-                cache_read_tokens: 0,
-                cache_creation_tokens: 0,
-                total_cost_usd: 0.0,
-                unpriced_tokens: 0,
-            });
-        }
-    }
-
-    HistoryStatsResponse {
-        range_days: bounds.range_days,
-        total_sessions,
-        total_messages,
-        total_input_tokens,
-        total_output_tokens,
-        total_cache_read_tokens,
-        total_cache_creation_tokens,
-        total_cost_usd,
-        total_unpriced_tokens,
-        project_ranking,
-        model_distribution,
-        heatmap,
-        daily_series,
-        source_distribution,
-        project_efficiency,
-        hourly_activity,
-    }
-}
-
-fn resolve_stats_time_bounds(
-    range_days: Option<usize>,
-    start_at: Option<i64>,
-    end_at: Option<i64>,
-) -> Result<StatsTimeBounds, String> {
-    if let (Some(start_at), Some(end_at)) = (start_at, end_at) {
-        if start_at <= 0 || end_at <= 0 || end_at < start_at {
-            return Err("invalid_date_range".to_string());
-        }
-        let span_ms = end_at.saturating_sub(start_at);
-        let range_days = (span_ms / DAY_MS).saturating_add(1) as usize;
-        if range_days == 0 || range_days > MAX_STATS_RANGE_DAYS {
-            return Err("date_range_too_large".to_string());
-        }
-        return Ok(StatsTimeBounds {
-            start_at,
-            end_at,
-            start_day: start_at,
-            range_days,
-            explicit: true,
-        });
-    }
-    if start_at.is_some() || end_at.is_some() {
-        return Err("invalid_date_range".to_string());
-    }
-
-    let range_days = range_days.unwrap_or(30).clamp(1, MAX_STATS_RANGE_DAYS);
-    let end_day = day_start_utc(now_millis());
-    let start_day = end_day - (range_days as i64 - 1) * DAY_MS;
-    Ok(StatsTimeBounds {
-        start_at: start_day,
-        end_at: end_day + DAY_MS - 1,
-        start_day,
-        range_days,
-        explicit: false,
-    })
-}
-
-fn stats_day_start_offset(bounds: StatsTimeBounds) -> i64 {
-    if bounds.explicit {
-        ((bounds.start_day % DAY_MS) + DAY_MS) % DAY_MS
-    } else {
-        0
-    }
-}
-
-fn stats_day_start_with_offset(ts: i64, day_offset: i64) -> i64 {
-    if ts <= 0 {
-        return day_offset;
-    }
-    ts - (((ts - day_offset) % DAY_MS) + DAY_MS) % DAY_MS
-}
-
-fn stats_usage_events_or_fallback(
-    summary: &HistorySessionSummary,
-    stats: &SessionStatsScan,
-) -> Vec<SessionUsageEventScan> {
-    if !stats.usage_events.is_empty() {
-        return stats.usage_events.clone();
-    }
-
-    let usage = UsageStatsScan {
-        input_tokens: stats.input_tokens,
-        output_tokens: stats.output_tokens,
-        cache_read_tokens: stats.cache_read_tokens,
-        cache_creation_tokens: stats.cache_creation_tokens,
-        total_cost_usd: stats.total_cost_usd,
-        unpriced_tokens: stats.unpriced_tokens,
-    };
-    if usage_stats_total_tokens(usage) == 0 {
-        return Vec::new();
-    }
-
-    vec![SessionUsageEventScan {
-        event_key: format!("fallback:{}:{}", summary.session_id, summary.updated_at),
-        event_index: 0,
-        timestamp_ms: Some(summary.updated_at),
-        model: stats.dominant_model.clone(),
-        usage,
-    }]
-}
-
-fn reprice_usage_stats(model: Option<&str>, usage: UsageStatsScan) -> UsageStatsScan {
-    calculate_usage_cost(
-        model,
-        UsageTokenScan {
-            input_tokens: usage.input_tokens,
-            output_tokens: usage.output_tokens,
-            cache_read_tokens: usage.cache_read_tokens,
-            cache_creation_tokens: usage.cache_creation_tokens,
-            explicit_cost_usd: None,
-        },
-    )
-}
-
-fn history_stats_session_key(summary: &HistorySessionSummary) -> String {
-    format!(
-        "{}|{}|{}|{}",
-        summary.source, summary.project_key, summary.session_id, summary.file_path
-    )
-}
-
-fn make_history_stats_daily_index_cache_key(
-    roots: &HistoryRoots,
-    source_filter: Option<&str>,
-    target_project: Option<&str>,
-    target_project_paths: &[String],
-    target_source_instance: Option<&str>,
-    bounds: StatsTimeBounds,
-    index_generation: u64,
-) -> String {
-    format!(
-        "{}|source={}|project={}|project_paths={}|source_instance={}|day_offset={}|gen={}",
-        roots.cache_key(),
-        source_filter.unwrap_or("__all__"),
-        target_project.unwrap_or("__all__"),
-        history_stats_project_paths_cache_key(target_project_paths),
-        target_source_instance.unwrap_or("__all__"),
-        stats_day_start_offset(bounds),
-        index_generation
-    )
-}
-
-fn make_history_stats_aggregation_cache_key(
-    roots: &HistoryRoots,
-    source_filter: Option<&str>,
-    target_project: Option<&str>,
-    target_project_paths: &[String],
-    target_source_instance: Option<&str>,
-    bounds: StatsTimeBounds,
-    index_generation: u64,
-) -> String {
-    format!(
-        "{}|source={}|project={}|project_paths={}|source_instance={}|start={}|end={}|gen={}",
-        roots.cache_key(),
-        source_filter.unwrap_or("__all__"),
-        target_project.unwrap_or("__all__"),
-        history_stats_project_paths_cache_key(target_project_paths),
-        target_source_instance.unwrap_or("__all__"),
-        bounds.start_at,
-        bounds.end_at,
-        index_generation
-    )
-}
-
-fn get_stats_aggregation_cache() -> &'static Mutex<HistoryStatsAggregationCache> {
-    HISTORY_STATS_AGGREGATION_CACHE
-        .get_or_init(|| Mutex::new(HistoryStatsAggregationCache::default()))
-}
-
-fn stats_aggregation_cache_get(key: &str) -> Option<HistoryStatsResponse> {
-    let cache = get_stats_aggregation_cache().lock().ok()?;
-    cache.entries.get(key).map(|entry| entry.response.clone())
-}
-
-fn stats_aggregation_cache_set(key: String, response: HistoryStatsResponse) {
-    if let Ok(mut cache) = get_stats_aggregation_cache().lock() {
-        if !cache.entries.contains_key(&key)
-            && cache.entries.len() >= HISTORY_STATS_AGGREGATION_CACHE_MAX
-        {
-            if let Some(oldest_key) = cache
-                .entries
-                .iter()
-                .min_by_key(|(_, entry)| entry.cached_at)
-                .map(|(key, _)| key.clone())
-            {
-                cache.entries.remove(&oldest_key);
-            }
-        }
-        cache.entries.insert(
-            key,
-            CachedHistoryStatsAggregation {
-                response,
-                cached_at: now_millis(),
-            },
-        );
-    }
-}
-
-fn get_stats_daily_index_cache() -> &'static Mutex<HistoryStatsDailyIndexCache> {
-    HISTORY_STATS_DAILY_INDEX_CACHE
-        .get_or_init(|| Mutex::new(HistoryStatsDailyIndexCache::default()))
-}
-
-fn stats_daily_index_cache_get(key: &str) -> Option<CachedHistoryStatsDailyIndex> {
-    let cache = get_stats_daily_index_cache().lock().ok()?;
-    cache.entries.get(key).cloned()
-}
-
-fn stats_daily_index_cache_set(key: String, daily_index: CachedHistoryStatsDailyIndex) {
-    if let Ok(mut cache) = get_stats_daily_index_cache().lock() {
-        if !cache.entries.contains_key(&key)
-            && cache.entries.len() >= HISTORY_STATS_DAILY_INDEX_CACHE_MAX
-        {
-            if let Some(oldest_key) = cache
-                .entries
-                .iter()
-                .min_by_key(|(_, entry)| entry.cached_at)
-                .map(|(key, _)| key.clone())
-            {
-                cache.entries.remove(&oldest_key);
-            }
-        }
-        cache.entries.insert(key, daily_index);
-    }
-}
-
 fn get_project_cache() -> &'static Mutex<SessionProjectCache> {
     SESSION_PROJECT_CACHE.get_or_init(|| Mutex::new(SessionProjectCache::default()))
 }
@@ -3610,7 +2431,6 @@ pub(crate) fn invalidate_history_caches() {
     if let Ok(mut cache) = get_project_cache().lock() {
         cache.entries.clear();
     }
-    invalidate_history_stats_caches();
     if let Ok(mut cache) = get_wsl_session_fingerprint_cache().lock() {
         cache.clear();
     }
@@ -3620,20 +2440,11 @@ pub(crate) fn invalidate_history_caches() {
     clear_persisted_history_index();
 }
 
-pub(crate) fn invalidate_history_stats_caches() {
-    if let Ok(mut cache) = get_stats_aggregation_cache().lock() {
-        cache.entries.clear();
-    }
-    if let Ok(mut cache) = get_stats_daily_index_cache().lock() {
-        cache.entries.clear();
-    }
-}
-
 // ===== 历史索引磁盘持久化 =====
-// 内存索引（HISTORY_SESSION_INDEX）每次 App 启动后为空，首个 history_get_stats 必须
+// 内存索引（HISTORY_SESSION_INDEX）每次 App 启动后为空，首次读取历史索引必须
 // 全量解析所有 JSONL（可能上千个），冷启动耗时不可接受。这里把 per-file 解析结果落盘，
 // 重启后载入作为 build_history_index 的 previous，按 fingerprint 仅重解析变更文件。
-const HISTORY_INDEX_CACHE_VERSION: u32 = 11;
+const HISTORY_INDEX_CACHE_VERSION: u32 = 12;
 const HISTORY_INDEX_CACHE_FILE: &str = "history-index-cache.json";
 
 static HISTORY_INDEX_CACHE_DIR: OnceLock<PathBuf> = OnceLock::new();
@@ -4201,7 +3012,7 @@ fn finalize_session_detail(
         output_tokens: parts.computed.stats.output_tokens,
         cache_read_tokens: parts.computed.stats.cache_read_tokens,
         cache_creation_tokens: parts.computed.stats.cache_creation_tokens,
-        total_cost_usd: parts.computed.stats.total_cost_usd,
+
         dominant_model: parts.computed.stats.dominant_model.clone(),
         current_model: parts.computed.stats.current_model.clone(),
         context_window: parts.computed.stats.context_window,
@@ -4424,6 +3235,31 @@ pub(crate) fn build_session_detail(
     ))
 }
 
+fn stats_usage_events_or_fallback(
+    summary: &HistorySessionSummary,
+    stats: &SessionStatsScan,
+) -> Vec<SessionUsageEventScan> {
+    if !stats.usage_events.is_empty() {
+        return stats.usage_events.clone();
+    }
+    let usage = UsageStatsScan {
+        input_tokens: stats.input_tokens,
+        output_tokens: stats.output_tokens,
+        cache_read_tokens: stats.cache_read_tokens,
+        cache_creation_tokens: stats.cache_creation_tokens,
+    };
+    if usage_stats_total_tokens(usage) == 0 {
+        return Vec::new();
+    }
+    vec![SessionUsageEventScan {
+        event_key: format!("fallback:{}:{}", summary.session_id, summary.updated_at),
+        event_index: 0,
+        timestamp_ms: Some(summary.updated_at),
+        model: stats.dominant_model.clone(),
+        usage,
+    }]
+}
+
 fn merge_session_detail_parts(
     file_ref: &SessionFileRef,
     parts: Vec<SessionDetailParts>,
@@ -4592,10 +3428,7 @@ fn merge_session_detail_parts(
         merged_stats.cache_creation_tokens = merged_stats
             .cache_creation_tokens
             .saturating_add(event.usage.cache_creation_tokens);
-        merged_stats.total_cost_usd += event.usage.total_cost_usd;
-        merged_stats.unpriced_tokens = merged_stats
-            .unpriced_tokens
-            .saturating_add(event.usage.unpriced_tokens);
+
         merged_stats.usage_events.push(event.clone());
 
         if let Some(model) = event.model.clone() {
@@ -4610,10 +3443,6 @@ fn merge_session_detail_parts(
             entry.cache_creation_tokens = entry
                 .cache_creation_tokens
                 .saturating_add(event.usage.cache_creation_tokens);
-            entry.total_cost_usd += event.usage.total_cost_usd;
-            entry.unpriced_tokens = entry
-                .unpriced_tokens
-                .saturating_add(event.usage.unpriced_tokens);
         }
     }
 
@@ -5815,7 +4644,7 @@ async fn parse_opencode_session_row(
         }
 
         let usage = opencode_usage_tokens(&data);
-        let cost = calculate_usage_cost(model.as_deref(), usage);
+
         if usage_total_tokens(usage) > 0 {
             stats.input_tokens = stats.input_tokens.saturating_add(usage.input_tokens);
             stats.output_tokens = stats.output_tokens.saturating_add(usage.output_tokens);
@@ -5825,8 +4654,7 @@ async fn parse_opencode_session_row(
             stats.cache_creation_tokens = stats
                 .cache_creation_tokens
                 .saturating_add(usage.cache_creation_tokens);
-            stats.total_cost_usd += cost.total_cost_usd;
-            stats.unpriced_tokens = stats.unpriced_tokens.saturating_add(cost.unpriced_tokens);
+
             stats
                 .token_trend
                 .push(usage_trend_point(usage, model.clone()));
@@ -5836,7 +4664,7 @@ async fn parse_opencode_session_row(
                 event_index,
                 timestamp_ms,
                 model: model.clone(),
-                usage: cost,
+                usage: UsageStatsScan::from(usage),
             });
             if let Some(model) = &model {
                 let entry = stats.model_usage.entry(model.clone()).or_default();
@@ -5848,8 +4676,6 @@ async fn parse_opencode_session_row(
                 entry.cache_creation_tokens = entry
                     .cache_creation_tokens
                     .saturating_add(usage.cache_creation_tokens);
-                entry.total_cost_usd += cost.total_cost_usd;
-                entry.unpriced_tokens = entry.unpriced_tokens.saturating_add(cost.unpriced_tokens);
             }
         }
 
@@ -5983,7 +4809,6 @@ fn opencode_usage_tokens(data: &Value) -> UsageTokenScan {
         cache_creation_tokens: cache
             .and_then(|cache| extract_u64_by_keys(cache, &["write"]))
             .unwrap_or(0),
-        explicit_cost_usd: None,
     }
 }
 
@@ -8023,8 +6848,7 @@ fn scan_session_inner(
     let mut output_tokens = 0u64;
     let mut cache_read_tokens = 0u64;
     let mut cache_creation_tokens = 0u64;
-    let mut total_cost_usd = 0.0f64;
-    let mut unpriced_tokens = 0u64;
+
     let mut model_hits: HashMap<String, usize> = HashMap::new();
     let mut model_usage: HashMap<String, UsageStatsScan> = HashMap::new();
     // Claude Code 流式写入会把同一条 assistant 消息写成多行（相同 message.id + requestId），
@@ -8193,9 +7017,6 @@ fn scan_session_inner(
         cache_read_tokens = cache_read_tokens.saturating_add(usage.cache_read_tokens);
         cache_creation_tokens = cache_creation_tokens.saturating_add(usage.cache_creation_tokens);
 
-        let cost = calculate_usage_cost(attributed_model.as_deref(), usage);
-        total_cost_usd += cost.total_cost_usd;
-        unpriced_tokens = unpriced_tokens.saturating_add(cost.unpriced_tokens);
         let event_index = usage_events.len();
         usage_events.push(SessionUsageEventScan {
             event_key: build_usage_event_key(
@@ -8208,7 +7029,7 @@ fn scan_session_inner(
             event_index,
             timestamp_ms: extract_timestamp_millis(&value),
             model: attributed_model.clone(),
-            usage: cost,
+            usage: UsageStatsScan::from(usage),
         });
 
         if let Some(model) = attributed_model {
@@ -8221,8 +7042,6 @@ fn scan_session_inner(
             entry.cache_creation_tokens = entry
                 .cache_creation_tokens
                 .saturating_add(usage.cache_creation_tokens);
-            entry.total_cost_usd += cost.total_cost_usd;
-            entry.unpriced_tokens = entry.unpriced_tokens.saturating_add(cost.unpriced_tokens);
         }
     }
 
@@ -8248,8 +7067,7 @@ fn scan_session_inner(
             output_tokens,
             cache_read_tokens,
             cache_creation_tokens,
-            total_cost_usd,
-            unpriced_tokens,
+
             dominant_model,
             current_model,
             model_usage,
@@ -8594,7 +7412,7 @@ fn scan_grok_jsonl_session(
 
                         token_trend.push(usage_trend_point(token_scan, model_name.clone()));
                         let event_index = usage_events.len();
-                        let cost = calculate_usage_cost(model_name.as_deref(), token_scan);
+
                         usage_events.push(SessionUsageEventScan {
                             event_key: grok_usage_event_key(
                                 &value,
@@ -8606,7 +7424,7 @@ fn scan_grok_jsonl_session(
                             timestamp_ms: extract_timestamp_millis(update)
                                 .or_else(|| extract_timestamp_millis(&value)),
                             model: model_name,
-                            usage: cost,
+                            usage: UsageStatsScan::from(token_scan),
                         });
                     }
                 }
@@ -8673,15 +7491,7 @@ fn scan_grok_jsonl_session(
             entry.cache_creation_tokens = entry
                 .cache_creation_tokens
                 .saturating_add(event.usage.cache_creation_tokens);
-            entry.total_cost_usd += event.usage.total_cost_usd;
-            entry.unpriced_tokens = entry
-                .unpriced_tokens
-                .saturating_add(event.usage.unpriced_tokens);
         }
-        stats.total_cost_usd += event.usage.total_cost_usd;
-        stats.unpriced_tokens = stats
-            .unpriced_tokens
-            .saturating_add(event.usage.unpriced_tokens);
     }
     if turn_usage_totals.input_tokens > 0
         || turn_usage_totals.output_tokens > 0
@@ -9059,7 +7869,6 @@ fn grok_usage_token_scan(value: &Value) -> UsageTokenScan {
             ],
         )
         .unwrap_or(0),
-        explicit_cost_usd: None,
     }
 }
 
@@ -9497,7 +8306,7 @@ fn scan_gemini_json_session(
                 event_index,
                 timestamp_ms: extract_timestamp_millis(message),
                 model,
-                usage: calculate_usage_cost(extract_model(message).as_deref(), token_scan),
+                usage: UsageStatsScan::from(token_scan),
             });
         }
     }
@@ -9534,7 +8343,6 @@ fn gemini_usage_token_scan(value: &Value) -> UsageTokenScan {
             &["cacheCreation", "cache_creation_tokens", "cacheWrite"],
         )
         .unwrap_or(0),
-        explicit_cost_usd: None,
     }
 }
 
@@ -9717,7 +8525,6 @@ fn session_stats_from_messages(
             output_tokens: message.output_tokens.unwrap_or(0),
             cache_read_tokens: message.cache_read_tokens.unwrap_or(0),
             cache_creation_tokens: message.cache_creation_tokens.unwrap_or(0),
-            explicit_cost_usd: None,
         };
         if usage_total_tokens(usage) == 0 {
             continue;
@@ -9749,10 +8556,6 @@ fn session_stats_from_messages(
             stats.last_context_tokens = Some(prompt_tokens);
         }
 
-        let cost = calculate_usage_cost(attributed_model.as_deref(), usage);
-        stats.total_cost_usd += cost.total_cost_usd;
-        stats.unpriced_tokens = stats.unpriced_tokens.saturating_add(cost.unpriced_tokens);
-
         if let Some(model) = attributed_model {
             let entry = stats.model_usage.entry(model).or_default();
             entry.input_tokens = entry.input_tokens.saturating_add(usage.input_tokens);
@@ -9763,8 +8566,6 @@ fn session_stats_from_messages(
             entry.cache_creation_tokens = entry
                 .cache_creation_tokens
                 .saturating_add(usage.cache_creation_tokens);
-            entry.total_cost_usd += cost.total_cost_usd;
-            entry.unpriced_tokens = entry.unpriced_tokens.saturating_add(cost.unpriced_tokens);
         }
     }
 
@@ -10805,23 +9606,13 @@ fn extract_usage_tokens(value: &Value) -> UsageTokenScan {
         value.get("response").and_then(|v| v.get("usage")),
     ];
 
-    // token 数与显式成本可能分布在不同层级（如顶层 costUSD + message.usage），
-    // 取首个带 token 的候选，同时保留任意候选上的显式成本，避免互相覆盖丢数据。
-    let mut explicit_cost_usd: Option<f64> = None;
     for candidate in candidates.into_iter().flatten() {
-        let mut usage = extract_usage_tokens_from_value(candidate);
-        if explicit_cost_usd.is_none() {
-            explicit_cost_usd = usage.explicit_cost_usd;
-        }
+        let usage = extract_usage_tokens_from_value(candidate);
         if usage_total_tokens(usage) > 0 {
-            usage.explicit_cost_usd = usage.explicit_cost_usd.or(explicit_cost_usd);
             return usage;
         }
     }
-    UsageTokenScan {
-        explicit_cost_usd,
-        ..UsageTokenScan::default()
-    }
+    UsageTokenScan::default()
 }
 
 /// Codex rollout 的 `token_count` 事件：`payload.info.total_token_usage` 为会话累计值。
@@ -11367,7 +10158,6 @@ fn codex_usage_from_counts(counts: CodexCumulativeUsage) -> UsageTokenScan {
         output_tokens: counts.output_tokens,
         cache_read_tokens: counts.cached_input_tokens,
         cache_creation_tokens: 0,
-        explicit_cost_usd: None,
     }
 }
 
@@ -11510,38 +10300,6 @@ fn extract_usage_tokens_from_value(value: &Value) -> UsageTokenScan {
         ],
     )
     .unwrap_or(0);
-    let mut explicit_cost_usd = extract_f64_by_keys(
-        map,
-        &[
-            "total_cost_usd",
-            "totalCostUsd",
-            "totalCostUSD",
-            "cost_usd",
-            "costUsd",
-            "costUSD",
-            "total_cost",
-            "totalCost",
-            "cost",
-        ],
-    );
-    // Pi usage.cost 是对象：{ input, output, cacheRead, cacheWrite, total }
-    if explicit_cost_usd.is_none() {
-        if let Some(cost_map) = map.get("cost").and_then(Value::as_object) {
-            explicit_cost_usd = extract_f64_by_keys(
-                cost_map,
-                &[
-                    "total",
-                    "total_cost_usd",
-                    "totalCostUsd",
-                    "totalCostUSD",
-                    "cost_usd",
-                    "costUsd",
-                    "costUSD",
-                ],
-            );
-        }
-    }
-
     if input == 0 && output == 0 && cache_read == 0 && cache_creation == 0 {
         if let Some(total) =
             extract_u64_by_keys(map, &["total_tokens", "totalTokens", "token_count"])
@@ -11555,7 +10313,6 @@ fn extract_usage_tokens_from_value(value: &Value) -> UsageTokenScan {
         output_tokens: output,
         cache_read_tokens: cache_read,
         cache_creation_tokens: cache_creation,
-        explicit_cost_usd,
     }
 }
 
@@ -11563,24 +10320,6 @@ fn extract_u64_by_keys(map: &serde_json::Map<String, Value>, keys: &[&str]) -> O
     keys.iter()
         .filter_map(|key| map.get(*key))
         .find_map(extract_positive_u64)
-}
-
-fn extract_f64_by_keys(map: &serde_json::Map<String, Value>, keys: &[&str]) -> Option<f64> {
-    keys.iter()
-        .filter_map(|key| map.get(*key))
-        .find_map(extract_non_negative_f64)
-}
-
-fn extract_non_negative_f64(value: &Value) -> Option<f64> {
-    match value {
-        Value::Number(v) => v.as_f64().filter(|n| n.is_finite() && *n >= 0.0),
-        Value::String(v) => v
-            .trim()
-            .parse::<f64>()
-            .ok()
-            .filter(|n| n.is_finite() && *n >= 0.0),
-        _ => None,
-    }
 }
 
 fn usage_total_tokens(usage: UsageTokenScan) -> u64 {
@@ -11643,70 +10382,6 @@ fn usage_trend_point(usage: UsageTokenScan, model: Option<String>) -> HistoryTok
         cache_creation_tokens: usage.cache_creation_tokens,
         total_tokens: usage_total_tokens(usage),
         model,
-    }
-}
-
-fn history_stats_total_tokens(item: &HistoryStatsModelItem) -> u64 {
-    item.input_tokens
-        .saturating_add(item.output_tokens)
-        .saturating_add(item.cache_read_tokens)
-        .saturating_add(item.cache_creation_tokens)
-}
-
-fn calculate_usage_cost(model: Option<&str>, usage: UsageTokenScan) -> UsageStatsScan {
-    let total_tokens = usage_total_tokens(usage);
-    if total_tokens == 0 {
-        return UsageStatsScan::default();
-    }
-
-    let Some(pricing) = model.and_then(find_history_model_pricing) else {
-        return UsageStatsScan {
-            input_tokens: usage.input_tokens,
-            output_tokens: usage.output_tokens,
-            cache_read_tokens: usage.cache_read_tokens,
-            cache_creation_tokens: usage.cache_creation_tokens,
-            total_cost_usd: 0.0,
-            unpriced_tokens: total_tokens,
-        };
-    };
-
-    // 所有提取路径已归一化：input_tokens 不含缓存命中部分，无需再按来源扣减。
-    let million = 1_000_000.0;
-    let total_cost_usd = (usage.input_tokens as f64 * pricing.input_per_million
-        + usage.output_tokens as f64 * pricing.output_per_million
-        + usage.cache_read_tokens as f64 * pricing.cache_read_per_million
-        + usage.cache_creation_tokens as f64 * pricing.cache_creation_per_million)
-        / million;
-
-    UsageStatsScan {
-        input_tokens: usage.input_tokens,
-        output_tokens: usage.output_tokens,
-        cache_read_tokens: usage.cache_read_tokens,
-        cache_creation_tokens: usage.cache_creation_tokens,
-        total_cost_usd,
-        unpriced_tokens: 0,
-    }
-}
-
-#[derive(Clone)]
-struct HistoryModelPricing {
-    input_per_million: f64,
-    output_per_million: f64,
-    cache_read_per_million: f64,
-    cache_creation_per_million: f64,
-}
-
-fn find_history_model_pricing(model: &str) -> Option<HistoryModelPricing> {
-    match find_cached_model_pricing(model) {
-        CachedModelPricingLookup::Found(cached) => {
-            return Some(HistoryModelPricing {
-                input_per_million: cached.input_per_million,
-                output_per_million: cached.output_per_million,
-                cache_read_per_million: cached.cache_read_per_million,
-                cache_creation_per_million: cached.cache_creation_per_million,
-            });
-        }
-        CachedModelPricingLookup::Missing | CachedModelPricingLookup::CacheUnavailable => None,
     }
 }
 
@@ -11874,45 +10549,6 @@ fn normalize_reasoning_effort_label(value: &str) -> Option<&'static str> {
 
 fn now_millis() -> i64 {
     system_time_to_millis(SystemTime::now())
-}
-
-fn day_start_utc(ts: i64) -> i64 {
-    if ts <= 0 {
-        return 0;
-    }
-    ts - (ts % DAY_MS)
-}
-
-fn hour_of_day_utc(ts: i64) -> usize {
-    if ts <= 0 {
-        return 0;
-    }
-    let normalized = ((ts % DAY_MS) + DAY_MS) % DAY_MS;
-    (normalized / HOUR_MS) as usize
-}
-
-fn hour_of_day_for_stats(ts: i64, bounds: StatsTimeBounds) -> usize {
-    if !bounds.explicit {
-        return hour_of_day_utc(ts);
-    }
-    let normalized = (((ts - bounds.start_day) % DAY_MS) + DAY_MS) % DAY_MS;
-    (normalized / HOUR_MS) as usize
-}
-
-fn calc_heat_level(value: usize, max_value: usize) -> u8 {
-    if value == 0 || max_value == 0 {
-        return 0;
-    }
-    let ratio = value as f64 / max_value as f64;
-    if ratio < 0.25 {
-        1
-    } else if ratio < 0.5 {
-        2
-    } else if ratio < 0.75 {
-        3
-    } else {
-        4
-    }
 }
 
 /// content 块全部为 tool_result 时视为工具结果行。
@@ -12690,7 +11326,7 @@ mod tests {
             output_tokens: 0,
             cache_read_tokens: 0,
             cache_creation_tokens: 0,
-            total_cost_usd: 0.0,
+
             dominant_model: None,
             current_model: None,
             context_window: None,
@@ -14564,301 +13200,6 @@ mod tests {
     }
 
     #[test]
-    fn resolve_stats_time_bounds_accepts_full_year_range() {
-        let start_at = DAY_MS;
-        let full_year_end_at = start_at + 366 * DAY_MS - 1;
-        let too_large_end_at = start_at + 367 * DAY_MS - 1;
-
-        let bounds =
-            resolve_stats_time_bounds(None, Some(start_at), Some(full_year_end_at)).unwrap();
-        let err = expect_string_err(resolve_stats_time_bounds(
-            None,
-            Some(start_at),
-            Some(too_large_end_at),
-        ));
-
-        assert_eq!(bounds.range_days, 366);
-        assert_eq!(err, "date_range_too_large");
-    }
-
-    #[test]
-    fn hour_of_day_for_stats_uses_explicit_range_anchor() {
-        let local_day_start_at_utc_plus_8 = 16 * HOUR_MS;
-        let local_10_am = local_day_start_at_utc_plus_8 + 10 * HOUR_MS;
-        let bounds = StatsTimeBounds {
-            start_at: local_day_start_at_utc_plus_8,
-            end_at: local_day_start_at_utc_plus_8 + DAY_MS - 1,
-            start_day: local_day_start_at_utc_plus_8,
-            range_days: 1,
-            explicit: true,
-        };
-
-        assert_eq!(hour_of_day_utc(local_10_am), 2);
-        assert_eq!(hour_of_day_for_stats(local_10_am, bounds), 10);
-    }
-
-    #[test]
-    fn history_stats_project_paths_are_normalized_for_stable_cache_keys() {
-        let paths = normalize_history_stats_project_paths(
-            None,
-            Some(vec![
-                "/repo/worktree/".to_string(),
-                "/repo/main".to_string(),
-                "/repo/main/".to_string(),
-            ]),
-        );
-        let reordered = normalize_history_stats_project_paths(
-            Some("/repo/main".to_string()),
-            Some(vec!["/repo/worktree".to_string()]),
-        );
-
-        assert_eq!(
-            paths,
-            vec!["/repo/main".to_string(), "/repo/worktree".to_string()]
-        );
-        assert_eq!(paths, reordered);
-        assert_eq!(
-            history_stats_project_paths_cache_key(&paths),
-            history_stats_project_paths_cache_key(&reordered)
-        );
-    }
-
-    #[test]
-    fn history_stats_buckets_usage_by_event_timestamp() {
-        let temp_dir = TempDir::new().unwrap();
-        let file = temp_dir.path().join("session.jsonl");
-        let line_a = r#"{"type":"assistant","timestamp":"1970-01-02T01:00:00Z","requestId":"req_1","message":{"id":"msg_1","role":"assistant","model":"claude-sonnet-4-5","content":[{"type":"text","text":"hello"}],"usage":{"input_tokens":100,"output_tokens":10}}}"#;
-        let line_b = r#"{"type":"assistant","timestamp":"1970-01-03T02:00:00Z","requestId":"req_2","message":{"id":"msg_2","role":"assistant","model":"claude-sonnet-4-5","content":[{"type":"text","text":"world"}],"usage":{"input_tokens":200,"output_tokens":20}}}"#;
-        write_text(&file, &format!("{line_a}\n{line_b}\n"));
-
-        let computed = scan_session_computation(&file, DAY_MS, 4 * DAY_MS);
-        let entry = HistoryIndexEntry {
-            file_ref: SessionFileRef {
-                source: "claude".to_string(),
-                project_key: "project-a".to_string(),
-                path: file.clone(),
-            },
-            fingerprint: SessionFileFingerprint {
-                created_at: DAY_MS,
-                updated_at: 4 * DAY_MS,
-                size: 1,
-            },
-            computed,
-        };
-        let bounds = StatsTimeBounds {
-            start_at: DAY_MS,
-            end_at: 3 * DAY_MS - 1,
-            start_day: DAY_MS,
-            range_days: 2,
-            explicit: true,
-        };
-
-        let daily_index = build_history_stats_daily_index(vec![entry], None, None, &[], bounds);
-        let response = build_history_stats_response(&daily_index.days, bounds);
-
-        assert_eq!(response.total_sessions, 1);
-        assert_eq!(response.total_messages, 2);
-        assert_eq!(response.total_input_tokens, 300);
-        assert_eq!(response.total_output_tokens, 30);
-        assert_eq!(response.daily_series.len(), 2);
-        assert_eq!(response.daily_series[0].input_tokens, 100);
-        assert_eq!(response.daily_series[1].input_tokens, 200);
-        assert_eq!(response.project_ranking[0].sessions, 1);
-        assert_eq!(response.source_distribution[0].sessions, 1);
-        assert_eq!(response.model_distribution[0].sessions, 1);
-    }
-
-    #[test]
-    fn history_stats_multi_path_filter_counts_overlapping_session_once() {
-        let temp_dir = TempDir::new().unwrap();
-        let file = temp_dir.path().join("nested-worktree-session.jsonl");
-        let line = r#"{"type":"assistant","cwd":"/repo/main/worktrees/task","timestamp":"1970-01-02T01:00:00Z","requestId":"req_1","message":{"id":"msg_1","role":"assistant","model":"claude-sonnet-4-5","content":[{"type":"text","text":"hello"}],"usage":{"input_tokens":100,"output_tokens":10}}}"#;
-        write_text(&file, &format!("{line}\n"));
-
-        let computed = scan_session_computation(&file, DAY_MS, 2 * DAY_MS);
-        let entry = HistoryIndexEntry {
-            file_ref: SessionFileRef {
-                source: "claude".to_string(),
-                project_key: "nested-worktree".to_string(),
-                path: file,
-            },
-            fingerprint: SessionFileFingerprint {
-                created_at: DAY_MS,
-                updated_at: 2 * DAY_MS,
-                size: 1,
-            },
-            computed,
-        };
-        let bounds = StatsTimeBounds {
-            start_at: DAY_MS,
-            end_at: 2 * DAY_MS - 1,
-            start_day: DAY_MS,
-            range_days: 1,
-            explicit: true,
-        };
-        let project_paths = normalize_history_stats_project_paths(
-            Some("/repo/main".to_string()),
-            Some(vec!["/repo/main/worktrees/task".to_string()]),
-        );
-
-        let daily_index =
-            build_history_stats_daily_index(vec![entry], None, None, &project_paths, bounds);
-        let response = build_history_stats_response(&daily_index.days, bounds);
-
-        assert_eq!(response.total_sessions, 1);
-        assert_eq!(response.total_messages, 1);
-        assert_eq!(response.total_input_tokens, 100);
-        assert_eq!(response.total_output_tokens, 10);
-    }
-
-    #[test]
-    fn history_stats_model_distribution_preserves_codex_reasoning_effort() {
-        let temp_dir = TempDir::new().unwrap();
-        let file = temp_dir.path().join("rollout-session.jsonl");
-        write_text(
-            &file,
-            concat!(
-                r#"{"type":"turn_context","payload":{"model":"gpt-5.4","effort":"high"}}"#,
-                "\n",
-                r#"{"type":"event_msg","timestamp":"1970-01-02T01:00:00Z","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":1000,"cached_input_tokens":100,"output_tokens":100,"total_tokens":1100}}}}"#,
-                "\n",
-            ),
-        );
-        let computed = scan_session_computation(&file, DAY_MS, 2 * DAY_MS);
-        let entry = HistoryIndexEntry {
-            file_ref: SessionFileRef {
-                source: "codex".to_string(),
-                project_key: "project-a".to_string(),
-                path: file,
-            },
-            fingerprint: SessionFileFingerprint {
-                created_at: DAY_MS,
-                updated_at: 2 * DAY_MS,
-                size: 1,
-            },
-            computed,
-        };
-        let bounds = StatsTimeBounds {
-            start_at: DAY_MS,
-            end_at: 2 * DAY_MS - 1,
-            start_day: DAY_MS,
-            range_days: 1,
-            explicit: true,
-        };
-
-        let daily_index = build_history_stats_daily_index(vec![entry], None, None, &[], bounds);
-        let response = build_history_stats_response(&daily_index.days, bounds);
-
-        assert_eq!(response.model_distribution.len(), 1);
-        assert_eq!(response.model_distribution[0].model, "gpt-5.4(high)");
-    }
-
-    #[test]
-    fn history_stats_reprices_cached_usage_events_with_current_model_prices() {
-        crate::model_pricing::model_prices_set_cache(vec![
-            crate::model_pricing::ModelPriceEntry {
-                model: "priced-model".to_string(),
-                input_per_1m: 2.5,
-                output_per_1m: 15.0,
-                cache_read_per_1m: 0.25,
-                cache_creation_per_1m: 0.0,
-                source: "manual".to_string(),
-                source_model_id: Some("priced-model".to_string()),
-                raw_json: None,
-                updated_at_ms: 1,
-                synced_at_ms: None,
-            },
-        ])
-        .unwrap();
-
-        let temp_dir = TempDir::new().unwrap();
-        let file = temp_dir.path().join("session.jsonl");
-        write_text(&file, "{}");
-
-        let usage = UsageStatsScan {
-            input_tokens: 1_000_000,
-            output_tokens: 100_000,
-            cache_read_tokens: 10_000_000,
-            cache_creation_tokens: 0,
-            total_cost_usd: 1.23,
-            unpriced_tokens: 11_100_000,
-        };
-        let entry = HistoryIndexEntry {
-            file_ref: SessionFileRef {
-                source: "codex".to_string(),
-                project_key: "CLI-Manager".to_string(),
-                path: file,
-            },
-            fingerprint: SessionFileFingerprint {
-                created_at: DAY_MS,
-                updated_at: DAY_MS,
-                size: 2,
-            },
-            computed: CachedSessionComputation {
-                created_at: DAY_MS,
-                updated_at: DAY_MS,
-                session_id: "session-1".to_string(),
-                title: "priced session".to_string(),
-                message_count: 1,
-                branch: None,
-                stats: SessionStatsScan {
-                    input_tokens: usage.input_tokens,
-                    output_tokens: usage.output_tokens,
-                    cache_read_tokens: usage.cache_read_tokens,
-                    cache_creation_tokens: usage.cache_creation_tokens,
-                    total_cost_usd: usage.total_cost_usd,
-                    unpriced_tokens: usage.unpriced_tokens,
-                    dominant_model: Some("priced-model".to_string()),
-                    current_model: Some("priced-model".to_string()),
-                    model_usage: HashMap::new(),
-                    context_window: None,
-                    last_context_tokens: None,
-                    reasoning_effort: None,
-                    token_trend: vec![usage_trend_point(
-                        UsageTokenScan {
-                            input_tokens: usage.input_tokens,
-                            output_tokens: usage.output_tokens,
-                            cache_read_tokens: usage.cache_read_tokens,
-                            cache_creation_tokens: usage.cache_creation_tokens,
-                            explicit_cost_usd: None,
-                        },
-                        Some("priced-model".to_string()),
-                    )],
-                    usage_events: vec![SessionUsageEventScan {
-                        event_key: "test:event".to_string(),
-                        event_index: 0,
-                        timestamp_ms: Some(DAY_MS),
-                        model: Some("priced-model".to_string()),
-                        usage,
-                    }],
-                    tool_call_count: 0,
-                    mcp_calls: HashMap::new(),
-                    skill_calls: HashMap::new(),
-                    builtin_calls: HashMap::new(),
-                },
-            },
-        };
-        let bounds = StatsTimeBounds {
-            start_at: DAY_MS,
-            end_at: 2 * DAY_MS - 1,
-            start_day: DAY_MS,
-            range_days: 1,
-            explicit: true,
-        };
-
-        let daily_index = build_history_stats_daily_index(vec![entry], None, None, &[], bounds);
-        let response = build_history_stats_response(&daily_index.days, bounds);
-
-        assert_eq!(response.total_input_tokens, 1_000_000);
-        assert_eq!(response.total_output_tokens, 100_000);
-        assert_eq!(response.total_cache_read_tokens, 10_000_000);
-        assert!((response.total_cost_usd - 6.5).abs() < 1e-9);
-        assert_eq!(response.total_unpriced_tokens, 0);
-        assert!((response.daily_series[0].total_cost_usd - 6.5).abs() < 1e-9);
-        assert_eq!(response.model_distribution[0].unpriced_tokens, 0);
-    }
-
-    #[test]
     fn collect_codex_session_files_uses_cwd_project_name() {
         let temp_dir = TempDir::new().unwrap();
         let root = temp_dir.path().join(".codex");
@@ -15251,7 +13592,7 @@ mod tests {
         assert_eq!(stats.output_tokens, 130);
         assert_eq!(stats.cache_read_tokens, 30);
         assert_eq!(stats.cache_creation_tokens, 5);
-        assert_eq!(stats.unpriced_tokens, 465);
+
         assert_eq!(stats.dominant_model.as_deref(), Some("claude-sonnet-4-5"));
         assert_eq!(stats.token_trend.len(), 2);
         assert_eq!(stats.token_trend[0].total_tokens, 165);
@@ -15284,9 +13625,9 @@ mod tests {
         assert_eq!(stats.cache_read_tokens, 1600);
         assert_eq!(stats.output_tokens, 300);
         // token_count 事件不带 model，应回退归因到 turn_context 的模型；未加载模型价格缓存时只记未定价。
-        assert_eq!(stats.unpriced_tokens, 3300);
+
         assert!(stats.model_usage.contains_key("gpt-5.4"));
-        assert_eq!(stats.total_cost_usd, 0.0);
+
         assert_eq!(stats.token_trend.len(), 2);
         assert_eq!(stats.token_trend[0].input_tokens, 600);
         assert_eq!(stats.token_trend[0].cache_read_tokens, 400);
@@ -15296,52 +13637,6 @@ mod tests {
         assert_eq!(stats.token_trend[1].cache_read_tokens, 1200);
         assert_eq!(stats.token_trend[1].output_tokens, 200);
         assert_eq!(stats.token_trend[1].total_tokens, 2200);
-    }
-
-    #[test]
-    fn history_stats_buckets_codex_usage_by_event_day() {
-        let temp_dir = TempDir::new().unwrap();
-        let file = temp_dir.path().join("rollout-session.jsonl");
-        write_text(
-            &file,
-            concat!(
-                r#"{"type":"event_msg","timestamp":"1970-01-02T01:00:00Z","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"cached_input_tokens":0,"output_tokens":10,"total_tokens":110}}}}"#,
-                "\n",
-                r#"{"type":"event_msg","timestamp":"1970-01-03T15:00:00Z","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":300,"cached_input_tokens":0,"output_tokens":30,"total_tokens":330}}}}"#,
-                "\n",
-            ),
-        );
-        let computed = scan_session_computation(&file, DAY_MS, 3 * DAY_MS);
-        let entry = HistoryIndexEntry {
-            file_ref: SessionFileRef {
-                source: "codex".to_string(),
-                project_key: "project-a".to_string(),
-                path: file,
-            },
-            fingerprint: SessionFileFingerprint {
-                created_at: DAY_MS,
-                updated_at: 3 * DAY_MS,
-                size: 1,
-            },
-            computed,
-        };
-        let bounds = StatsTimeBounds {
-            start_at: DAY_MS,
-            end_at: 3 * DAY_MS - 1,
-            start_day: DAY_MS,
-            range_days: 2,
-            explicit: true,
-        };
-
-        let daily_index = build_history_stats_daily_index(vec![entry], None, None, &[], bounds);
-        let response = build_history_stats_response(&daily_index.days, bounds);
-
-        assert_eq!(response.daily_series[0].input_tokens, 100);
-        assert_eq!(response.daily_series[0].output_tokens, 10);
-        assert_eq!(response.daily_series[1].input_tokens, 200);
-        assert_eq!(response.daily_series[1].output_tokens, 20);
-        assert_eq!(response.hourly_activity[1].input_tokens, 100);
-        assert_eq!(response.hourly_activity[15].input_tokens, 200);
     }
 
     #[test]
@@ -15670,7 +13965,6 @@ mod tests {
 
         assert_eq!(usage.input_tokens, 100);
         assert_eq!(usage.output_tokens, 50);
-        assert_eq!(usage.explicit_cost_usd, Some(0.5));
     }
 
     #[test]

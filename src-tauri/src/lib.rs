@@ -1,7 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 pub mod app_paths;
-mod model_pricing;
 mod claude_hook;
 pub mod codex_app_server_proxy;
 mod commands;
@@ -911,7 +910,6 @@ pub fn run() {
         })
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
-        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_notification::init())
         .manage(PendingBackgroundSession::default())
@@ -1034,11 +1032,6 @@ pub fn run() {
             commands::history::history_get_conversion_matrix,
             commands::history::history_refresh_index,
             commands::history::history_list_prompts,
-            commands::history::history_list_stats_projects,
-            commands::history::history_get_stats,
-            commands::history::request_logs::history_sync_request_logs,
-            commands::history::request_logs::history_list_request_logs,
-            commands::history::request_logs::history_get_request_log_stats,
             commands::history_sources::history_sources_list_descriptors,
             commands::history_sources::history_sources_detect,
             commands::history_sources::history_sources_validate,
@@ -1063,9 +1056,6 @@ pub fn run() {
             commands::hook_settings::hook_settings_install_grok,
             commands::hook_settings::hook_settings_uninstall_grok,
             commands::hook_settings::hook_settings_select_dir,
-            commands::ccusage::ccusage_get_status,
-            commands::ccusage::ccusage_install_tools,
-            commands::ccusage::ccusage_refresh_report,
                                                                                                                                     commands::git::get_current_git_branch,
             commands::git::git_get_changes,
             commands::git::git_list_repositories,

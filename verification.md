@@ -1,3 +1,24 @@
+# 精简版 0.1.0 验证（2026-10-19，未发布）
+
+本轮移除历史分析、请求记录、ccusage、今日项目用量与 Trellis 开发流程，并修复旧 Statusline 启动、Hook 页面契约及完整版自动更新残留。
+
+- npm run build：通过。
+- npx tsc --noEmit：通过。
+- scripts 中非 E2E 的 Node 测试：334 项通过。
+- cargo check --locked --manifest-path src-tauri/Cargo.toml：通过。
+- cargo test --locked --manifest-path src-tauri/Cargo.toml --lib：618 项通过。
+- cargo build --locked --manifest-path src-tauri/Cargo.toml --bin cli-manager：通过；实际执行 __statusline 参数在 562 ms 内静默返回 0。
+- macOS 窗口配置、R2 发布配置和资源准备脚本检查：通过；SSH Agent 清单生成不再依赖桌面更新器配置。
+- 37 处 SQLite 迁移定义与 HEAD 完全相同；前端、Tauri、Cargo 版本均为 0.1.0。
+- 隔离内存 IPC 预览中，从通用设置手动切换简体中文与英文，关于页的新文案及版本显示正常。此验证不读取或写入用户设置。
+- git diff --check：通过。未提交、推送或发版。
+
+边界：未验证真实 WSL/SSH 主机、原生设置窗口及安装包升级。Trellis 的受版本管理内容已全部删除；自动审批拒绝空目录删除（blocked by policy），磁盘上仍有空目录，Git 不跟踪这些目录。
+
+---
+
+以下是精简前的历史验证归档，涉及已移除功能的记录不代表当前版本仍支持该功能。
+
 # SSH NVM Codex 启动环境修复验证（2026-07-28）
 
 ## 根因与发现清单

@@ -12,12 +12,6 @@ import type { LucideIcon } from "lucide-react";
 import type { SettingsTab } from "./components/SettingsModal";
 const loadSettingsModal = () => import("./components/SettingsModal").then((module) => ({ default: module.SettingsModal }));
 const SettingsModal = lazy(loadSettingsModal);
-const StatsPanel = lazy(() =>
-  import("./components/stats/StatsPanel").then((module) => ({ default: module.StatsPanel }))
-);
-const CcusageStatsPanel = lazy(() =>
-  import("./components/stats/CcusageStatsPanel").then((module) => ({ default: module.CcusageStatsPanel }))
-);
 import { WindowTitleBar } from "./components/WindowTitleBar";
 import { CloseConfirmDialog } from "./components/CloseConfirmDialog";
 import { RunningTasksExitDialog } from "./components/RunningTasksExitDialog";
@@ -37,14 +31,12 @@ import { flushTerminalSnapshotsNow } from "./lib/sessionSnapshotPersistence";
 import { useHistoryStore } from "./stores/historyStore";
 import { useExternalSessionSyncStore } from "./stores/externalSessionSyncStore";
 import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
-import { useUpdateStore } from "./stores/updateStore";
 import { useReplayStore } from "./stores/replayStore";
 import { useTerminalStore, type CliHookPayload } from "./stores/terminalStore";
 import { useWorktreeStore } from "./stores/worktreeStore";
 import { debugConsoleWarn } from "./lib/debugConsole";
 import { createPerfMarker, logInfo, logWarn } from "./lib/logger";
 import { getContrastRatioFromHex, MIN_APPLY_CONTRAST_RATIO } from "./lib/contrast";
-import { getDb } from "./lib/db";
 import { translateCurrent, useI18n } from "./lib/i18n";
 import { getOsPlatform } from "./lib/shell";
 import { normalizeFontFamilyStack } from "./lib/systemFonts";
@@ -70,7 +62,6 @@ let deferredStartupTasksStarted = false;
 // React StrictMode/初始化重入下，每个应用进程最多处理一次会话恢复（弹窗或自动）。
 // 该守护确保恢复提示只在启动时刻触发一次，切设置页/切视图重渲染都不会再弹。
 let sessionRestoreHandled = false;
-let startupUpdateChecked = false;
 let settingsModalPreloadStarted = false;
 const COMPACT_WINDOW_WIDTH = 350;
 const WINDOW_MIN_HEIGHT = 600;
@@ -105,13 +96,11 @@ const TERMINAL_PANEL_SEMANTIC_COLORS = {
   },
 } as const;
 const STARTUP_STAGE_TIMEOUT_MS = 15_000;
-const REQUEST_LOG_SYNC_INTERVAL_MS = 60_000;
 const IN_TAURI = isTauri();
 const CLAUDE_HOOK_TOAST_PREFIX = "claude-hook-notification";
 const SYSTEM_NOTIFICATION_ACTION_EVENT = "system-notification-action";
 const MAX_SYSTEM_NOTIFICATION_DETAIL_LENGTH = 72;
 let claudeHookToastSequence = 0;
-type HookInstallStatus = "directoryMissing" | "notInstalled" | "partialInstalled" | "installed";
 type StartupStage = "settings" | "stores" | "projects";
 
 function isLikelyMacOs() {
@@ -127,14 +116,6 @@ function preloadSettingsModal(): void {
   });
 }
 
-interface HookSettingsStatusPayload {
-  claude: { status: HookInstallStatus };
-  codex: { status: HookInstallStatus };
-  pi: { status: HookInstallStatus };
-  grok: { status: HookInstallStatus };
-  claudeAutoRepaired?: boolean;
-}
-
 interface SubagentTranscriptAppendPayload {
   key: string;
   content: string;
@@ -143,29 +124,6 @@ interface SubagentTranscriptAppendPayload {
 
 interface SystemNotificationActionPayload {
   tabId: string;
-}
-
-async function hasInstalledCliHook(): Promise<boolean> {
-  const settings = useSettingsStore.getState();
-  const status = await invoke<HookSettingsStatusPayload>("hook_settings_get_status", {
-    selectedDir: settings.claudeHookConfigDir?.trim() || null,
-    codexSelectedDir: settings.codexHookConfigDir?.trim() || null,
-    piSelectedDir: settings.piHookConfigDir?.trim() || null,
-    grokSelectedDir: settings.grokHookConfigDir?.trim() || null,
-    autoRepair: settings.claudeHookBridgeEnabled && settings.claudeHookAutoRepairKnownInstalled,
-  });
-  if (status.claudeAutoRepaired && !settings.claudeHookAutoRepairNoticeShown) {
-    toast.info(translateCurrent("notifications.hook.autoRepaired.title"), {
-      description: translateCurrent("notifications.hook.autoRepaired.description"),
-    });
-    void settings.update("claudeHookAutoRepairNoticeShown", true);
-  }
-  return (
-    (settings.claudeHookBridgeEnabled && status.claude.status === "installed") ||
-    (settings.codexHookBridgeEnabled && status.codex.status === "installed") ||
-    (settings.piHookBridgeEnabled && status.pi.status === "installed") ||
-    (settings.grokHookBridgeEnabled && status.grok.status === "installed")
-  );
 }
 
 type ClaudeHookToastVariant = "attention" | "approval" | "finished" | "failed";
@@ -453,7 +411,7 @@ function showClaudeHookToast(payload: CliHookPayload, tabId: string, onActivateT
   );
 }
 
-function runDeferredStartupTasks(openSettings?: (tab?: SettingsTab) => void): void {
+function runDeferredStartupTasks(): void {
   if (!startupBaseReady || !firstScreenPerfReported || deferredStartupTasksStarted) return;
   deferredStartupTasksStarted = true;
 
@@ -465,26 +423,6 @@ function runDeferredStartupTasks(openSettings?: (tab?: SettingsTab) => void): vo
         logWarn("Failed to refresh deferred project diagnostics", err);
       });
     })();
-
-    if (!startupUpdateChecked) {
-      startupUpdateChecked = true;
-      void (async () => {
-        const updateStore = useUpdateStore.getState();
-        await updateStore.fetchVersion();
-        const updateInfo = await updateStore.checkUpdate({ silent: true });
-        if (!updateInfo) return;
-        toast.info(translateCurrent("notifications.update.availableTitle", { version: updateInfo.version }), {
-          description: translateCurrent("notifications.update.availableDescription"),
-          action: openSettings
-            ? {
-                label: translateCurrent("notifications.update.viewUpdate"),
-                onClick: () => openSettings("about"),
-              }
-            : undefined,
-          duration: 12000,
-        });
-      })();
-    }
 
     window.setTimeout(() => {
       const startExternalSessionSync = () => {
@@ -513,20 +451,14 @@ function App() {
   const viewMode = useSettingsStore((s) => s.viewMode);
   const closeBehavior = useSettingsStore((s) => s.closeBehavior);
   const exitWithRunningTasksBehavior = useSettingsStore((s) => s.exitWithRunningTasksBehavior);
-  const ccusageAnalyticsEnabled = useSettingsStore((s) => s.ccusageAnalyticsEnabled);
-  const claudeHookConfigDir = useSettingsStore((s) => s.claudeHookConfigDir);
-  const codexHookConfigDir = useSettingsStore((s) => s.codexHookConfigDir);
   const debugMode = useSettingsStore((s) => s.debugMode);
   const projectScopedTerminalViewEnabled = useSettingsStore((s) => s.projectScopedTerminalViewEnabled);
   const lastSettingsTab = useSettingsStore((s) => s.lastSettingsTab);
   const updateSetting = useSettingsStore((s) => s.update);
-  const openHistory = useHistoryStore((s) => s.openHistory);
-  const openHistorySession = useHistoryStore((s) => s.openSession);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsEverOpened, setSettingsEverOpened] = useState(false);
   const [settingsWindowExpanded, setSettingsWindowExpanded] = useState(false);
   const [settingsInitialTab, setSettingsInitialTab] = useState<SettingsTab>("general");
-  const [statsOpen, setStatsOpen] = useState(false);
   const [closeDialogOpen, setCloseDialogOpen] = useState(false);
   const [runningTasksDialogOpen, setRunningTasksDialogOpen] = useState(false);
   const [runningTasksCount, setRunningTasksCount] = useState(0);
@@ -589,37 +521,6 @@ function App() {
   }, [closeBehavior]);
 
   useEffect(() => {
-    if (!IN_TAURI || !settingsLoaded || !startupReady) return;
-    let disposed = false;
-    let syncing = false;
-
-    const syncRequestLogs = async () => {
-      if (disposed || syncing) return;
-      syncing = true;
-      try {
-        await getDb();
-        if (disposed) return;
-        await invoke("history_sync_request_logs", {
-          claudeConfigDir: claudeHookConfigDir?.trim() || null,
-          codexConfigDir: codexHookConfigDir?.trim() || null,
-          force: false,
-        });
-      } catch (err) {
-        logWarn("Failed to sync local request logs", err);
-      } finally {
-        syncing = false;
-      }
-    };
-
-    void syncRequestLogs();
-    const timer = window.setInterval(() => void syncRequestLogs(), REQUEST_LOG_SYNC_INTERVAL_MS);
-    return () => {
-      disposed = true;
-      window.clearInterval(timer);
-    };
-  }, [claudeHookConfigDir, codexHookConfigDir, settingsLoaded, startupReady]);
-
-  useEffect(() => {
     exitTasksBehaviorRef.current = exitWithRunningTasksBehavior;
   }, [exitWithRunningTasksBehavior]);
 
@@ -653,42 +554,6 @@ function App() {
     if (!IN_TAURI || !debugMode) return;
     return startRuntimeDiagnostics();
   }, [debugMode]);
-
-  const handleOpenStats = useCallback(() => {
-    // 历史用量分析（StatsPanel）不需要 hook，直接打开
-    if (!ccusageAnalyticsEnabled) {
-      setStatsOpen(true);
-      return;
-    }
-
-    // 实时统计（CcusageStatsPanel）需要检查 hook 是否安装
-    void (async () => {
-      try {
-        if (await hasInstalledCliHook()) {
-          setStatsOpen(true);
-          return;
-        }
-      } catch (err) {
-        logWarn("Failed to check hook status before opening realtime stats", err);
-      }
-
-      toast.warning(t("notifications.stats.needHook"), {
-        description: t("notifications.stats.needHookDescription"),
-        action: {
-          label: t("notifications.goSettings"),
-          onClick: () => handleOpenSettings("hooks"),
-        },
-      });
-    })();
-  }, [ccusageAnalyticsEnabled, handleOpenSettings, t]);
-
-  const handleOpenStatsSession = useCallback(
-    async (sessionKey: string) => {
-      await openHistory();
-      await openHistorySession(sessionKey);
-    },
-    [openHistory, openHistorySession]
-  );
 
   const handleToggleTerminalFullscreen = useCallback(() => {
     const nextFullscreen = !terminalFullscreen;
@@ -969,7 +834,7 @@ function App() {
       if (!cancelled) {
         setStartupReady(true);
         setStartupStage("projects");
-        runDeferredStartupTasks(startupOpenSettingsRef.current);
+        runDeferredStartupTasks();
       }
     };
 
@@ -1604,7 +1469,7 @@ function App() {
           resolvedTheme,
           viewMode,
         });
-        runDeferredStartupTasks(handleOpenSettings);
+        runDeferredStartupTasks();
         if (IN_TAURI && !firstScreenShown) {
           firstScreenShown = true;
           void getCurrentWindow().show().catch((err) => logWarn("Failed to show window after first screen", err));
@@ -1660,7 +1525,6 @@ function App() {
         <div id="main-content" className="flex min-h-0 flex-1" tabIndex={-1}>
           <Sidebar
             onOpenSettings={handleOpenSettings}
-            onOpenStats={handleOpenStats}
             compactMode
             projectScopedTerminalViewEnabled={projectScopedTerminalViewEnabled}
             terminalScope={terminalScope}
@@ -1672,7 +1536,6 @@ function App() {
           {!terminalFullscreen && (
             <Sidebar
               onOpenSettings={handleOpenSettings}
-              onOpenStats={handleOpenStats}
               projectScopedTerminalViewEnabled={projectScopedTerminalViewEnabled}
               terminalScope={terminalScope}
               onTerminalScopeChange={setTerminalScope}
@@ -1702,16 +1565,7 @@ function App() {
             onActiveTabChange={handleSettingsTabChange}
           />
         )}
-        {statsOpen &&
-          (ccusageAnalyticsEnabled ? (
-            <CcusageStatsPanel open={statsOpen} onClose={() => setStatsOpen(false)} />
-          ) : (
-            <StatsPanel
-              open={statsOpen}
-              onClose={() => setStatsOpen(false)}
-              onOpenSession={handleOpenStatsSession}
-            />
-          ))}
+
       </Suspense>
       <CloseConfirmDialog
         open={closeDialogOpen}

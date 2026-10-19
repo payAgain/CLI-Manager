@@ -1,6 +1,5 @@
 pub mod app_data;
 pub mod background;
-pub mod ccusage;
 pub mod db_repair;
 pub mod fonts;
 pub mod fs;

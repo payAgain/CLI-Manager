@@ -69,7 +69,6 @@ import { SIDEBAR_TOGGLE_REQUEST_EVENT } from "../../lib/sidebarCommands";
 
 interface SidebarProps {
   onOpenSettings: (tab?: SettingsTab) => void;
-  onOpenStats: () => void;
   compactMode?: boolean;
   projectScopedTerminalViewEnabled?: boolean;
   terminalScope?: TerminalScope;
@@ -196,7 +195,6 @@ function collectGroupTerminalTargets(
 
 export function Sidebar({
   onOpenSettings,
-  onOpenStats,
   compactMode = false,
   projectScopedTerminalViewEnabled = true,
   terminalScope = ALL_TERMINALS_SCOPE,
@@ -255,7 +253,6 @@ export function Sidebar({
   const projectWorktreeConfigEnabled = useSettingsStore((s) => s.projectWorktreeConfigEnabled);
   const sidebarDensity = useSettingsStore((s) => s.sidebarDensity);
   const sidebarProjectFilterVisible = useSettingsStore((s) => s.sidebarProjectFilterVisible);
-  const sidebarToolbarVisibility = useSettingsStore((s) => s.sidebarToolbarVisibility);
   const confirmBeforeClosingTerminalTab = useSettingsStore((s) => s.confirmBeforeClosingTerminalTab);
   const updateSetting = useSettingsStore((s) => s.update);
   const persistedSidebarWidth = useSettingsStore((s) => s.sidebarWidth);
@@ -2065,8 +2062,6 @@ export function Sidebar({
         <SidebarFooter
           collapsed={compactMode ? false : sidebarCollapsed}
           onOpenSettings={onOpenSettings}
-          onOpenStats={onOpenStats}
-          toolbarVisibility={sidebarToolbarVisibility}
         />
       </div>
 

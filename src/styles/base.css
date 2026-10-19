@@ -19,8 +19,7 @@ button, input, select, textarea, optgroup {
   }
 
   .ui-empty-state::before,
-  .ui-empty-state-icon,
-  .ui-stats-panel::before {
+  .ui-empty-state-icon {
     animation: none !important;
     transform: none !important;
   }

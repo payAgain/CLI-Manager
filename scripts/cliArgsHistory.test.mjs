@@ -25,18 +25,6 @@ const {
   recordCliArgsUsage,
 } = await import(pathToFileURL(outputPath).href);
 
-const syncSource = readFileSync(new URL("../src/lib/syncSettings.ts", import.meta.url), "utf8");
-const syncOutput = ts.transpileModule(syncSource, {
-  compilerOptions: {
-    module: ts.ModuleKind.ES2022,
-    target: ts.ScriptTarget.ES2022,
-  },
-  fileName: "syncSettings.ts",
-}).outputText;
-const syncOutputPath = join(tempDir, "syncSettings.mjs");
-writeFileSync(syncOutputPath, syncOutput, "utf8");
-const { pickSyncableSettings, SETTING_BACKUP_POLICY } = await import(pathToFileURL(syncOutputPath).href);
-
 test("records CLI argument usage separately by CLI tool", () => {
   let history = recordCliArgsUsage([], " Codex ", " --full-auto ", 100);
   history = recordCliArgsUsage(history, "codex", "--full-auto", 200);
@@ -73,15 +61,6 @@ test("drops invalid entries and merges duplicate persisted values", () => {
   ]), [
     { cliTool: "codex", cliArgs: "--full-auto", count: 5, lastUsedAt: 200 },
   ]);
-});
-
-test("includes CLI argument history in preference snapshots", () => {
-  const cliArgsHistory = [
-    { cliTool: "codex", cliArgs: "--full-auto", count: 2, lastUsedAt: 200 },
-  ];
-
-  assert.equal(SETTING_BACKUP_POLICY.cliArgsHistory, "preferences");
-  assert.deepEqual(pickSyncableSettings({ cliArgsHistory, debugMode: true }), { cliArgsHistory });
 });
 
 test("records non-clone CLI arguments after either create or edit succeeds", () => {

@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
-import { BarChart3, Settings } from "../icons";
+import { Settings } from "../icons";
 import type { SettingsTab } from "../SettingsModal";
 import { getErrorMessage, getPiHookErrorMessage } from "../../lib/hookErrors";
-import { useSettingsStore, type SidebarToolbarVisibilitySettings } from "../../stores/settingsStore";
+import { useSettingsStore } from "../../stores/settingsStore";
 import { useI18n } from "../../lib/i18n";
 
 type HookInstallStatus = "directoryMissing" | "notInstalled" | "partialInstalled" | "installed";
@@ -27,8 +27,6 @@ interface HookSettingsStatus {
 interface SidebarFooterProps {
   collapsed: boolean;
   onOpenSettings: (tab?: SettingsTab) => void;
-  onOpenStats: () => void;
-  toolbarVisibility: SidebarToolbarVisibilitySettings;
 }
 
 function trimDir(value: string | null): string | null {
@@ -210,18 +208,8 @@ function HookStatusLight({ onOpenSettings }: { onOpenSettings: (tab?: SettingsTa
   );
 }
 
-export function SidebarFooter({ collapsed, onOpenSettings, onOpenStats, toolbarVisibility }: SidebarFooterProps) {
+export function SidebarFooter({ collapsed, onOpenSettings }: SidebarFooterProps) {
   const { t } = useI18n();
-  const statsButton = toolbarVisibility.stats ? (
-    <button
-      onClick={onOpenStats}
-      className="ui-focus-ring ui-icon-action ui-sidebar-action-stats"
-      title={t("sidebar.stats")}
-      aria-label={t("sidebar.openStats")}
-    >
-      <BarChart3 size={14} strokeWidth={1.5} />
-    </button>
-  ) : null;
 
   const settingsButton = (
     <button
@@ -238,7 +226,7 @@ export function SidebarFooter({ collapsed, onOpenSettings, onOpenStats, toolbarV
     return (
       <div className="px-2 py-2">
         <div className="flex flex-col items-center gap-1.5">
-          {statsButton}
+
           <HookStatusLight onOpenSettings={onOpenSettings} />
           {settingsButton}
         </div>
@@ -249,7 +237,7 @@ export function SidebarFooter({ collapsed, onOpenSettings, onOpenStats, toolbarV
   return (
     <div className="px-2.5 py-2.5">
       <div className="flex items-center gap-2">
-        {statsButton}
+
         <HookStatusLight onOpenSettings={onOpenSettings} />
         {settingsButton}
       </div>

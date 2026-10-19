@@ -637,76 +637,6 @@
   color: #4b5563;
 }
 
-.ui-stats-panel {
-  position: fixed;
-  isolation: isolate;
-}
-
-.ui-stats-panel .recharts-surface:focus {
-  outline: none;
-}
-
-.ui-stats-panel .recharts-surface:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--primary) 72%, transparent);
-  outline-offset: -2px;
-}
-
-.ui-stats-panel::before {
-  content: "";
-  position: absolute;
-  inset: 0 0 auto;
-  height: 72px;
-  pointer-events: none;
-  background: linear-gradient(180deg, color-mix(in srgb, var(--primary) 5%, transparent), transparent 88%);
-  z-index: -1;
-}
-
-.ui-stats-panel-header {
-  position: relative;
-}
-
-.ui-stats-panel-badge {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-  border-radius: 8px;
-  background-color: color-mix(in srgb, var(--accent) 16%, transparent);
-  color: var(--accent);
-}
-
-.ui-stats-metric-card {
-  position: relative;
-  overflow: hidden;
-}
-
-.ui-stats-metric-card::before {
-  content: "";
-  position: absolute;
-  inset: 0 auto auto 0;
-  width: 100%;
-  height: 3px;
-  background-image: linear-gradient(90deg, var(--primary-gradient-start), color-mix(in srgb, var(--warning) 72%, var(--primary) 28%));
-  opacity: 0.92;
-}
-
-.ui-stats-metric-card::after {
-  content: "";
-  position: absolute;
-  top: -28px;
-  right: -18px;
-  width: 88px;
-  height: 88px;
-  border-radius: 999px;
-  pointer-events: none;
-  background: radial-gradient(circle, color-mix(in srgb, var(--primary) 10%, transparent), transparent 68%);
-}
-
-.ui-stats-metric-value {
-  letter-spacing: 0.01em;
-}
-
 .ui-no-divider-list {
   display: flex;
   flex-direction: column;
@@ -1551,26 +1481,6 @@
   --cli-chip-color: #8b5cf6;
 }
 
-/* 项目级供应商覆盖徽标（cc-switch）— 独立样式，不复用 cli_tool chip 配色 */
-.ui-tree-provider-chip {
-  align-items: center;
-  gap: 2px;
-  min-height: 15px;
-  background-color: color-mix(in srgb, var(--surface-container-high) 38%, transparent);
-  color: var(--text-secondary);
-  border: 1px solid color-mix(in srgb, var(--border) 52%, transparent);
-  font-weight: 500;
-}
-
-[data-theme="dark"] .ui-tree-provider-chip {
-  background-color: color-mix(in srgb, var(--surface-container-high) 14%, transparent);
-  border-color: color-mix(in srgb, var(--border) 34%, transparent);
-}
-
-.ui-tree-provider-chip::before {
-  display: none;
-}
-
 .ui-tree-warning-chip {
   width: 18px;
   height: 18px;
@@ -2402,15 +2312,6 @@
   color: color-mix(in srgb, var(--on-surface-variant) 86%, var(--on-surface) 14%);
 }
 
-.ui-icon-action.ui-sidebar-action-stats {
-  background-color: transparent;
-  color: var(--success);
-}
-
-[data-theme="light"] .ui-icon-action.ui-sidebar-action-stats {
-  color: color-mix(in srgb, var(--success) 82%, var(--on-surface) 18%);
-}
-
 [data-theme="light"] .ui-icon-action.ui-sidebar-action-settings {
   color: color-mix(in srgb, var(--primary) 82%, var(--on-surface) 18%);
 }
@@ -2419,7 +2320,6 @@
   color: color-mix(in srgb, var(--on-surface-variant) 92%, var(--on-surface) 8%);
 }
 
-[data-theme="light"] .ui-icon-action.ui-sidebar-action-stats,
 [data-theme="light"] .ui-icon-action.ui-sidebar-action-settings,
 [data-theme="light"] .ui-icon-action.ui-sidebar-action-hook {
   border-color: color-mix(in srgb, currentColor 18%, transparent);
@@ -2428,12 +2328,6 @@
 .ui-icon-action.ui-sidebar-action-settings {
   background-color: transparent;
   color: color-mix(in srgb, var(--primary) 72%, #8b5cf6 28%);
-}
-
-.ui-icon-action.ui-sidebar-action-stats:hover:not(:disabled) {
-  background-color: color-mix(in srgb, var(--success) 16%, transparent);
-  box-shadow: none;
-  color: var(--success);
 }
 
 .ui-icon-action.ui-sidebar-action-settings:hover:not(:disabled) {

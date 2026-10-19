@@ -233,7 +233,7 @@ jobs:
           # Keep the release out of `releases/latest` until the required SSH Agent assets exist.
           releaseDraft: true
           prerelease: false
-          includeUpdaterJson: true
+          includeUpdaterJson: false
           args: ${{ matrix.args }}
 
       - name: Package Windows portable ZIP
@@ -327,7 +327,6 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --dir dist/github-release \
             --clobber
-          test -f dist/github-release/latest.json
           test -f dist/github-release/ssh-agent-release-manifest.json
           node .github/scripts/prepare-r2-release.mjs \
             dist/github-release \
@@ -354,11 +353,6 @@ jobs:
             --recursive \
             --endpoint-url "$R2_ENDPOINT" \
             --cache-control "public,max-age=31536000,immutable"
-          aws s3 cp dist/r2-release/latest.json \
-            "s3://${R2_BUCKET}/CLI-Manager/releases/latest/latest.json" \
-            --endpoint-url "$R2_ENDPOINT" \
-            --content-type "application/json" \
-            --cache-control "no-cache"
           for agent_file in \
             cli-manager-ssh-agent-linux-x86_64 \
             cli-manager-ssh-agent-linux-aarch64 \
@@ -378,18 +372,13 @@ jobs:
         shell: bash
         run: |
           curl --fail --silent --show-error --retry 5 --retry-all-errors \
-            "$R2_PUBLIC_BASE_URL/CLI-Manager/releases/latest/latest.json" \
-            --output /tmp/r2-latest.json
-          curl --fail --silent --show-error --retry 5 --retry-all-errors \
             "$R2_PUBLIC_BASE_URL/CLI-Manager/releases/ssh-agent/latest/ssh-agent-release-manifest.json" \
             --output /tmp/r2-agent-manifest.json
           node - "$R2_PUBLIC_BASE_URL" <<'NODE'
           const fs = require("node:fs");
           const base = process.argv[2];
-          const latest = JSON.parse(fs.readFileSync("/tmp/r2-latest.json", "utf8"));
           const agent = JSON.parse(fs.readFileSync("/tmp/r2-agent-manifest.json", "utf8"));
           const urls = [
-            ...Object.values(latest.platforms ?? {}).map((entry) => entry.url),
             ...(agent.artifacts ?? []).map((entry) => entry.url),
           ];
           if (urls.length === 0 || urls.some((url) => typeof url !== "string" || !url.startsWith(`${base}/`))) {

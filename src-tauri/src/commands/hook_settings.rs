@@ -5,7 +5,6 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
-use tauri::AppHandle;
 use tauri_plugin_dialog::DialogExt;
 
 const CLAUDE_APPROVAL_SCRIPT_NAME: &str = "notify-cli-manager-approval.ps1";
@@ -91,12 +90,6 @@ enum HookInstallStatus {
 }
 
 #[derive(Clone, Copy)]
-enum CommonConfigTool {
-    Claude,
-    Codex,
-}
-
-#[derive(Clone, Copy)]
 enum ClaudeHookModule {
     SessionStart,
     Running,
@@ -125,7 +118,6 @@ enum PiHookModule {
 
 #[tauri::command]
 pub async fn hook_settings_get_status(
-    app: AppHandle,
     selected_dir: Option<String>,
     codex_selected_dir: Option<String>,
     pi_selected_dir: Option<String>,
@@ -153,7 +145,6 @@ pub async fn hook_settings_get_status(
     let pi = build_pi_status(pi_dir.clone())?;
     let grok = build_grok_status(grok_dir.clone())?;
 
-
     Ok(HookSettingsStatus {
         claude,
         codex,
@@ -165,7 +156,6 @@ pub async fn hook_settings_get_status(
 
 #[tauri::command]
 pub async fn hook_settings_install(
-    app: AppHandle,
     selected_dir: Option<String>,
     codex_selected_dir: Option<String>,
     pi_selected_dir: Option<String>,
@@ -200,7 +190,6 @@ pub async fn hook_settings_install(
 
 #[tauri::command]
 pub async fn hook_settings_uninstall(
-    app: AppHandle,
     selected_dir: Option<String>,
     codex_selected_dir: Option<String>,
     pi_selected_dir: Option<String>,
@@ -235,7 +224,6 @@ pub async fn hook_settings_uninstall(
 
 #[tauri::command]
 pub async fn hook_settings_install_codex(
-    app: AppHandle,
     selected_dir: Option<String>,
     codex_selected_dir: Option<String>,
     pi_selected_dir: Option<String>,
@@ -270,7 +258,6 @@ pub async fn hook_settings_install_codex(
 
 #[tauri::command]
 pub async fn hook_settings_uninstall_codex(
-    app: AppHandle,
     selected_dir: Option<String>,
     codex_selected_dir: Option<String>,
     pi_selected_dir: Option<String>,
@@ -305,7 +292,6 @@ pub async fn hook_settings_uninstall_codex(
 
 #[tauri::command]
 pub async fn hook_settings_install_pi(
-    app: AppHandle,
     selected_dir: Option<String>,
     codex_selected_dir: Option<String>,
     pi_selected_dir: Option<String>,
@@ -339,7 +325,6 @@ pub async fn hook_settings_install_pi(
 
 #[tauri::command]
 pub async fn hook_settings_uninstall_pi(
-    app: AppHandle,
     selected_dir: Option<String>,
     codex_selected_dir: Option<String>,
     pi_selected_dir: Option<String>,
@@ -373,7 +358,6 @@ pub async fn hook_settings_uninstall_pi(
 
 #[tauri::command]
 pub async fn hook_settings_install_grok(
-    app: AppHandle,
     selected_dir: Option<String>,
     codex_selected_dir: Option<String>,
     pi_selected_dir: Option<String>,
@@ -409,7 +393,6 @@ pub async fn hook_settings_install_grok(
 
 #[tauri::command]
 pub async fn hook_settings_uninstall_grok(
-    app: AppHandle,
     selected_dir: Option<String>,
     codex_selected_dir: Option<String>,
     pi_selected_dir: Option<String>,
@@ -444,7 +427,7 @@ pub async fn hook_settings_uninstall_grok(
 
 #[tauri::command]
 pub async fn hook_settings_select_dir(
-    app: AppHandle,
+    app: tauri::AppHandle,
     title: Option<String>,
 ) -> Result<Option<String>, String> {
     let selected = app
@@ -525,13 +508,6 @@ fn parse_pi_hook_module(module: Option<String>) -> Result<Option<PiHookModule>, 
             other => Err(format!("未知的 Pi Hook 模块: {other}")),
         })
         .transpose()
-}
-
-fn apply_claude_hook_commands(settings: &mut Value, exe: &str) {
-    remove_hook_commands(settings, &CLAUDE_HOOK_EVENTS, &CLAUDE_LEGACY_SCRIPTS);
-    for module in ALL_CLAUDE_HOOK_MODULES {
-        apply_claude_hook_module(settings, exe, module);
-    }
 }
 
 fn apply_claude_hook_module(settings: &mut Value, exe: &str, module: ClaudeHookModule) {
@@ -1059,23 +1035,6 @@ fn trim_empty_lines(lines: &mut Vec<String>) {
     }
 }
 
-fn read_codex_cli_manager_hook_state_blocks(codex_dir: &Path) -> Result<Vec<Vec<String>>, String> {
-    let hooks_path = codex_dir.join(CODEX_HOOKS_FILE_NAME);
-    let config_path = codex_dir.join(CODEX_CONFIG_FILE_NAME);
-    let hooks = read_json_if_exists(&hooks_path)?;
-    let expected_keys = codex_cli_manager_hook_state_keys(&hooks, &hooks_path);
-    if expected_keys.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    let content = match fs::read_to_string(&config_path) {
-        Ok(value) => value,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(err) => return Err(format!("读取 {} 失败: {err}", path_to_string(&config_path))),
-    };
-    Ok(extract_codex_hook_state_blocks(&content, &expected_keys))
-}
-
 fn codex_cli_manager_hook_state_keys(settings: &Value, hooks_path: &Path) -> Vec<String> {
     let hooks_path = path_to_string(hooks_path);
     let Some(hooks) = settings.get("hooks").and_then(Value::as_object) else {
@@ -1220,27 +1179,6 @@ fn codex_hook_trusted_hash(event: &str, group: &Value, hook: &Value) -> Result<S
     Ok(format!("sha256:{:x}", Sha256::digest(canonical)))
 }
 
-fn extract_codex_hook_state_blocks(config: &str, expected_keys: &[String]) -> Vec<Vec<String>> {
-    let lines: Vec<&str> = config.lines().collect();
-    let mut blocks = Vec::new();
-    let mut index = 0;
-    while index < lines.len() {
-        let key = toml_hooks_state_key(lines[index]);
-        if key.is_some_and(|key| expected_keys.iter().any(|expected| expected == &key)) {
-            let mut block = vec![lines[index].to_string()];
-            index += 1;
-            while index < lines.len() && !is_toml_table_header(lines[index]) {
-                block.push(lines[index].to_string());
-                index += 1;
-            }
-            blocks.push(block);
-            continue;
-        }
-        index += 1;
-    }
-    blocks
-}
-
 fn toml_hooks_state_key(line: &str) -> Option<String> {
     let trimmed = line.trim();
     if !trimmed.starts_with("[hooks.state.") || !is_toml_table_header(trimmed) {
@@ -1304,77 +1242,6 @@ fn deduplicate_codex_hook_state_blocks(config: &str, expected_keys: &[String]) -
 
 fn toml_escape_basic_string(value: &str) -> String {
     value.replace('\\', "\\\\").replace('"', "\\\"")
-}
-
-fn strip_codex_common_config_toml(raw: &str) -> Option<String> {
-    let mut source_lines: Vec<String> = raw.lines().map(ToString::to_string).collect();
-    let before_state_strip = source_lines.len();
-    remove_marker_owned_codex_hook_state_blocks(&mut source_lines);
-    let removed_state_blocks = source_lines.len() != before_state_strip;
-
-    let mut lines = Vec::new();
-    let mut removed = false;
-    for line in &source_lines {
-        let trimmed = line.trim();
-        let is_owned_hooks_line = trimmed.contains(CODEX_COMMON_CONFIG_HOOKS_MARKER)
-            && trimmed
-                .split_once('=')
-                .is_some_and(|(key, _)| key.trim() == "hooks");
-        if is_owned_hooks_line {
-            removed = true;
-            continue;
-        }
-        lines.push(line.to_string());
-    }
-
-    if !removed && !removed_state_blocks {
-        return Some(format!("{}\n", raw.trim_end()));
-    }
-
-    trim_empty_toml_features_section(&mut lines);
-    let text = lines.join("\n").trim().to_string();
-    if text.is_empty() {
-        None
-    } else {
-        Some(format!("{text}\n"))
-    }
-}
-
-fn trim_empty_toml_features_section(lines: &mut Vec<String>) {
-    let Some(header_index) = lines.iter().position(|line| line.trim() == "[features]") else {
-        return;
-    };
-    let mut end_index = lines.len();
-    for (index, line) in lines.iter().enumerate().skip(header_index + 1) {
-        let trimmed = line.trim();
-        if is_toml_table_header(line) {
-            end_index = index;
-            break;
-        }
-        if !trimmed.is_empty() && !trimmed.starts_with('#') {
-            return;
-        }
-    }
-    lines.drain(header_index..end_index);
-}
-
-fn toml_features_hooks_enabled(raw: &str) -> bool {
-    let mut in_features = false;
-    for line in raw.lines() {
-        let trimmed = line.trim();
-        if is_toml_table_header(line) {
-            in_features = trimmed == "[features]";
-            continue;
-        }
-        if in_features
-            && trimmed.split_once('=').is_some_and(|(key, value)| {
-                key.trim() == "hooks" && toml_bool_value(value) == Some(true)
-            })
-        {
-            return true;
-        }
-    }
-    false
 }
 
 fn toml_bool_value(value: &str) -> Option<bool> {
@@ -3556,6 +3423,4 @@ yolo = false
         assert!(settings.contains(HOOK_COMMAND_MARKER));
         assert!(!hooks_dir.join(CLAUDE_APPROVAL_SCRIPT_NAME).is_file());
     }
-
-
 }

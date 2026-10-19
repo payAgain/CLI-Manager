@@ -209,10 +209,7 @@ export function calculateTokenStats(session: HistorySessionDetail | null): Token
   }
 
   const totalTokens = inputTokens + outputTokens + cacheCreationTokens + cacheReadTokens;
-  const estimatedCost =
-    usage && usage.total_cost_usd > 0
-      ? usage.total_cost_usd
-      : calculateCost(inputTokens, outputTokens, cacheCreationTokens, cacheReadTokens, dominantModel);
+  const estimatedCost = calculateCost(inputTokens, outputTokens, cacheCreationTokens, cacheReadTokens, dominantModel);
 
   return {
     inputTokens,

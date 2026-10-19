@@ -3,51 +3,15 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getDb } from "../lib/db";
 import { createPerfMarker, logInfo, logWarn } from "../lib/logger";
-import { normalizeHistoryProjectPaths, resolveHistoryProjectPath } from "../lib/historyProjectPaths";
+import { resolveHistoryProjectPath } from "../lib/historyProjectPaths";
 import { buildSshAgentHistoryContext, type SshAgentHistoryContext } from "../lib/sshAgentHistory";
-import { ensureHistorySourceSettingsLoaded, getHistoryPathArgs, getHistoryPathArgsSync } from "../lib/historyPathArgs";
+import { getHistoryPathArgs } from "../lib/historyPathArgs";
 import { inferSubagentParentSessionId } from "../lib/historySubagents";
 import { sameHistorySessionIdentity } from "../lib/historySessionIdentity";
 import { useProjectStore } from "./projectStore";
 import { useSshAgentIntegrationStore } from "./sshAgentIntegrationStore";
 import { useBackgroundOperationStore } from "./backgroundOperationStore";
-import type {
-  HistoryBackupStatus,
-  HistoryEditAuditEntry,
-  HistoryFileChangeOperation,
-  HistoryFileChangeSummary,
-  HistoryIndexStatus,
-  HistoryMessage,
-  HistoryPromptItem,
-  HistorySearchHit,
-  HistorySessionDetail,
-  HistorySessionSummary,
-  HistorySessionRef,
-  HistorySessionView,
-  HistoryStatsDailySeriesItem,
-  HistoryStatsHeatmapDay,
-  HistoryStatsHourlyActivityItem,
-  HistoryStatsModelItem,
-  HistoryStatsPayload,
-  HistoryStatsProjectEfficiencyItem,
-  HistoryStatsProjectItem,
-  HistoryStatsSourceItem,
-  HistoryTokenTrendPoint,
-  HistoryToolEvent,
-  HistoryToolCount,
-  RequestLogStatsModelItem,
-  RequestLogStatsPayload,
-  RequestLogStatsSourceItem,
-  RequestLogStatsTrendItem,
-  RequestLogSyncResult,
-  PromptScope,
-  Project,
-  HistorySource,
-  HistorySourceFilter,
-  SessionFavoriteSnapshot,
-  SessionMeta,
-  SshRemoteHistorySyncResult,
-} from "../lib/types";
+import type { HistoryBackupStatus, HistoryEditAuditEntry, HistoryFileChangeOperation, HistoryFileChangeSummary, HistoryIndexStatus, HistoryMessage, HistoryPromptItem, HistorySearchHit, HistorySessionDetail, HistorySessionSummary, HistorySessionRef, HistorySessionView, HistoryTokenTrendPoint, HistoryToolEvent, HistoryToolCount, PromptScope, Project, HistorySource, HistorySourceFilter, SessionFavoriteSnapshot, SessionMeta, SshRemoteHistorySyncResult } from "../lib/types";
 
 type SessionMetaMap = Record<string, SessionMeta>;
 
@@ -72,12 +36,6 @@ interface HistoryStore {
   loadingSessionDetail: boolean;
   searching: boolean;
   loadingPrompts: boolean;
-  loadingStats: boolean;
-  loadingStatsProjectOptions: boolean;
-  statsError: string | null;
-  statsProjectOptionsError: string | null;
-  statsUpdatedAt: number | null;
-  statsCacheKey: string | null;
   sourceFilter: HistorySourceFilter;
   projectPathFilter: string | null;
   /** 项目树高亮用；null 时回退到 path 匹配。 */
@@ -93,8 +51,6 @@ interface HistoryStore {
   sessionQuery: string;
   searchHits: HistorySearchHit[];
   prompts: HistoryPromptItem[];
-  stats: HistoryStatsPayload | null;
-  statsProjectOptions: string[];
   focusedMessageIndex: number | null;
   focusedMessageSeq: number;
   metaMap: SessionMetaMap;
@@ -125,15 +81,6 @@ interface HistoryStore {
     projectKey?: string | null;
     sessionKey?: string | null;
     limit?: number;
-  }) => Promise<void>;
-  loadStatsProjectOptions: (options?: { force?: boolean }) => Promise<string[]>;
-  loadStats: (options?: {
-    projectKey?: string | null;
-    projectPath?: string | null;
-    rangeDays?: number;
-    startAt?: number | null;
-    endAt?: number | null;
-    force?: boolean;
   }) => Promise<void>;
   openSessionAtMessage: (sessionKey: string, messageIndex: number) => Promise<void>;
   clearFocusedMessage: () => void;
@@ -170,18 +117,6 @@ const DEFAULT_HISTORY_INDEX_STATUS: HistoryIndexStatus = {
   lastCompletedAt: null,
   error: null,
 };
-const STATS_CACHE_TTL_MS = 5 * 60 * 1000;
-const STATS_CACHE_MAX = 16;
-const STATS_PROJECT_OPTIONS_CACHE_MAX = 8;
-interface StatsCacheEntry {
-  payload: HistoryStatsPayload;
-  cachedAt: number;
-}
-
-interface StatsProjectOptionsCacheEntry {
-  options: string[];
-  cachedAt: number;
-}
 
 function effectiveProjectPathFilter(state: Pick<HistoryStore, "projectPathFilter" | "scopedProjectPathFilter">): string | null {
   return state.scopedProjectPathFilter ?? state.projectPathFilter;
@@ -206,51 +141,8 @@ function remoteSourceMatchesFilter(
 ): boolean {
   return filter === "all" || filter === context.source;
 }
-
-const statsCache = new Map<string, StatsCacheEntry>();
-const statsProjectOptionsCache = new Map<string, StatsProjectOptionsCacheEntry>();
-let statsRequestSeq = 0;
 let historyMetaReady = false;
 let historyMetaInitPromise: Promise<void> | null = null;
-
-function statsCacheGet(key: string): StatsCacheEntry | undefined {
-  const entry = statsCache.get(key);
-  if (entry) {
-    // Refresh LRU recency
-    statsCache.delete(key);
-    statsCache.set(key, entry);
-  }
-  return entry;
-}
-
-function statsCacheSet(key: string, entry: StatsCacheEntry): void {
-  if (statsCache.has(key)) {
-    statsCache.delete(key);
-  } else if (statsCache.size >= STATS_CACHE_MAX) {
-    const oldestKey = statsCache.keys().next().value;
-    if (oldestKey !== undefined) statsCache.delete(oldestKey);
-  }
-  statsCache.set(key, entry);
-}
-
-function statsProjectOptionsCacheGet(key: string): StatsProjectOptionsCacheEntry | undefined {
-  const entry = statsProjectOptionsCache.get(key);
-  if (entry) {
-    statsProjectOptionsCache.delete(key);
-    statsProjectOptionsCache.set(key, entry);
-  }
-  return entry;
-}
-
-function statsProjectOptionsCacheSet(key: string, entry: StatsProjectOptionsCacheEntry): void {
-  if (statsProjectOptionsCache.has(key)) {
-    statsProjectOptionsCache.delete(key);
-  } else if (statsProjectOptionsCache.size >= STATS_PROJECT_OPTIONS_CACHE_MAX) {
-    const oldestKey = statsProjectOptionsCache.keys().next().value;
-    if (oldestKey !== undefined) statsProjectOptionsCache.delete(oldestKey);
-  }
-  statsProjectOptionsCache.set(key, entry);
-}
 
 function asString(value: unknown): string {
   if (typeof value === "string") return value;
@@ -378,7 +270,6 @@ function normalizeSessionUsage(raw: unknown): HistorySessionDetail["usage"] {
     output_tokens: asNumber(rec.output_tokens ?? rec.outputTokens),
     cache_read_tokens: asNumber(rec.cache_read_tokens ?? rec.cacheReadTokens),
     cache_creation_tokens: asNumber(rec.cache_creation_tokens ?? rec.cacheCreationTokens),
-    total_cost_usd: asNumber(rec.total_cost_usd ?? rec.totalCostUsd),
     dominant_model: asString(rec.dominant_model ?? rec.dominantModel ?? "") || null,
     current_model: asString(rec.current_model ?? rec.currentModel ?? "") || null,
     context_window: asNumber(rec.context_window ?? rec.contextWindow) || null,
@@ -551,310 +442,9 @@ function normalizePrompt(raw: unknown): HistoryPromptItem {
   };
 }
 
-function normalizeStatsProject(raw: unknown): HistoryStatsProjectItem {
-  const rec = (raw ?? {}) as Record<string, unknown>;
-  return {
-    project_key: asString(rec.project_key ?? rec.projectKey),
-    sessions: asNumber(rec.sessions),
-    messages: asNumber(rec.messages),
-    input_tokens: asNumber(rec.input_tokens ?? rec.inputTokens),
-    output_tokens: asNumber(rec.output_tokens ?? rec.outputTokens),
-    cache_read_tokens: asNumber(rec.cache_read_tokens ?? rec.cacheReadTokens),
-    cache_creation_tokens: asNumber(rec.cache_creation_tokens ?? rec.cacheCreationTokens),
-    total_cost_usd: asNumber(rec.total_cost_usd ?? rec.totalCostUsd ?? rec.totalCostUSD),
-    unpriced_tokens: asNumber(rec.unpriced_tokens ?? rec.unpricedTokens),
-  };
-}
-
-function normalizeStatsModel(raw: unknown): HistoryStatsModelItem {
-  const rec = (raw ?? {}) as Record<string, unknown>;
-  return {
-    model: asString(rec.model),
-    sessions: asNumber(rec.sessions),
-    ratio: asNumber(rec.ratio),
-    input_tokens: asNumber(rec.input_tokens ?? rec.inputTokens),
-    output_tokens: asNumber(rec.output_tokens ?? rec.outputTokens),
-    cache_read_tokens: asNumber(rec.cache_read_tokens ?? rec.cacheReadTokens),
-    cache_creation_tokens: asNumber(rec.cache_creation_tokens ?? rec.cacheCreationTokens),
-    total_cost_usd: asNumber(rec.total_cost_usd ?? rec.totalCostUsd ?? rec.totalCostUSD),
-    unpriced_tokens: asNumber(rec.unpriced_tokens ?? rec.unpricedTokens),
-  };
-}
-
-function normalizeHeatmapDay(raw: unknown): HistoryStatsHeatmapDay {
-  const rec = (raw ?? {}) as Record<string, unknown>;
-  const sessionRefsRaw = rec.session_refs ?? rec.sessionRefs;
-  const sessionRefs = Array.isArray(sessionRefsRaw)
-    ? (sessionRefsRaw as unknown[])
-    : [];
-  return {
-    day_start_utc: asNumber(rec.day_start_utc ?? rec.dayStartUtc),
-    sessions: asNumber(rec.sessions),
-    messages: asNumber(rec.messages),
-    level: asNumber(rec.level),
-    session_refs: sessionRefs.map((item) => normalizeSummary(item)),
-  };
-}
-
-function normalizeDailySeries(raw: unknown): HistoryStatsDailySeriesItem {
-  const rec = (raw ?? {}) as Record<string, unknown>;
-  return {
-    day_start_utc: asNumber(rec.day_start_utc ?? rec.dayStartUtc),
-    sessions: asNumber(rec.sessions),
-    messages: asNumber(rec.messages),
-    input_tokens: asNumber(rec.input_tokens ?? rec.inputTokens),
-    output_tokens: asNumber(rec.output_tokens ?? rec.outputTokens),
-    cache_read_tokens: asNumber(rec.cache_read_tokens ?? rec.cacheReadTokens),
-    cache_creation_tokens: asNumber(rec.cache_creation_tokens ?? rec.cacheCreationTokens),
-    total_cost_usd: asNumber(rec.total_cost_usd ?? rec.totalCostUsd ?? rec.totalCostUSD),
-    unpriced_tokens: asNumber(rec.unpriced_tokens ?? rec.unpricedTokens),
-  };
-}
-
-function normalizeSourceDistribution(raw: unknown): HistoryStatsSourceItem {
-  const rec = (raw ?? {}) as Record<string, unknown>;
-  return {
-    source: asString(rec.source),
-    sessions: asNumber(rec.sessions),
-    messages: asNumber(rec.messages),
-    input_tokens: asNumber(rec.input_tokens ?? rec.inputTokens),
-    output_tokens: asNumber(rec.output_tokens ?? rec.outputTokens),
-    cache_read_tokens: asNumber(rec.cache_read_tokens ?? rec.cacheReadTokens),
-    cache_creation_tokens: asNumber(rec.cache_creation_tokens ?? rec.cacheCreationTokens),
-    total_cost_usd: asNumber(rec.total_cost_usd ?? rec.totalCostUsd ?? rec.totalCostUSD),
-    unpriced_tokens: asNumber(rec.unpriced_tokens ?? rec.unpricedTokens),
-  };
-}
-
-function normalizeProjectEfficiency(raw: unknown): HistoryStatsProjectEfficiencyItem {
-  const rec = (raw ?? {}) as Record<string, unknown>;
-  return {
-    project_key: asString(rec.project_key ?? rec.projectKey),
-    sessions: asNumber(rec.sessions),
-    messages: asNumber(rec.messages),
-    input_tokens: asNumber(rec.input_tokens ?? rec.inputTokens),
-    output_tokens: asNumber(rec.output_tokens ?? rec.outputTokens),
-    cache_read_tokens: asNumber(rec.cache_read_tokens ?? rec.cacheReadTokens),
-    cache_creation_tokens: asNumber(rec.cache_creation_tokens ?? rec.cacheCreationTokens),
-    total_cost_usd: asNumber(rec.total_cost_usd ?? rec.totalCostUsd ?? rec.totalCostUSD),
-    unpriced_tokens: asNumber(rec.unpriced_tokens ?? rec.unpricedTokens),
-    avg_messages_per_session: asNumber(rec.avg_messages_per_session ?? rec.avgMessagesPerSession),
-  };
-}
-
-function normalizeHourlyActivity(raw: unknown): HistoryStatsHourlyActivityItem {
-  const rec = (raw ?? {}) as Record<string, unknown>;
-  const sessionRefsRaw = rec.session_refs ?? rec.sessionRefs;
-  const sessionRefs = Array.isArray(sessionRefsRaw)
-    ? (sessionRefsRaw as unknown[])
-    : [];
-  return {
-    hour: asNumber(rec.hour),
-    hour_start_utc: asNumber(rec.hour_start_utc ?? rec.hourStartUtc),
-    sessions: asNumber(rec.sessions),
-    messages: asNumber(rec.messages),
-    level: asNumber(rec.level),
-    input_tokens: asNumber(rec.input_tokens ?? rec.inputTokens),
-    output_tokens: asNumber(rec.output_tokens ?? rec.outputTokens),
-    cache_read_tokens: asNumber(rec.cache_read_tokens ?? rec.cacheReadTokens),
-    cache_creation_tokens: asNumber(rec.cache_creation_tokens ?? rec.cacheCreationTokens),
-    total_cost_usd: asNumber(rec.total_cost_usd ?? rec.totalCostUsd ?? rec.totalCostUSD),
-    unpriced_tokens: asNumber(rec.unpriced_tokens ?? rec.unpricedTokens),
-    session_refs: sessionRefs.map((item) => normalizeSummary(item)),
-  };
-}
-
-function normalizeStats(raw: unknown): HistoryStatsPayload {
-  const rec = (raw ?? {}) as Record<string, unknown>;
-  const projectRawValue = rec.project_ranking ?? rec.projectRanking;
-  const projectRaw = Array.isArray(projectRawValue)
-    ? (projectRawValue as unknown[])
-    : [];
-  const modelRawValue = rec.model_distribution ?? rec.modelDistribution;
-  const modelRaw = Array.isArray(modelRawValue)
-    ? (modelRawValue as unknown[])
-    : [];
-  const heatmapRaw = Array.isArray(rec.heatmap) ? (rec.heatmap as unknown[]) : [];
-  const dailySeriesRawValue = rec.daily_series ?? rec.dailySeries;
-  const dailySeriesRaw = Array.isArray(dailySeriesRawValue)
-    ? (dailySeriesRawValue as unknown[])
-    : [];
-  const sourceRawValue = rec.source_distribution ?? rec.sourceDistribution;
-  const sourceRaw = Array.isArray(sourceRawValue)
-    ? (sourceRawValue as unknown[])
-    : [];
-  const efficiencyRawValue = rec.project_efficiency ?? rec.projectEfficiency;
-  const efficiencyRaw = Array.isArray(efficiencyRawValue)
-    ? (efficiencyRawValue as unknown[])
-    : [];
-  const hourlyRawValue = rec.hourly_activity ?? rec.hourlyActivity;
-  const hourlyRaw = Array.isArray(hourlyRawValue)
-    ? (hourlyRawValue as unknown[])
-    : [];
-  return {
-    range_days: asNumber(rec.range_days ?? rec.rangeDays),
-    total_sessions: asNumber(rec.total_sessions ?? rec.totalSessions),
-    total_messages: asNumber(rec.total_messages ?? rec.totalMessages),
-    total_input_tokens: asNumber(rec.total_input_tokens ?? rec.totalInputTokens),
-    total_output_tokens: asNumber(rec.total_output_tokens ?? rec.totalOutputTokens),
-    total_cache_read_tokens: asNumber(rec.total_cache_read_tokens ?? rec.totalCacheReadTokens),
-    total_cache_creation_tokens: asNumber(rec.total_cache_creation_tokens ?? rec.totalCacheCreationTokens),
-    total_cost_usd: asNumber(rec.total_cost_usd ?? rec.totalCostUsd ?? rec.totalCostUSD),
-    total_unpriced_tokens: asNumber(rec.total_unpriced_tokens ?? rec.totalUnpricedTokens),
-    project_ranking: projectRaw.map((item) => normalizeStatsProject(item)),
-    model_distribution: modelRaw.map((item) => normalizeStatsModel(item)),
-    heatmap: heatmapRaw.map((item) => normalizeHeatmapDay(item)),
-    daily_series: dailySeriesRaw.map((item) => normalizeDailySeries(item)),
-    source_distribution: sourceRaw.map((item) => normalizeSourceDistribution(item)),
-    project_efficiency: efficiencyRaw.map((item) => normalizeProjectEfficiency(item)),
-    hourly_activity: hourlyRaw.map((item) => normalizeHourlyActivity(item)),
-  };
-}
-
-function normalizeStatsProjectOptions(raw: unknown): string[] {
-  if (!Array.isArray(raw)) return [];
-  const projectSet = new Set<string>();
-  for (const item of raw) {
-    const project = asString(item).trim();
-    if (project) projectSet.add(project);
-  }
-  return Array.from(projectSet).sort((a, b) => a.localeCompare(b));
-}
-
 function normalizeSourceFilter(filter: HistorySourceFilter): Exclude<HistorySourceFilter, "all"> | null {
   if (filter === "all") return null;
   return filter;
-}
-
-export interface TodayProjectStats {
-  sessions: number;
-  totalTokens: number;
-  totalCostUsd: number;
-  inputTokens: number;
-  outputTokens: number;
-  cacheReadTokens: number;
-  cacheCreationTokens: number;
-  unpricedTokens: number;
-}
-
-export interface FetchHistoryStatsOptions {
-  sourceFilter: HistorySourceFilter;
-  projectKey?: string | null;
-  projectPath?: string | null;
-  sourceInstanceId?: string | null;
-  rangeDays?: number | null;
-  startAt?: number | null;
-  endAt?: number | null;
-  force?: boolean;
-}
-
-export interface FetchHistoryRequestLogStatsOptions {
-  sourceFilter: HistorySourceFilter;
-  projectKey?: string | null;
-  projectPath?: string | null;
-  model?: string | null;
-  startAt?: number | null;
-  endAt?: number | null;
-  force?: boolean;
-}
-
-let requestLogSyncPromise: Promise<unknown> | null = null;
-
-export async function syncHistoryRequestLogs(force = false): Promise<RequestLogSyncResult> {
-  if (requestLogSyncPromise && !force) {
-    await requestLogSyncPromise;
-    return {
-      scanned_files: 0,
-      changed_files: 0,
-      removed_files: 0,
-      written_rows: 0,
-      failed_files: 0,
-      synced_at_ms: 0,
-    };
-  }
-  const pathArgs = await getHistoryPathArgs();
-  const promise = invoke<RequestLogSyncResult>("history_sync_request_logs", {
-    ...pathArgs,
-    force,
-  });
-  requestLogSyncPromise = promise;
-  try {
-    return await promise;
-  } finally {
-    if (requestLogSyncPromise === promise) requestLogSyncPromise = null;
-  }
-}
-
-export async function fetchHistoryRequestLogStats(
-  options: FetchHistoryRequestLogStatsOptions,
-): Promise<RequestLogStatsPayload> {
-  await syncHistoryRequestLogs(options.force ?? false);
-  const filters = {
-    source: normalizeSourceFilter(options.sourceFilter),
-    project_key: options.projectKey?.trim() || null,
-    project_path: options.projectPath?.trim() || null,
-    model: options.model?.trim() || null,
-    start_at: typeof options.startAt === "number" && Number.isFinite(options.startAt) ? options.startAt : null,
-    end_at: typeof options.endAt === "number" && Number.isFinite(options.endAt) ? options.endAt : null,
-  };
-  const raw = await invoke<unknown>("history_get_request_log_stats", {
-    filters,
-    ...(await getHistoryPathArgs()),
-  });
-  return normalizeRequestLogStats(raw);
-}
-
-export async function fetchHistoryStatsProjectOptions(sourceFilter: HistorySourceFilter): Promise<string[]> {
-  const raw = await invoke<unknown>("history_list_stats_projects", {
-    source: normalizeSourceFilter(sourceFilter),
-    ...(await getHistoryPathArgs()),
-  });
-  return normalizeStatsProjectOptions(raw);
-}
-
-export async function fetchHistoryStatsPayload(options: FetchHistoryStatsOptions): Promise<HistoryStatsPayload> {
-  const projectKey = options.projectKey?.trim() || null;
-  const projectPath = options.projectPath?.trim() || null;
-  const sourceInstanceId = options.sourceInstanceId?.trim() || null;
-  const startAt = typeof options.startAt === "number" && Number.isFinite(options.startAt) ? options.startAt : null;
-  const endAt = typeof options.endAt === "number" && Number.isFinite(options.endAt) ? options.endAt : null;
-  const rangeDays = options.rangeDays ?? 30;
-  const force = options.force ?? false;
-  const raw = await invoke<unknown>("history_get_stats", {
-    source: normalizeSourceFilter(options.sourceFilter),
-    ...(await getHistoryPathArgs()),
-    projectKey,
-    projectPath,
-    sourceInstanceId,
-    rangeDays,
-    startAt,
-    endAt,
-    force,
-  });
-  return normalizeStats(raw);
-}
-
-export async function fetchRemoteHistoryStatsPayload(
-  project: Project,
-  options: FetchHistoryStatsOptions,
-): Promise<HistoryStatsPayload> {
-  let context = await buildSshAgentHistoryContext(project);
-  try {
-    const force = options.force ?? false;
-    context = await syncRemoteHistoryContext(context, { limit: 1000, forceRefresh: force });
-    return await fetchHistoryStatsPayload({
-      ...options,
-      projectKey: null,
-      projectPath: project.remote_path,
-      sourceInstanceId: context.sourceInstanceId,
-      force,
-    });
-  } finally {
-    void invoke("history_remote_close", {
-      hostId: context.hostId,
-      consumerId: context.consumerId,
-    }).catch(() => undefined);
-  }
 }
 
 // 供终端统计面板使用：按项目路径取最近一次 CLI 会话详情，不改动历史工作区的选中状态。
@@ -1001,122 +591,6 @@ export async function fetchLatestProjectSessionDetail(
   }
 }
 
-// 供「模型价格设置」识别本地模型：扫描全部历史的模型分布，返回去重模型名列表。
-// 复用 normalizeStats 兜底 snake/camel 命名与缺失字段，避免直接读原始返回导致 undefined.map。
-export async function fetchDiscoveredModels(): Promise<string[]> {
-  const raw = await invoke<unknown>("history_get_stats", {
-    source: null,
-    ...(await getHistoryPathArgs()),
-    projectKey: null,
-    sourceInstanceId: null,
-    rangeDays: null,
-    startAt: null,
-    endAt: null,
-    force: true,
-  });
-  const stats = normalizeStats(raw);
-  return stats.model_distribution
-    .map((item) => item.model.trim())
-    .filter((model) => model.length > 0);
-}
-
-export async function fetchTodayProjectStats(
-  projectKey: string,
-  source?: HistorySource | null,
-  projectPath?: string | null,
-  projectPaths?: string[]
-): Promise<TodayProjectStats | null> {
-  const todayStart = new Date();
-  todayStart.setHours(0, 0, 0, 0);
-  const normalizedProjectPath = normalizeHistoryProjectPaths(projectPath ? [projectPath] : [])[0] ?? null;
-  const normalizedProjectPaths = normalizeHistoryProjectPaths(projectPaths ?? []);
-  const hasProjectPaths = normalizedProjectPaths.length > 0;
-  try {
-    const raw = await invoke<unknown>("history_get_stats", {
-      source: source ?? null,
-      ...(await getHistoryPathArgs()),
-      projectKey: normalizedProjectPath || hasProjectPaths ? null : projectKey,
-      projectPath: hasProjectPaths ? null : normalizedProjectPath,
-      projectPaths: hasProjectPaths ? normalizedProjectPaths : null,
-      sourceInstanceId: null,
-      rangeDays: null,
-      startAt: todayStart.getTime(),
-      endAt: Date.now(),
-      force: false,
-    });
-    const stats = normalizeStats(raw);
-    return {
-      sessions: stats.total_sessions,
-      totalTokens:
-        stats.total_input_tokens +
-        stats.total_output_tokens +
-        stats.total_cache_read_tokens +
-        stats.total_cache_creation_tokens,
-      totalCostUsd: stats.total_cost_usd,
-      inputTokens: stats.total_input_tokens,
-      outputTokens: stats.total_output_tokens,
-      cacheReadTokens: stats.total_cache_read_tokens,
-      cacheCreationTokens: stats.total_cache_creation_tokens,
-      unpricedTokens: stats.total_unpriced_tokens,
-    };
-  } catch {
-    return null;
-  }
-}
-
-/**
- * 今日项目用量：由后端按多个项目/Worktree 路径一次过滤并按唯一会话聚合。
- */
-export async function fetchTodayProjectStatsMerged(
-  projectKey: string,
-  source: HistorySource | null | undefined,
-  projectPaths: string[]
-): Promise<TodayProjectStats | null> {
-  const uniquePaths = normalizeHistoryProjectPaths(projectPaths);
-  if (uniquePaths.length === 0) {
-    return fetchTodayProjectStats(projectKey, source, null);
-  }
-  return fetchTodayProjectStats(projectKey, source, null, uniquePaths);
-}
-
-export async function fetchRemoteTodayProjectStats(
-  context: SshAgentHistoryContext,
-): Promise<{ context: SshAgentHistoryContext; result: TodayProjectStats | null }> {
-  const synced = await syncRemoteHistoryContext(context, { limit: 200 });
-  const todayStart = new Date();
-  todayStart.setHours(0, 0, 0, 0);
-  const raw = await invoke<unknown>("history_get_stats", {
-    source: synced.source,
-    ...(await getHistoryPathArgs()),
-    projectKey: null,
-    projectPath: null,
-    projectPaths: synced.projectPaths,
-    sourceInstanceId: synced.sourceInstanceId,
-    rangeDays: null,
-    startAt: todayStart.getTime(),
-    endAt: Date.now(),
-    force: false,
-  });
-  const stats = normalizeStats(raw);
-  return {
-    context: synced,
-    result: {
-      sessions: stats.total_sessions,
-      totalTokens:
-        stats.total_input_tokens +
-        stats.total_output_tokens +
-        stats.total_cache_read_tokens +
-        stats.total_cache_creation_tokens,
-      totalCostUsd: stats.total_cost_usd,
-      inputTokens: stats.total_input_tokens,
-      outputTokens: stats.total_output_tokens,
-      cacheReadTokens: stats.total_cache_read_tokens,
-      cacheCreationTokens: stats.total_cache_creation_tokens,
-      unpricedTokens: stats.total_unpriced_tokens,
-    },
-  };
-}
-
 export async function fetchRemoteLatestProjectSessionDetail(
   context: SshAgentHistoryContext,
   prev?: { filePath: string; updatedAt: number },
@@ -1202,82 +676,6 @@ export async function fetchRemoteProjectSessionSummaries(
   };
 }
 
-function normalizeRequestLogStatsTrend(raw: unknown): RequestLogStatsTrendItem {
-  const rec = (raw ?? {}) as Record<string, unknown>;
-  return {
-    bucket_start_ms: asNumber(rec.bucket_start_ms ?? rec.bucketStartMs),
-    requests: asNumber(rec.requests),
-    input_tokens: asNumber(rec.input_tokens ?? rec.inputTokens),
-    output_tokens: asNumber(rec.output_tokens ?? rec.outputTokens),
-    cache_read_tokens: asNumber(rec.cache_read_tokens ?? rec.cacheReadTokens),
-    cache_creation_tokens: asNumber(rec.cache_creation_tokens ?? rec.cacheCreationTokens),
-    total_tokens: asNumber(rec.total_tokens ?? rec.totalTokens),
-    total_cost_usd: asNumber(rec.total_cost_usd ?? rec.totalCostUsd ?? rec.totalCostUSD),
-    unpriced_tokens: asNumber(rec.unpriced_tokens ?? rec.unpricedTokens),
-  };
-}
-
-function normalizeRequestLogStatsSource(raw: unknown): RequestLogStatsSourceItem {
-  const rec = (raw ?? {}) as Record<string, unknown>;
-  return {
-    source: asString(rec.source) as RequestLogStatsSourceItem["source"],
-    requests: asNumber(rec.requests),
-    input_tokens: asNumber(rec.input_tokens ?? rec.inputTokens),
-    output_tokens: asNumber(rec.output_tokens ?? rec.outputTokens),
-    cache_read_tokens: asNumber(rec.cache_read_tokens ?? rec.cacheReadTokens),
-    cache_creation_tokens: asNumber(rec.cache_creation_tokens ?? rec.cacheCreationTokens),
-    total_tokens: asNumber(rec.total_tokens ?? rec.totalTokens),
-    ratio: asNumber(rec.ratio),
-    total_cost_usd: asNumber(rec.total_cost_usd ?? rec.totalCostUsd ?? rec.totalCostUSD),
-    unpriced_tokens: asNumber(rec.unpriced_tokens ?? rec.unpricedTokens),
-  };
-}
-
-function normalizeRequestLogStatsModel(raw: unknown): RequestLogStatsModelItem {
-  const rec = (raw ?? {}) as Record<string, unknown>;
-  return {
-    model: asString(rec.model),
-    requests: asNumber(rec.requests),
-    input_tokens: asNumber(rec.input_tokens ?? rec.inputTokens),
-    output_tokens: asNumber(rec.output_tokens ?? rec.outputTokens),
-    cache_read_tokens: asNumber(rec.cache_read_tokens ?? rec.cacheReadTokens),
-    cache_creation_tokens: asNumber(rec.cache_creation_tokens ?? rec.cacheCreationTokens),
-    total_tokens: asNumber(rec.total_tokens ?? rec.totalTokens),
-    ratio: asNumber(rec.ratio),
-    total_cost_usd: asNumber(rec.total_cost_usd ?? rec.totalCostUsd ?? rec.totalCostUSD),
-    unpriced_tokens: asNumber(rec.unpriced_tokens ?? rec.unpricedTokens),
-  };
-}
-
-function normalizeRequestLogStats(raw: unknown): RequestLogStatsPayload {
-  const rec = (raw ?? {}) as Record<string, unknown>;
-  const trendRaw = rec.trend;
-  const sourceRaw = rec.source_distribution ?? rec.sourceDistribution;
-  const modelRaw = rec.model_distribution ?? rec.modelDistribution;
-  return {
-    range_start_at: asNumber(rec.range_start_at ?? rec.rangeStartAt),
-    range_end_at: asNumber(rec.range_end_at ?? rec.rangeEndAt),
-    granularity: asString(rec.granularity) === "hour" ? "hour" : "day",
-    total_requests: asNumber(rec.total_requests ?? rec.totalRequests),
-    total_input_tokens: asNumber(rec.total_input_tokens ?? rec.totalInputTokens),
-    total_output_tokens: asNumber(rec.total_output_tokens ?? rec.totalOutputTokens),
-    total_cache_read_tokens: asNumber(rec.total_cache_read_tokens ?? rec.totalCacheReadTokens),
-    total_cache_creation_tokens: asNumber(rec.total_cache_creation_tokens ?? rec.totalCacheCreationTokens),
-    total_tokens: asNumber(rec.total_tokens ?? rec.totalTokens),
-    cache_hit_rate: asNumber(rec.cache_hit_rate ?? rec.cacheHitRate),
-    total_cost_usd: asNumber(rec.total_cost_usd ?? rec.totalCostUsd ?? rec.totalCostUSD),
-    total_unpriced_tokens: asNumber(rec.total_unpriced_tokens ?? rec.totalUnpricedTokens),
-    trend: Array.isArray(trendRaw) ? trendRaw.map((item) => normalizeRequestLogStatsTrend(item)) : [],
-    source_distribution: Array.isArray(sourceRaw) ? sourceRaw.map((item) => normalizeRequestLogStatsSource(item)) : [],
-    model_distribution: Array.isArray(modelRaw) ? modelRaw.map((item) => normalizeRequestLogStatsModel(item)) : [],
-  };
-}
-
-function getHistoryPathCacheKey(): string {
-  const { claudeConfigDir, codexConfigDir } = getHistoryPathArgsSync();
-  return `${claudeConfigDir ?? "__default__"}|${codexConfigDir ?? "__default__"}`;
-}
-
 function makeSessionKey(
   source: HistorySource,
   sessionId: string,
@@ -1328,30 +726,6 @@ function snapshotMatchesFilters(
     return projectKey === claudeProjectKeyFromPath(projectPathFilter);
   }
   return projectKey === projectLastSegment(projectPathFilter) || projectKey === normalizeMetaPath(projectPathFilter).toLowerCase();
-}
-
-function makeStatsProjectOptionsCacheKey(
-  source: HistorySourceFilter,
-  historyPathKey: string
-): string {
-  return `${source}|${historyPathKey}`;
-}
-
-function makeStatsCacheKey(
-  source: HistorySourceFilter,
-  projectKey: string | null,
-  projectPath: string | null,
-  timeKey: string,
-  historyPathKey: string
-): string {
-  return `${source}|key=${projectKey ?? "__all__"}|path=${projectPath ?? "__all__"}|${timeKey}|${historyPathKey}`;
-}
-
-function makeStatsTimeKey(rangeDays: number, startAt: number | null, endAt: number | null): string {
-  if (startAt !== null && endAt !== null) {
-    return `absolute:${startAt}:${endAt}`;
-  }
-  return `range:${rangeDays}`;
 }
 
 function parseTags(tagsJson: string): string[] {
@@ -1950,12 +1324,6 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
   loadingSessionDetail: false,
   searching: false,
   loadingPrompts: false,
-  loadingStats: false,
-  loadingStatsProjectOptions: false,
-  statsError: null,
-  statsProjectOptionsError: null,
-  statsUpdatedAt: null,
-  statsCacheKey: null,
   sourceFilter: "all",
   projectPathFilter: null,
   projectIdFilter: null,
@@ -1970,8 +1338,6 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
   sessionQuery: "",
   searchHits: [],
   prompts: [],
-  stats: null,
-  statsProjectOptions: [],
   focusedMessageIndex: null,
   focusedMessageSeq: 0,
   metaMap: {},
@@ -2820,161 +2186,6 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
       set({ prompts });
     } finally {
       set({ loadingPrompts: false });
-    }
-  },
-
-  loadStatsProjectOptions: async (options) => {
-    const force = options?.force ?? false;
-    const sourceFilter = get().sourceFilter;
-    await ensureHistorySourceSettingsLoaded();
-    const historyPathKey = getHistoryPathCacheKey();
-    const cacheKey = makeStatsProjectOptionsCacheKey(sourceFilter, historyPathKey);
-    const now = Date.now();
-    const cached = statsProjectOptionsCacheGet(cacheKey);
-
-    if (!force && cached && now - cached.cachedAt <= STATS_CACHE_TTL_MS) {
-      set({
-        statsProjectOptions: cached.options,
-        statsProjectOptionsError: null,
-      });
-      return cached.options;
-    }
-
-    set({ loadingStatsProjectOptions: true, statsProjectOptionsError: null });
-    try {
-      const projectOptions = await fetchHistoryStatsProjectOptions(sourceFilter);
-      statsProjectOptionsCacheSet(cacheKey, {
-        options: projectOptions,
-        cachedAt: Date.now(),
-      });
-      set({
-        statsProjectOptions: projectOptions,
-        statsProjectOptionsError: null,
-      });
-      return projectOptions;
-    } catch (err) {
-      set({ statsProjectOptions: [], statsProjectOptionsError: String(err) });
-      throw err;
-    } finally {
-      set({ loadingStatsProjectOptions: false });
-    }
-  },
-
-  loadStats: async (options) => {
-    const projectKey = options?.projectKey?.trim() || null;
-    const projectPath = options?.projectPath?.trim() || null;
-    const rangeDays = options?.rangeDays ?? 30;
-    const startAt = typeof options?.startAt === "number" && Number.isFinite(options.startAt) ? options.startAt : null;
-    const endAt = typeof options?.endAt === "number" && Number.isFinite(options.endAt) ? options.endAt : null;
-    const force = options?.force ?? false;
-    const sourceFilter = get().sourceFilter;
-    await ensureHistorySourceSettingsLoaded();
-    const historyPathKey = getHistoryPathCacheKey();
-    const timeKey = makeStatsTimeKey(rangeDays, startAt, endAt);
-    const cacheKey = makeStatsCacheKey(sourceFilter, projectKey, projectPath, timeKey, historyPathKey);
-    const now = Date.now();
-    const cached = statsCacheGet(cacheKey);
-    const activeStats = get().stats;
-    const activeStatsUpdatedAt = get().statsUpdatedAt;
-    const activeCacheKey = get().statsCacheKey;
-    const requestSeq = ++statsRequestSeq;
-    const isLatestRequest = () => statsRequestSeq === requestSeq && get().statsCacheKey === cacheKey;
-    const stopPerf = createPerfMarker("stats.load", {
-      sourceFilter,
-      projectKey: projectKey ?? "__all__",
-      projectPath: projectPath ?? "__all__",
-      rangeDays,
-      startAt: startAt ?? "__range__",
-      endAt: endAt ?? "__range__",
-    });
-
-    if (!force && cached) {
-      const cacheIsFresh = now - cached.cachedAt <= STATS_CACHE_TTL_MS;
-      set({
-        loadingStats: !cacheIsFresh,
-        stats: cached.payload,
-        statsError: null,
-        statsUpdatedAt: cached.cachedAt,
-        statsCacheKey: cacheKey,
-      });
-      if (cacheIsFresh) {
-        stopPerf({
-          cacheHit: true,
-          heatmapDays: cached.payload.heatmap.length,
-        });
-        return;
-      }
-    } else if (
-      !force &&
-      activeStats &&
-      activeCacheKey === cacheKey &&
-      activeStatsUpdatedAt &&
-      now - activeStatsUpdatedAt <= STATS_CACHE_TTL_MS
-    ) {
-      set({ loadingStats: false, statsError: null, statsCacheKey: cacheKey });
-      stopPerf({
-        cacheHit: true,
-        heatmapDays: activeStats.heatmap.length,
-      });
-      return;
-    }
-
-    const canKeepVisibleStats = activeStats !== null && activeCacheKey === cacheKey;
-    const visibleStats = canKeepVisibleStats ? activeStats : !force && cached ? cached.payload : null;
-    const visibleStatsUpdatedAt = canKeepVisibleStats
-      ? activeStatsUpdatedAt
-      : !force && cached
-        ? cached.cachedAt
-        : null;
-    set({
-      loadingStats: true,
-      statsError: null,
-      stats: visibleStats,
-      statsUpdatedAt: visibleStatsUpdatedAt,
-      statsCacheKey: cacheKey,
-    });
-    try {
-      const payload = await fetchHistoryStatsPayload({
-        sourceFilter,
-        projectKey,
-        projectPath,
-        rangeDays,
-        startAt,
-        endAt,
-        force,
-      });
-      const cachedAt = Date.now();
-      statsCacheSet(cacheKey, {
-        payload,
-        cachedAt,
-      });
-      const isCurrent = isLatestRequest();
-      if (isCurrent) {
-        set({
-          stats: payload,
-          statsError: null,
-          statsUpdatedAt: cachedAt,
-          statsCacheKey: cacheKey,
-        });
-      }
-      stopPerf({
-        cacheHit: false,
-        heatmapDays: payload.heatmap.length,
-        ignored: !isCurrent,
-      });
-    } catch (err) {
-      if (isLatestRequest()) {
-        set({ statsError: String(err) });
-      }
-      stopPerf({
-        cacheHit: false,
-        error: String(err),
-      });
-      throw err;
-    } finally {
-      if (isLatestRequest()) {
-        set({ loadingStats: false });
-      }
     }
   },
 

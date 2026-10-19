@@ -17,19 +17,16 @@ if (tag !== `ssh-agent-v${version}` && !desktopTag.test(tag)) {
 await mkdir(outputDir, { recursive: true });
 const repository = process.env.GITHUB_REPOSITORY || "dark-hxx/CLI-Manager";
 const releaseBase = `https://github.com/${repository}/releases/download/${tag}`;
-const [trustedKey, tauriConfigText, installerText] = await Promise.all([
+const [trustedKey, installerText] = await Promise.all([
   readFile("src-tauri/ssh-agent-public-key.txt", "utf8"),
-  readFile("src-tauri/tauri.conf.json", "utf8"),
   readFile("scripts/install-ssh-agent.sh", "utf8"),
 ]);
-const tauriConfig = JSON.parse(tauriConfigText);
-const updaterKey = Buffer.from(tauriConfig.plugins.updater.pubkey, "base64").toString("utf8");
 const normalizeKey = (value) => value.replace(/\r\n/g, "\n").trim();
 const normalizedTrustedKey = normalizeKey(trustedKey);
 const publicKeyLine = normalizedTrustedKey.split("\n")[1];
 const installerKey = installerText.match(/^PUBLIC_KEY="([^"]+)"$/m)?.[1];
-if (normalizeKey(updaterKey) !== normalizedTrustedKey || installerKey !== publicKeyLine) {
-  throw new Error("SSH Agent, installer, and Tauri updater public keys must match");
+if (installerKey !== publicKeyLine) {
+  throw new Error("SSH Agent and installer public keys must match");
 }
 
 async function artifact(target, input) {

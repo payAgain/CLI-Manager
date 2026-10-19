@@ -5,12 +5,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
 import { createPatch } from "diff";
 import type { HistoryFileChangeSummary, HistorySessionDetail, HistorySource, WorktreeRecord } from "../../lib/types";
-import {
-  fetchLatestProjectSessionDetail,
-  fetchRemoteLatestProjectSessionDetail,
-  fetchTodayProjectStatsMerged,
-  type TodayProjectStats,
-} from "../../stores/historyStore";
+import { fetchLatestProjectSessionDetail, fetchRemoteLatestProjectSessionDetail } from "../../stores/historyStore";
 import { buildSshAgentHistoryContext, type SshAgentHistoryContext } from "../../lib/sshAgentHistory";
 import { useProjectStore } from "../../stores/projectStore";
 import { useTerminalStore } from "../../stores/terminalStore";
@@ -30,24 +25,12 @@ import {
   formatRelativeTime,
   truncatePath,
 } from "../stats/termStatsUi";
-import {
-  TokenUsageCard,
-  ModelContextCard,
-  TrendCard,
-  ToolsCard,
-  TodayUsageCard,
-  LatestChangesCard,
-  type LatestChangesCardData,
-} from "../stats/termStatsCards";
+import { TokenUsageCard, ModelContextCard, TrendCard, ToolsCard, LatestChangesCard, type LatestChangesCardData } from "../stats/termStatsCards";
 import { useI18n } from "../../lib/i18n";
 import { useSaveSessionToSidebar } from "../../hooks/useSaveSessionToSidebar";
 import { DiffViewerModal } from "../git/DiffViewerModal";
 import { parseDiffBlocksFromMessages } from "../../lib/diffParser";
 import { resolveTerminalProjectPath } from "../../lib/terminalOscPath";
-import {
-  resolveTodayProjectStatsScope,
-  resolveTodayUsageProjectPaths,
-} from "../../lib/historyProjectPaths";
 import { TerminalSquare } from "../icons";
 import { TerminalPanelHeader } from "./TerminalPanelHeader";
 
@@ -426,10 +409,6 @@ export function TerminalStatsPanel({ activeSessionId, open, visible = true, embe
   const worktrees = useWorktreeStore((state) => state.worktrees);
 
   const [latestSession, setLatestSession] = useState<HistorySessionDetail | null>(null);
-  const [todayStatsState, setTodayStatsState] = useState<{
-    scopeKey: string;
-    value: TodayProjectStats | null;
-  } | null>(null);
   const [updatedAt, setUpdatedAt] = useState<number | null>(null);
   const [, setNowTick] = useState(0);
   const [refreshSeq, setRefreshSeq] = useState(0);
@@ -464,18 +443,6 @@ export function TerminalStatsPanel({ activeSessionId, open, visible = true, embe
   );
   const lookupProjectPath = activeWorktree?.path || terminalProjectPath;
   const displayProjectPath = activeWorktree?.path || terminalProjectPath;
-  // Issue #137：今日项目用量按「主项目路径 + 该项目下全部 worktree」聚合，避免 worktree 被当成独立目录。
-  const todayUsageProjectPaths = useMemo(() => {
-    const worktreePaths: string[] = [];
-    if (project?.id) {
-      for (const worktree of worktrees) {
-        if (worktree.project_id !== project.id) continue;
-        if (worktree.status === "missing") continue;
-        if (worktree.path?.trim()) worktreePaths.push(worktree.path.trim());
-      }
-    }
-    return resolveTodayUsageProjectPaths(project?.path, lookupProjectPath, worktreePaths);
-  }, [lookupProjectPath, project?.id, project?.path, worktrees]);
 
   // 终端运行的 CLI 工具（claude/codex），来自项目设置；推断不出则不过滤
   const sourceFilter = useMemo(
@@ -485,31 +452,8 @@ export function TerminalStatsPanel({ activeSessionId, open, visible = true, embe
       ),
     [terminalSession?.startupCmd, terminalSession?.title, project?.cli_tool]
   );
-  const todayUsageScope = useMemo(
-    () => resolveTodayProjectStatsScope(
-      todayUsageProjectPaths,
-      [latestSession?.project_key]
-    ),
-    [latestSession?.project_key, todayUsageProjectPaths]
-  );
-  const todayUsageScopeKey = useMemo(
-    () => todayUsageScope
-      ? JSON.stringify([
-          project?.id ?? "",
-          sourceFilter ?? "",
-          todayUsageScope.projectKey,
-          todayUsageScope.projectPaths,
-        ])
-      : null,
-    [project?.id, sourceFilter, todayUsageScope]
-  );
-  // 统计结果必须与当前项目作用域一致；切换项目后旧结果立即失效，等待新请求返回。
-  const todayStats = todayStatsState?.scopeKey === todayUsageScopeKey
-    ? todayStatsState.value
-    : null;
 
   // 「会话级」卡片只认 hook 绑定的当前 CLI 会话；未绑定时保持空态。
-  // 「今日项目用量」仍按项目聚合，不受此门控影响。
   const boundCliSessionId = terminalSession?.cliSessionId?.trim() || "";
   const tokensBound = Boolean(boundCliSessionId) && latestSession?.session_id === boundCliSessionId;
   const boundUsageTotal = tokensBound
@@ -626,40 +570,6 @@ export function TerminalStatsPanel({ activeSessionId, open, visible = true, embe
     // activeSessionId 入依赖：切换 Tab 时立即重新核对当前绑定会话（unchanged 时开销仅一次列表查询）
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeSessionId, displayProjectPath, isSshProject, lookupProjectPath, panelActive, pollTrigger, project, project?.path, refreshSeq, sourceFilter, statsPanelRefreshSeq, terminalSession?.cliSessionId, terminalSession?.cwd, terminalSession?.projectId, terminalSession?.remoteTranscriptRef, waitingForBoundSessionId, waitingForRemoteSessionId, waitingForUsage]);
-
-  // 今日项目用量：会话数据变化时同步刷新（与终端 CLI 来源保持一致）
-  // Issue #137：聚合主项目 + worktree 路径，主仓库 Tab 与 worktree Tab 看到同一套「今日项目」合计。
-  useEffect(() => {
-    if (!panelActive || !todayUsageScope || !todayUsageScopeKey) {
-      setTodayStatsState(null);
-      return;
-    }
-    if (isSshProject) {
-      setTodayStatsState(null);
-      return;
-    }
-    let cancelled = false;
-    const loadTodayStats = async () => {
-      try {
-        const result = await fetchTodayProjectStatsMerged(
-          todayUsageScope.projectKey,
-          sourceFilter,
-          todayUsageScope.projectPaths
-        );
-        if (!cancelled) {
-          setTodayStatsState({ scopeKey: todayUsageScopeKey, value: result });
-        }
-      } catch {
-        if (!cancelled) {
-          setTodayStatsState({ scopeKey: todayUsageScopeKey, value: null });
-        }
-      }
-    };
-    void loadTodayStats();
-    return () => {
-      cancelled = true;
-    };
-  }, [isSshProject, latestSession?.updated_at, panelActive, project, sourceFilter, todayUsageScope, todayUsageScopeKey]);
 
   // 空闲时数据轮询返回 unchanged 不会触发重渲染，需独立 tick 让头部相对时间文案随时间走字
   useEffect(() => {
@@ -779,8 +689,6 @@ export function TerminalStatsPanel({ activeSessionId, open, visible = true, embe
             onOpenDiff={(fileChange) => setDiffFileChange(fileChange)}
           />
         );
-      case "todayUsage":
-        return <TodayUsageCard key={cardKey} stats={todayStats} loading={false} />;
     }
   };
 

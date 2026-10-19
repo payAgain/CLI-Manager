@@ -33,10 +33,7 @@ try {
     environment.CLI_MANAGER_R2_AGENT_MANIFEST_URL,
     "https://downloads.example.com/CLI-Manager/releases/ssh-agent/latest/ssh-agent-release-manifest.json",
   );
-  assert.deepEqual(JSON.parse(environment.TAURI_CONFIG).plugins.updater.endpoints, [
-    "https://downloads.example.com/CLI-Manager/releases/latest/latest.json",
-    "https://github.com/dark-hxx/CLI-Manager/releases/latest/download/latest.json",
-  ]);
+  assert.equal(environment.TAURI_CONFIG, undefined, "lean releases must not inject the retired desktop updater");
 
   const environmentFile = join(root, "github-env");
   await exportActionsEnvironment("https://downloads.example.com", environmentFile);

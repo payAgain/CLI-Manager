@@ -94,7 +94,6 @@ const STATS_CARD_OPTIONS: { key: TerminalStatsCardKey; labelKey: TranslationKey 
   { key: "modelContext", labelKey: "termStats.modelContext" },
   { key: "tools", labelKey: "termStats.tools" },
   { key: "latestChanges", labelKey: "termStats.latestChanges" },
-  { key: "todayUsage", labelKey: "termStats.todayUsage" },
 ];
 
 const STATS_CARD_OPTION_MAP = new Map<TerminalStatsCardKey, (typeof STATS_CARD_OPTIONS)[number]>(
@@ -600,7 +599,6 @@ export function SidebarSettingsPage() {
                 modelContext: true,
                 tools: true,
                 latestChanges: true,
-                todayUsage: true,
               })}
             >
               {t("settings.sidebar.showAllStatsCards")}

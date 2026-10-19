@@ -41,7 +41,6 @@ export interface HistoryLocationSlot {
 export interface HistorySourceCapabilities {
   list: HistoryCapabilityState;
   search: HistoryCapabilityState;
-  stats: HistoryCapabilityState;
   usage: HistoryCapabilityState;
   rawOpen: HistoryCapabilityState;
   resume: HistoryCapabilityState;
@@ -91,7 +90,6 @@ const unsupportedMutationCapabilities = {
 const fileReaderCapabilities: HistorySourceCapabilities = {
   list: "planned",
   search: "planned",
-  stats: "planned",
   usage: "planned",
   rawOpen: "planned",
   resume: "planned",
@@ -104,7 +102,6 @@ const fileReaderCapabilities: HistorySourceCapabilities = {
 const supportedClaudeCodexCapabilities: HistorySourceCapabilities = {
   list: "supported",
   search: "supported",
-  stats: "supported",
   usage: "supported",
   rawOpen: "supported",
   resume: "supported",
@@ -120,7 +117,6 @@ const jsonReaderCapabilities: HistorySourceCapabilities = {
   ...fileReaderCapabilities,
   list: "supported",
   search: "supported",
-  stats: "supported",
   rawOpen: "supported",
   resume: "unsupported",
 };
@@ -129,7 +125,6 @@ const readonlyDatabaseCapabilities: HistorySourceCapabilities = {
   ...fileReaderCapabilities,
   list: "supported",
   search: "supported",
-  stats: "supported",
   usage: "supported",
   resume: "unsupported",
   rawOpen: "planned",

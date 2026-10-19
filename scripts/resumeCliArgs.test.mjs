@@ -46,12 +46,10 @@ writeFileSync(
 );
 
 transpile(new URL("../src/lib/resumeCliArgs.ts", import.meta.url), "resumeCliArgs.mjs");
-transpile(new URL("../src/lib/providerSwitching.ts", import.meta.url), "providerSwitching.mjs");
 const projectStartupPath = transpile(
   new URL("../src/lib/projectStartupCommand.ts", import.meta.url),
   "projectStartupCommand.mjs",
   {
-    "./providerSwitching": "./providerSwitching.mjs",
     "./resumeCliArgs": "./resumeCliArgs.mjs",
     "./shell": "./shell.mjs",
   },
@@ -182,7 +180,7 @@ test("parses Codex resume options before the old session id", () => {
   }
 });
 
-test("remote and history resume command construction never appends a second resume target", () => {
+test("history resume ignores retired provider overrides and keeps one resume target", () => {
   const project = {
     cli_tool: "codex",
     cli_args: `--model o3 resume ${OLD_ID} --sandbox workspace-write`,
@@ -205,10 +203,10 @@ test("remote and history resume command construction never appends a second resu
 
   assert.equal(
     command,
-    `codex resume --no-alt-screen ${NEW_ID} --model o3 --sandbox workspace-write --profile cli-manager-provider`,
+    `codex resume --no-alt-screen ${NEW_ID} --model o3 --sandbox workspace-write`,
   );
   assert.equal(command.match(/(?:^|\s)resume(?:\s|$)/g)?.length, 1);
-  assert.equal(command.match(/(?:^|\s)--profile(?:\s|$)/g)?.length, 1);
+  assert.doesNotMatch(command, /(?:^|\s)--profile(?:\s|$)/);
 });
 
 test("saved-session CLI arguments reuse the same resume stripping rules", () => {

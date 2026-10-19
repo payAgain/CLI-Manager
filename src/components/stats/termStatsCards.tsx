@@ -1,8 +1,7 @@
-import { Activity, CalendarClock, Coins, Cpu, FileCode2, GitCompareArrows, Wrench } from "lucide-react";
+import { Activity, Coins, Cpu, FileCode2, GitCompareArrows, Wrench } from "lucide-react";
 import type { HistoryFileChangeSummary, HistorySessionDetail, HistoryToolCount } from "../../lib/types";
 import { VendorIcon, inferVendor } from "../VendorIcon";
 import { resolveContextLimit } from "../../lib/modelPricing";
-import type { TodayProjectStats } from "../../stores/historyStore";
 import { useI18n } from "../../lib/i18n";
 import {
   TERM_PANEL,
@@ -472,83 +471,6 @@ export function LatestChangesCard({
             ))}
           </div>
         </>
-      )}
-    </StatCard>
-  );
-}
-
-export function TodayUsageCard({
-  stats,
-  loading,
-}: {
-  stats: TodayProjectStats | null;
-  loading: boolean;
-}) {
-  const { t } = useI18n();
-  return (
-    <StatCard
-      icon={<CalendarClock size={13} />}
-      iconColor={TERM_PANEL.green}
-      title={t("termStats.todayUsage")}
-      headerRight={
-        stats && stats.sessions > 0 ? <HeaderPill>{t("termStats.sessionCount", { count: stats.sessions })}</HeaderPill> : undefined
-      }
-    >
-      {loading && !stats ? (
-        <div className="text-[11px]" style={{ color: TERM_PANEL.dim }}>
-          {t("common.loading")}
-        </div>
-      ) : stats && stats.sessions > 0 ? (
-        <div className="space-y-1.5">
-          <div className="grid grid-cols-2 gap-1.5">
-            <StatChip
-              dotColor={TERM_PANEL.yellow}
-              label="Token"
-              value={formatCompactCount(stats.totalTokens)}
-              valueColor={TERM_PANEL.yellow}
-            />
-            <StatChip
-              dotColor={TERM_PANEL.green}
-              label={t("termStats.cost")}
-              value={formatCost(stats.totalCostUsd)}
-              valueColor={TERM_PANEL.green}
-            />
-          </div>
-          <div className="grid grid-cols-2 gap-1.5">
-            <StatChip
-              dotColor={TERM_PANEL.green}
-              label={t("termStats.input")}
-              value={formatCompactCount(stats.inputTokens)}
-            />
-            <StatChip
-              dotColor={TERM_PANEL.yellow}
-              label={t("termStats.output")}
-              value={formatCompactCount(stats.outputTokens)}
-            />
-            <StatChip
-              dotColor={TERM_PANEL.blue}
-              label={t("termStats.cacheHit")}
-              value={formatCompactCount(stats.cacheReadTokens)}
-            />
-            <StatChip
-              dotColor={TERM_PANEL.magenta}
-              label={t("termStats.cacheWrite")}
-              value={formatCompactCount(stats.cacheCreationTokens)}
-            />
-            {stats.unpricedTokens > 0 && (
-              <StatChip
-                dotColor={TERM_PANEL.red}
-                label={t("termStats.unpriced")}
-                value={formatCompactCount(stats.unpricedTokens)}
-                valueColor={TERM_PANEL.red}
-              />
-            )}
-          </div>
-        </div>
-      ) : (
-        <div className="text-[11px]" style={{ color: TERM_PANEL.dim }}>
-          {t("termStats.todayNoSessions")}
-        </div>
       )}
     </StatCard>
   );

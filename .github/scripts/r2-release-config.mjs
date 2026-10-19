@@ -2,8 +2,6 @@ import { appendFile, readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const GITHUB_UPDATER_URL =
-  "https://github.com/dark-hxx/CLI-Manager/releases/latest/download/latest.json";
 const INSTALLER_BASE_URL_PATTERN = /^R2_PUBLIC_BASE_URL="[^"]*"$/gm;
 
 export function normalizeR2PublicBaseUrl(value) {
@@ -38,20 +36,12 @@ export function normalizeR2PublicBaseUrl(value) {
 
 export function buildReleaseEnvironment(value) {
   const baseUrl = normalizeR2PublicBaseUrl(value);
-  const updaterUrl = `${baseUrl}/CLI-Manager/releases/latest/latest.json`;
   const agentManifestUrl =
     `${baseUrl}/CLI-Manager/releases/ssh-agent/latest/ssh-agent-release-manifest.json`;
   return {
     R2_PUBLIC_BASE_URL: baseUrl,
     VITE_R2_PUBLIC_BASE_URL: baseUrl,
     CLI_MANAGER_R2_AGENT_MANIFEST_URL: agentManifestUrl,
-    TAURI_CONFIG: JSON.stringify({
-      plugins: {
-        updater: {
-          endpoints: [updaterUrl, GITHUB_UPDATER_URL],
-        },
-      },
-    }),
   };
 }
 

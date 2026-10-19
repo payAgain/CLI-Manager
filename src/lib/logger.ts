@@ -33,9 +33,7 @@ export type PerfMetric =
   | "history.index.warmup"
   | "history.sessions.load"
   | "history.search"
-  | "history.session.detail"
-  | "stats.open"
-  | "stats.load";
+  | "history.session.detail";
 
 interface PerfBudget {
   targetMs: number;
@@ -74,16 +72,6 @@ export const PERF_BUDGETS: Record<PerfMetric, PerfBudget> = {
     targetMs: 260,
     warnMs: 520,
     desc: "单个历史会话详情加载",
-  },
-  "stats.open": {
-    targetMs: 500,
-    warnMs: 1000,
-    desc: "打开分析看板（含必要会话预载）",
-  },
-  "stats.load": {
-    targetMs: 900,
-    warnMs: 1800,
-    desc: "看板统计聚合加载（history_get_stats）",
   },
 };
 

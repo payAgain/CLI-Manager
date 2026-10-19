@@ -1,6 +1,6 @@
 # PTY 守护进程手册（Issue #123 Phase 2）
 
-> 版本：V1.2.7 开发分支 `wt/issue123` · 契约：`.trellis/spec/backend/pty-daemon-contracts.md` · Phase 1（托盘常驻）契约：`.trellis/spec/frontend/background-task-continuation-contracts.md`
+> 适用：精简版 0.1.0；daemon 生命周期与终端恢复的手动验证参考。
 
 ## 1. 这是什么
 

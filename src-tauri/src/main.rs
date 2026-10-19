@@ -3,6 +3,11 @@
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+    // Older Claude settings can still invoke this retired helper after an upgrade.
+    // Exit before initializing Tauri so a status-line refresh cannot open a window.
+    if args.get(1).map(String::as_str) == Some("__statusline") {
+        return;
+    }
     if cli_manager_lib::codex_app_server_proxy::is_helper_request(&args) {
         cli_manager_lib::codex_app_server_proxy::run_helper_and_exit(&args);
     }
