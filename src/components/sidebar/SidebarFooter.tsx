@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
-import { Settings } from "../icons";
+import { PlugZap, Settings, TerminalSquare } from "../icons";
 import type { SettingsTab } from "../SettingsModal";
 import { getErrorMessage, getPiHookErrorMessage } from "../../lib/hookErrors";
 import { useSettingsStore } from "../../stores/settingsStore";
 import { useI18n } from "../../lib/i18n";
-import { MemoryUsage } from "./MemoryUsage";
+
 
 type HookInstallStatus = "directoryMissing" | "notInstalled" | "partialInstalled" | "installed";
 type HookLightStatus = "missing" | "partial" | "installed";
@@ -199,11 +199,12 @@ function HookStatusLight({ onOpenSettings }: { onOpenSettings: (tab?: SettingsTa
       type="button"
       onClick={handleClick}
       disabled={loading || working}
-      className="ui-focus-ring ui-icon-action ui-sidebar-action-hook"
+      className="ui-focus-ring ui-sidebar-tool ui-sidebar-action-hook"
       data-hook-status={lightStatus}
       title={working ? t("sidebar.hook.working") : title}
       aria-label={title}
     >
+      <PlugZap size={15} aria-hidden="true" />
       <span className="ui-sidebar-hook-light" aria-hidden="true" />
     </button>
   );
@@ -215,35 +216,22 @@ export function SidebarFooter({ collapsed, onOpenSettings }: SidebarFooterProps)
   const settingsButton = (
     <button
       onClick={() => onOpenSettings()}
-      className={`ui-focus-ring ui-icon-action ui-sidebar-action-settings ${collapsed ? "" : "ui-sidebar-settings"}`}
+      className="ui-focus-ring ui-sidebar-tool ui-sidebar-action-settings"
       title={t("sidebar.settings")}
       aria-label={t("sidebar.openSettings")}
     >
       <Settings size={16} strokeWidth={1.5} />
-      {!collapsed && <span>{t("sidebar.settings")}</span>}
     </button>
   );
 
-  if (collapsed) {
-    return (
-      <div className="px-2 py-2">
-        <div className="flex flex-col items-center gap-1.5">
-          <MemoryUsage collapsed />
-          <HookStatusLight onOpenSettings={onOpenSettings} />
-          {settingsButton}
-        </div>
-      </div>
-    );
-  }
-
   return (
-    <div className="px-2.5 py-2.5">
-      <MemoryUsage collapsed={false} />
-      <div className="flex items-center gap-2">
-
-        {settingsButton}
-        <HookStatusLight onOpenSettings={onOpenSettings} />
-      </div>
+    <div className="ui-sidebar-footer-tools" data-collapsed={collapsed}>
+      {settingsButton}
+      <HookStatusLight onOpenSettings={onOpenSettings} />
+      <button type="button" className="ui-sidebar-tool ui-focus-ring" style={{ marginLeft: "auto" }}
+        title={t("workspace.remoteHosts")} aria-label={t("workspace.remoteHosts")} onClick={() => onOpenSettings("ssh-hosts")}>
+        <TerminalSquare size={15} />
+      </button>
     </div>
   );
 }

@@ -1,4 +1,5 @@
 import { Suspense, lazy, memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { useShallow } from "zustand/shallow";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
@@ -18,7 +19,7 @@ import {
   type DragOverEvent,
   type DragStartEvent,
 } from "@dnd-kit/core";
-import { SortableContext, arrayMove, horizontalListSortingStrategy, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
+import { SortableContext, arrayMove, horizontalListSortingStrategy, useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { useTerminalStore, type SplitTerminalOptions, type TabNotificationState } from "../stores/terminalStore";
 import { TERMINAL_PANEL_WIDTH_DEFAULTS, useSettingsStore } from "../stores/settingsStore";
@@ -99,6 +100,7 @@ import { getTerminalTheme, isLightTerminalTheme } from "../lib/terminalThemes";
 import { getTerminalSidePanelSkinStyle } from "./stats/termStatsUi";
 import {
   findWorktreeForSession,
+  projectWithWorktreePath,
   isSameProjectFileContext,
   resolveProjectForSessionFileContext,
 } from "../lib/terminalProject";
@@ -963,7 +965,7 @@ function SortableWorkspanTab({
     opacity: isDragging ? 0.45 : 1,
     zIndex: isDragging ? 10 : undefined,
   };
-  const sortableAttributes = { ...attributes, role: "tab" as const, "aria-selected": isActive };
+  const sortableAttributes = { ...attributes, "aria-disabled": undefined, role: "tab" as const, "aria-selected": isActive };
 
   useEffect(() => {
     if (!editing) return;
@@ -2527,6 +2529,9 @@ export function TerminalTabs({
   const openHistory = useHistoryStore((s) => s.openHistory);
   const closeHistory = useHistoryStore((s) => s.closeHistory);
   const focusGlobalSearchSeq = useHistoryStore((s) => s.focusGlobalSearchSeq);
+  const [workspanTabHost, setWorkspanTabHost] = useState<HTMLDivElement | null>(null);
+  const [historyExpanded, setHistoryExpanded] = useState(false);
+  const historyDockWidth = useSettingsStore((s) => s.terminalPanelWidths.merged);
   const [activeWorkspaceTab, setActiveWorkspaceTab] = useState<"terminal" | "history">("terminal");
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
   const [splitPicker, setSplitPicker] = useState<SplitPickerState>(null);
@@ -2697,7 +2702,7 @@ export function TerminalTabs({
     return activeSession;
   }, [activeSession, sessions]);
   const panelSessionId = panelSession?.id ?? null;
-  const panelProject = panelSession?.projectId ? projectById.get(panelSession.projectId) ?? null : null;
+  const panelProject = panelSession?.projectId ? projectById.get(panelSession.projectId) ?? null : scopedProject;
   const panelCapabilities = resolveProjectCapabilities(panelProject);
   const panelGitSupported = panelCapabilities.git || panelProject?.environment_type === "ssh";
   const activeWorktree = useMemo(
@@ -2705,8 +2710,9 @@ export function TerminalTabs({
     [activeSession, sessions, worktrees]
   );
   const filePanelProject = useMemo(
-    () => resolveProjectForSessionFileContext(activeSession, sessions, projects, projectById, worktrees),
-    [activeSession, projectById, projects, sessions, worktrees]
+    () => resolveProjectForSessionFileContext(activeSession, sessions, projects, projectById, worktrees)
+      ?? (scopedProject ? (scopedWorktree ? projectWithWorktreePath(scopedProject, scopedWorktree) : scopedProject) : null),
+    [activeSession, projectById, projects, scopedProject, scopedWorktree, sessions, worktrees]
   );
   const sidePanelProjectPath = panelProject?.environment_type === "ssh"
     ? panelProject.remote_path.trim() || null
@@ -2738,6 +2744,7 @@ export function TerminalTabs({
   }, [workspanTabModels, workspanTabOverflow.hiddenIds]);
   const activateWorkspanTab = useCallback((workspanId: string) => {
     setActiveWorkspaceTab("terminal");
+    setHistoryExpanded(false);
     setActiveWorkspan(workspanId);
   }, [setActiveWorkspan]);
 
@@ -2835,7 +2842,7 @@ export function TerminalTabs({
       observer?.disconnect();
       if (frameId !== null) window.cancelAnimationFrame(frameId);
     };
-  }, [updateWorkspanTabOverflow, workspanEnabled, workspanTabSignature]);
+  }, [updateWorkspanTabOverflow, workspanEnabled, workspanTabHost, workspanTabSignature]);
 
   useEffect(() => {
     if (!workspanTabOverflow.isOverflowing || workspanTabOverflow.hiddenIds.length === 0) {
@@ -2928,7 +2935,7 @@ export function TerminalTabs({
     }),
     [panelCapabilities.files, panelCapabilities.history, panelCapabilities.statistics, panelGitSupported, terminalToolbarVisibility]
   );
-  const historyActive = historyOpen && activeWorkspaceTab === "history";
+  const historyActive = historyOpen && historyExpanded && activeWorkspaceTab === "history";
   const statsPanelActive = sidePanelMerged ? sidePanelOpen && sidePanelTab === "stats" : statsOpen;
   const replayPanelActive = sidePanelMerged ? sidePanelOpen && sidePanelTab === "replay" : replayOpen;
   const gitPanelActive = sidePanelMerged ? sidePanelOpen && sidePanelTab === "git" : gitOpen;
@@ -2945,6 +2952,7 @@ export function TerminalTabs({
   }, [sidePanelMerged, sidePanelOpen, sidePanelTab, visibleSidePanelTabs]);
 
   useEffect(() => {
+    if (!historyOpen) setHistoryExpanded(false);
     if (!historyOpen && activeWorkspaceTab === "history") setActiveWorkspaceTab("terminal");
   }, [activeWorkspaceTab, historyOpen]);
 
@@ -3605,6 +3613,7 @@ export function TerminalTabs({
     }
     const project = activeSession?.projectId ? projects.find((item) => item.id === activeSession.projectId) : undefined;
     if (rejectUnsupportedCapability(project, "history")) return;
+    setHistoryExpanded(false);
     setActiveWorkspaceTab("history");
     void openHistory({
       sourceFilter: resolveHistorySourceFilter(project?.cli_tool),
@@ -3925,7 +3934,7 @@ export function TerminalTabs({
       ),
       templates: (
         <CommandTemplatePanel
-          popoverSide="left"
+          popoverSide="bottom"
           toneClassName="ui-action-template"
           popoverStyle={terminalActionSidebarStyle}
         />
@@ -4051,12 +4060,21 @@ export function TerminalTabs({
         onDragCancel={handleToolbarDragCancel}
       >
         <nav
-          className="ui-terminal-actions ui-terminal-action-sidebar flex shrink-0 flex-col items-center gap-2"
+          className="ui-terminal-actions ui-workspace-topbar flex shrink-0 items-center"
           aria-label={t("terminal.toolbar.actions")}
           data-show-text={terminalToolbarVisibility.showText ? "true" : undefined}
           style={terminalActionSidebarStyle}
         >
-          <SortableContext items={visibleButtons.map((b) => b.id)} strategy={verticalListSortingStrategy}>
+          <div ref={setWorkspanTabHost} className="ui-workspace-topbar-tabs" data-tauri-drag-region>
+            {(!workspanEnabled || workspanTabModels.length === 0) && <div className="ui-workspace-topbar-context" data-tauri-drag-region>
+              <Terminal size={13} /><span>{panelProject?.name ?? t("workspace.label")}</span>
+            </div>}
+          </div>
+          {historyOpen && <button type="button" className="ui-workspace-history-view ui-focus-ring"
+            onClick={() => { setActiveWorkspaceTab("history"); setHistoryExpanded(!historyActive); }} title={t(historyActive ? "workspace.backTerminal" : "workspace.expandHistory")}>
+            {t(historyActive ? "workspace.backTerminal" : "workspace.expandHistory")}
+          </button>}
+          <SortableContext items={visibleButtons.map((b) => b.id)} strategy={horizontalListSortingStrategy}>
             {visibleButtons.map((btn) => (
               <SortableToolbarButton
                 key={btn.id}
@@ -4105,6 +4123,10 @@ export function TerminalTabs({
     handleToolbarDragEnd,
     handleToolbarDragStart,
     historyOpen,
+    historyActive,
+    panelProject?.name,
+    workspanEnabled,
+    workspanTabModels.length,
     onToggleFullscreen,
     replayPanelActive,
     refreshBackgroundTasks,
@@ -4308,7 +4330,7 @@ export function TerminalTabs({
     <div
       className="ui-terminal-tabs-shell flex h-full min-h-0 flex-col"
       data-fullscreen={fullscreen ? "true" : "false"}
-      style={terminalWellStyle}
+      style={{ ...terminalWellStyle, "--history-dock-width": `${historyDockWidth}px` } as CSSProperties}
     >
       {promptDialog}
       {confirmDialog}
@@ -4353,14 +4375,15 @@ export function TerminalTabs({
         onClose={() => setDiscardTarget(null)}
       />
 
+      {renderToolbarActions()}
       <div className="relative flex-1 min-h-0 overflow-hidden">
         {historyOpen && (
           <div
-            className={`absolute min-h-0 overflow-hidden ${fullscreen ? "inset-x-0 bottom-0 top-0" : "inset-x-3 bottom-3 top-3"}`}
-            style={{ display: historyActive ? "block" : "none" }}
+            className="ui-history-workspace-host absolute right-0 top-0 bottom-0 min-h-0 overflow-hidden"
+            style={{ width: historyActive ? "100%" : "min(var(--history-dock-width), 100%)", zIndex: 5 }}
           >
             <Suspense fallback={null}>
-              <HistoryWorkspace active={historyActive} />
+              <HistoryWorkspace active={historyOpen} docked={!historyActive} onOpenDetail={() => setHistoryExpanded(true)} />
             </Suspense>
           </div>
         )}
@@ -4369,7 +4392,7 @@ export function TerminalTabs({
           data-terminal-mode="independent"
           data-empty={visibleSessions.length === 0 ? "true" : "false"}
           data-terminal-theme-tone={terminalThemeTone}
-          style={{ display: historyActive ? "none" : "flex" }}
+          style={{ display: historyActive ? "none" : "flex", right: historyOpen && !historyActive ? "min(var(--history-dock-width), 100%)" : 0 }}
         >
           <div className="flex min-h-0 min-w-0 flex-1 flex-col">
             {visibleWorkspanLayouts.length > 0 ? (
@@ -4381,7 +4404,7 @@ export function TerminalTabs({
                 onDragCancel={clearDragState}
                 onDragEnd={handleDragEnd}
               >
-                {workspanEnabled && (
+                {workspanEnabled && workspanTabHost && createPortal(
                   <div
                     ref={workspanTabBarRef}
                     className="ui-terminal-pane-chrome ui-workspan-tabbar relative flex h-9 shrink-0 items-center px-1"
@@ -4587,7 +4610,7 @@ export function TerminalTabs({
                       </PopoverContent>
                     </Popover>
                   )}
-                  </div>
+                  </div>, workspanTabHost
                 )}
                 <div className="relative min-h-0 flex-1 overflow-hidden">
                   {mountedWorkspanLayouts.map((layout) => {
@@ -4713,7 +4736,6 @@ export function TerminalTabs({
               )}
             </>
           )}
-          {renderToolbarActions()}
         </div>
       </div>
     </div>

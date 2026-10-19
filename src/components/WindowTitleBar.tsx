@@ -13,7 +13,7 @@ function isLikelyMacOs() {
   return typeof navigator !== "undefined" && /mac/i.test(navigator.platform);
 }
 
-export function WindowTitleBar() {
+export function WindowTitleBar({ sidebarChrome = false }: { sidebarChrome?: boolean }) {
   const { t } = useI18n();
   const [isMacOs, setIsMacOs] = useState(isLikelyMacOs);
   const [maximized, setMaximized] = useState(false);
@@ -63,6 +63,13 @@ export function WindowTitleBar() {
     })();
   };
 
+  if (sidebarChrome) {
+    return (
+      <div className="ui-sidebar-brandbar" data-macos={isMacOs} data-tauri-drag-region>
+        <span data-tauri-drag-region>CLI-Manager</span>
+      </div>
+    );
+  }
   if (isMacOs) return null;
 
   return (

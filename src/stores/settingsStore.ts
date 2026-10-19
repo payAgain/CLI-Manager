@@ -540,7 +540,7 @@ const DEFAULTS: Settings = {
   fileExplorerIgnoredPaths: {},
   batchLaunchGroupInPane: false,
   batchLaunchPaneDirection: "horizontal",
-  projectScopedTerminalViewEnabled: false,
+  projectScopedTerminalViewEnabled: true,
   workspanEnabled: true,
 };
 

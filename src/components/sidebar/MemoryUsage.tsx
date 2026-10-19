@@ -28,7 +28,7 @@ export function MemoryUsage({ collapsed }: { collapsed: boolean }) {
       <PopoverTrigger asChild>
         <button type="button" className={`ui-memory-trigger ui-focus-ring${collapsed ? " ui-memory-trigger-collapsed" : ""}`} aria-label={t("memory.title")} title={`${t("memory.title")} · ${formatMemory(snapshot?.totalBytes)}`} data-stale={error ? "true" : undefined}>
           <MemoryStick size={15} strokeWidth={1.5} aria-hidden="true" />
-          {!collapsed && <><span>{t("memory.short")}</span><span className="ui-memory-value">{formatMemory(snapshot?.totalBytes)}</span></>}
+          {!collapsed && <span className="ui-memory-value">{formatMemory(snapshot?.totalBytes)}</span>}
         </button>
       </PopoverTrigger>
       <PopoverContent side={collapsed ? "right" : "top"} align="start" className="ui-memory-popover" data-memory-popover="true" aria-label={t("memory.title")}>

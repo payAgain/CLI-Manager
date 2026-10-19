@@ -26,6 +26,8 @@ export interface TreeActions {
   onCancelRename: () => void;
   onProjectRenameConfirm: (id: string, newName: string) => void;
   onCancelProjectRename: () => void;
+  onContextMenuProjectHeader: (e: ReactMouseEvent, p: Project) => void;
+  onCreateWorktree: (p: Project) => void;
   onContextMenuProject: (e: ReactMouseEvent, p: Project) => void;
   onSelectWorktree: (e: ReactMouseEvent, worktree: WorktreeRecord) => void;
   onOpenWorktree: (project: Project, worktree: WorktreeRecord) => void;

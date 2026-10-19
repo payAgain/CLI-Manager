@@ -1,13 +1,12 @@
 import { DndContext, DragOverlay, PointerSensor, closestCenter, useSensor, useSensors, type CollisionDetection, type DragStartEvent } from "@dnd-kit/core";
 import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
 import type { Project, TerminalScope, TreeNode as TNode } from "../../lib/types";
 import type { SessionStatus } from "../../stores/terminalStore";
 import { SidebarSkeleton } from "../ui/Skeleton";
 import { EmptyState } from "../ui/EmptyState";
 import { Popover, PopoverAnchor, PopoverContent } from "../ui/popover";
-import { Folder, Plus, Terminal } from "../icons";
-import { VendorIcon, inferVendor } from "../VendorIcon";
+import { Folder, FolderCode, Plus, Search, Terminal, X } from "../icons";
 import { WorktreeIcon } from "../WorktreeIcon";
 import { TreeNodeItem } from "./TreeNodeItem";
 import { useTreeActions, worktreeListCollapseId, type TreeActions } from "./TreeContext";
@@ -15,6 +14,8 @@ import { useI18n } from "../../lib/i18n";
 import { DND_ACTIVATION_CONSTRAINT } from "../../lib/dragInteraction";
 
 interface ProjectTreeProps {
+  header?: ReactNode;
+  navigation?: ReactNode;
   tree: TNode[];
   initialLoading: boolean;
   loadError: string | null;
@@ -36,9 +37,9 @@ interface ProjectTreeProps {
 }
 
 const STATUS_COLORS: Record<SessionStatus, string> = {
-  running: "#9ece6a",
-  exited: "#ff9e64",
-  error: "#f7768e",
+  running: "var(--success)",
+  exited: "var(--text-muted)",
+  error: "var(--danger)",
 };
 
 function countProjects(node: TNode): number {
@@ -224,7 +225,7 @@ function flattenVisibleTree(
       parentGroupKey,
       projectId: node.project.id,
       isOpen,
-      hasChildren: projectWorktrees.length > 0,
+      hasChildren: true,
       firstChildKey,
     });
     if (!isOpen) continue;
@@ -242,6 +243,8 @@ function flattenVisibleTree(
 }
 
 export function ProjectTree({
+  header,
+  navigation,
   tree,
   initialLoading,
   loadError,
@@ -266,12 +269,11 @@ export function ProjectTree({
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: DND_ACTIVATION_CONSTRAINT }));
   const [focusedNodeKey, setFocusedNodeKey] = useState<string | null>(null);
   const [activeId, setActiveId] = useState<string | null>(null);
-  const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const treeContainerRef = useRef<HTMLDivElement | null>(null);
   const suppressClickAfterDragUntilRef = useRef(0);
-  const searchActive = searchOpen && searchQuery.trim().length > 0;
+  const searchActive = searchQuery.trim().length > 0;
   const filteredTree = useMemo(
     () => (searchActive ? filterTreeNodes(tree, searchQuery) : tree),
     [searchActive, searchQuery, tree]
@@ -279,11 +281,11 @@ export function ProjectTree({
   const visibleNodes = useMemo(
     () => {
       const nodes = flattenVisibleTree(filteredTree, searchActive ? new Set<string>() : actions.collapsedIds);
-      return projectScopedTerminalViewEnabled
+      return projectScopedTerminalViewEnabled && !navigation
         ? [{ key: "scope:all", kind: "all-terminals", parentGroupKey: null } satisfies VisibleTreeNode, ...nodes]
         : nodes;
     },
-    [actions.collapsedIds, filteredTree, projectScopedTerminalViewEnabled, searchActive]
+    [actions.collapsedIds, filteredTree, navigation, projectScopedTerminalViewEnabled, searchActive]
   );
   const visibleNodeIndex = useMemo(() => {
     const map = new Map<string, number>();
@@ -352,7 +354,6 @@ export function ProjectTree({
   }, []);
 
   const closeSearch = useCallback((focusKey?: string | null) => {
-    setSearchOpen(false);
     setSearchQuery("");
     const nextKey = focusKey ?? focusedNodeKey ?? visibleNodes[0]?.key ?? null;
     if (nextKey) {
@@ -363,7 +364,6 @@ export function ProjectTree({
   }, [focusTreeContainer, focusTreeItem, focusedNodeKey, visibleNodes]);
 
   const openSearch = useCallback((initialQuery = "") => {
-    setSearchOpen(true);
     setSearchQuery(initialQuery);
     window.requestAnimationFrame(() => {
       const input = searchInputRef.current;
@@ -374,21 +374,14 @@ export function ProjectTree({
   }, []);
 
   useEffect(() => {
-    if (visibleNodes.length === 0) {
-      if (focusedNodeKey !== null) {
-        setFocusedNodeKey(null);
-      }
-      return;
-    }
-    const nextFocusedKey =
-      selectedTreeKey ??
-      (focusedNodeKey && visibleNodeIndex.has(focusedNodeKey)
-        ? focusedNodeKey
-        : visibleNodes[0].key);
-    if (focusedNodeKey !== nextFocusedKey) {
-      setFocusedNodeKey(nextFocusedKey);
-    }
-  }, [focusedNodeKey, selectedTreeKey, visibleNodeIndex, visibleNodes]);
+    if (selectedTreeKey) setFocusedNodeKey(selectedTreeKey);
+  }, [selectedTreeKey]);
+
+  useEffect(() => {
+    setFocusedNodeKey((current) => current && visibleNodeIndex.has(current)
+      ? current
+      : visibleNodes[0]?.key ?? null);
+  }, [visibleNodeIndex, visibleNodes]);
 
   useEffect(() => {
     if (!selectedTreeKey) return;
@@ -419,15 +412,15 @@ export function ProjectTree({
       return;
     }
 
-    if (event.key === "Escape" && searchOpen) {
+    if (event.key === "Escape" && searchActive) {
       event.preventDefault();
       closeSearch();
       return;
     }
 
-    if (!searchOpen && !event.ctrlKey && !event.metaKey && !event.altKey && isProjectSearchKey(event.key)) {
+    if (!event.ctrlKey && !event.metaKey && !event.altKey && isProjectSearchKey(event.key)) {
       event.preventDefault();
-      openSearch(event.key);
+      openSearch(searchQuery + event.key);
       return;
     }
 
@@ -575,7 +568,6 @@ export function ProjectTree({
     projectById,
     worktreeById,
     searchActive,
-    searchOpen,
     searchQuery,
     visibleNodeIndex,
     visibleNodes,
@@ -594,7 +586,7 @@ export function ProjectTree({
   if (initialLoading) {
     return (
       <div className="h-full overflow-y-auto overflow-x-hidden px-1.5 pb-2 pt-1">
-        <SidebarSkeleton />
+        {navigation}{header}<SidebarSkeleton />
       </div>
     );
   }
@@ -603,9 +595,10 @@ export function ProjectTree({
     const buttonSize = density === "compact" ? "h-7 w-7" : "h-8 w-8";
     return (
       <div className={`h-full overflow-y-auto overflow-x-hidden ${density === "compact" ? "px-0.5 pb-1.5 pt-0.5" : "px-1 pb-2 pt-1"}`}>
+        {navigation}{header}
         {tree.length === 0 ? (
           <div className={`flex flex-col items-center text-text-muted ${density === "compact" ? "gap-1.5 py-2.5" : "gap-2 py-3"}`}>
-            <Terminal size={20} strokeWidth={1.2} className="opacity-50" />
+            <FolderCode size={20} strokeWidth={1.5} className="opacity-50" />
             <button
               onClick={onQuickAddProject}
               className={`ui-flat-action ui-primary-action px-0 ${buttonSize}`}
@@ -636,58 +629,24 @@ export function ProjectTree({
   }
 
   return (
-    <div className={`${embedded ? "" : "flex h-full flex-col overflow-y-auto"} overflow-x-hidden ${density === "compact" ? "px-1 pb-1.5 pt-0.5" : "px-1.5 pb-2 pt-1"}`}>
-      {newGroupParentId === "__root__" && (
-        <div className={`flex items-center px-2 ${density === "compact" ? "gap-1 py-1" : "gap-1.5 py-1.5"}`}>
-          <span className="shrink-0 text-accent">
-            <Folder size={16} strokeWidth={1.5} />
-          </span>
-          <input
-            ref={(ref) => {
-              ref?.focus();
-            }}
-            className="ui-tree-inline-input ui-focus-ring h-8 flex-1 px-2 text-xs text-on-surface outline-none"
-            onBlur={(e) => {
-              const value = e.currentTarget.value.trim();
-              if (value) onCreateRootGroup(value);
-              else onCancelRootGroup();
-            }}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") {
-                const value = e.currentTarget.value.trim();
-                if (value) onCreateRootGroup(value);
-                else onCancelRootGroup();
-              }
-              if (e.key === "Escape") onCancelRootGroup();
-            }}
-            onClick={(e) => e.stopPropagation()}
-          />
-        </div>
-      )}
-
-      {searchOpen && (
-        <div className={`px-2 ${density === "compact" ? "pb-1 pt-0.5" : "pb-1.5 pt-0.5"}`}>
+    <div className={`ui-project-tree${embedded ? " ui-project-tree-embedded" : ""}`}>
+      <div className="ui-sidebar-project-search">
+        <div className="ui-sidebar-project-search-field">
+          <Search size={14} aria-hidden="true" />
           <input
             ref={searchInputRef}
             value={searchQuery}
             placeholder={t("sidebar.tree.searchPlaceholder")}
             aria-label={t("sidebar.tree.searchAria")}
-            className="ui-tree-inline-input ui-focus-ring h-8 w-full px-2 text-xs text-on-surface outline-none"
-            onChange={(event) => {
-              const nextValue = event.currentTarget.value;
-              if (!nextValue.trim()) {
-                closeSearch();
-                return;
-              }
-              setSearchQuery(nextValue);
-            }}
+            autoComplete="off"
+            spellCheck={false}
+            onChange={(event) => setSearchQuery(event.currentTarget.value)}
             onKeyDown={(event) => {
               if (event.key === "Escape") {
                 event.preventDefault();
+                event.stopPropagation();
                 closeSearch();
-                return;
-              }
-              if (event.key === "ArrowDown" && visibleNodes.length > 0) {
+              } else if (event.key === "ArrowDown" && visibleNodes.length > 0) {
                 event.preventDefault();
                 const nextNode = searchActive
                   ? visibleNodes.find((node) => node.kind !== "all-terminals") ?? visibleNodes[0]
@@ -696,132 +655,170 @@ export function ProjectTree({
               }
             }}
           />
+          {searchQuery && (
+            <button type="button" className="ui-sidebar-search-clear ui-focus-ring"
+              title={t("sidebar.clearSearch")} aria-label={t("sidebar.clearSearch")}
+              onClick={() => { setSearchQuery(""); searchInputRef.current?.focus(); }}>
+              <X size={12} />
+            </button>
+          )}
         </div>
-      )}
-
-      <DndContext
-        sensors={sensors}
-        collisionDetection={treeCollisionDetection}
-        onDragStart={(event: DragStartEvent) => {
-          setActiveId(String(event.active.id));
-        }}
-        onDragCancel={() => {
-          suppressClickAfterDragUntilRef.current = performance.now() + 250;
-          setActiveId(null);
-        }}
-        onDragEnd={(event) => {
-          suppressClickAfterDragUntilRef.current = performance.now() + 250;
-          setActiveId(null);
-          actions.onDragEnd(event);
-        }}
-      >
-        <SortableContext
-          items={filteredRootIds}
-          strategy={verticalListSortingStrategy}
-        >
-          <div
-            ref={treeContainerRef}
-            role="tree"
-            aria-label={t("sidebar.tree.aria")}
-            aria-multiselectable="true"
-            tabIndex={-1}
-            className={`${shouldFillTreeArea ? "min-h-full" : ""} outline-none`}
-            onKeyDown={handleTreeKeyDown}
-            onClickCapture={(event) => {
-              if (performance.now() > suppressClickAfterDragUntilRef.current) return;
-              suppressClickAfterDragUntilRef.current = 0;
-              event.preventDefault();
-              event.stopPropagation();
-            }}
-            onMouseDown={(event) => {
-              if (event.button === 2) return;
-              const target = event.target as HTMLElement | null;
-              if (!target) return;
-              if (target.closest("button, input, textarea, select, a, [contenteditable='true']")) return;
-              focusTreeContainer();
-            }}
-          >
-            {projectScopedTerminalViewEnabled && (
-              <div
-                role="treeitem"
-                data-tree-key="scope:all"
-                aria-level={1}
-                aria-selected={allTerminalsSelected}
-                tabIndex={focusedNodeKey === "scope:all" ? 0 : -1}
-                onFocus={() => setFocusedNodeKey("scope:all")}
-              >
-                <button
-                  type="button"
-                  className={`ui-tree-node ui-tree-project ui-focus-ring flex w-full items-center rounded-xl ${
-                    density === "compact" ? "gap-1.5 py-1 text-[12px]" : "gap-2 py-1.5 text-[13px]"
-                  }`}
-                  data-selected={allTerminalsSelected ? "true" : "false"}
-                  style={{ paddingLeft: density === "compact" ? 6 : 8, paddingRight: density === "compact" ? 8 : 10 }}
-                  onClick={onSelectAllTerminalScope}
-                >
-                  <span className="ui-tree-leading-icon">
-                    <Terminal size={14} strokeWidth={1.5} />
-                  </span>
-                  <span className="truncate font-medium">{t("sidebar.tree.allTerminals")}</span>
-                </button>
-              </div>
-            )}
-            {filteredTree.map((node) => (
-              <TreeNodeItem
-                key={nodeKey(node)}
-                node={node}
-                depth={0}
-                density={density}
-                focusedNodeKey={focusedNodeKey}
-                onFocusNode={setFocusedNodeKey}
-                forceExpanded={searchActive}
-                sortableEnabled={!searchActive && !projectFilterActive}
-              />
-            ))}
+      </div>
+      {navigation}
+      {header}
+      <div className="ui-project-tree-scroll">
+        {newGroupParentId === "__root__" && (
+          <div className={`flex items-center px-2 ${density === "compact" ? "gap-1 py-1" : "gap-1.5 py-1.5"}`}>
+            <span className="shrink-0 text-accent">
+              <Folder size={16} strokeWidth={1.5} />
+            </span>
+            <input
+              ref={(ref) => {
+                ref?.focus();
+              }}
+              className="ui-tree-inline-input ui-focus-ring h-8 flex-1 px-2 text-xs text-on-surface outline-none"
+              onBlur={(e) => {
+                const value = e.currentTarget.value.trim();
+                if (value) onCreateRootGroup(value);
+                else onCancelRootGroup();
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  const value = e.currentTarget.value.trim();
+                  if (value) onCreateRootGroup(value);
+                  else onCancelRootGroup();
+                }
+                if (e.key === "Escape") onCancelRootGroup();
+              }}
+              onClick={(e) => e.stopPropagation()}
+            />
           </div>
-        </SortableContext>
-        <DragOverlay dropAnimation={null}>
-          {activeId ? <DragGhost activeId={activeId} tree={filteredTree} /> : null}
-        </DragOverlay>
-      </DndContext>
+        )}
 
-      {searchActive && filteredTree.length === 0 && (
-        <EmptyState
-          icon={<Terminal size={40} strokeWidth={1} />}
-          title={t("sidebar.tree.searchEmptyTitle")}
-          description={t("sidebar.tree.searchEmptyDescription")}
-        />
-      )}
+        <DndContext
+          sensors={sensors}
+          collisionDetection={treeCollisionDetection}
+          onDragStart={(event: DragStartEvent) => {
+            setActiveId(String(event.active.id));
+          }}
+          onDragCancel={() => {
+            suppressClickAfterDragUntilRef.current = performance.now() + 250;
+            setActiveId(null);
+          }}
+          onDragEnd={(event) => {
+            suppressClickAfterDragUntilRef.current = performance.now() + 250;
+            setActiveId(null);
+            actions.onDragEnd(event);
+          }}
+        >
+          <SortableContext
+            items={filteredRootIds}
+            strategy={verticalListSortingStrategy}
+          >
+            <div
+              ref={treeContainerRef}
+              role="tree"
+              aria-label={t("sidebar.tree.aria")}
+              aria-multiselectable="true"
+              tabIndex={-1}
+              className={`${shouldFillTreeArea ? "min-h-full" : ""} outline-none`}
+              onKeyDown={handleTreeKeyDown}
+              onClickCapture={(event) => {
+                if (performance.now() > suppressClickAfterDragUntilRef.current) return;
+                suppressClickAfterDragUntilRef.current = 0;
+                event.preventDefault();
+                event.stopPropagation();
+              }}
+              onMouseDown={(event) => {
+                if (event.button === 2) return;
+                const target = event.target as HTMLElement | null;
+                if (!target) return;
+                if (target.closest("button, input, textarea, select, a, [contenteditable='true']")) return;
+                focusTreeContainer();
+              }}
+            >
+              {projectScopedTerminalViewEnabled && !navigation && (
+                <div
+                  role="treeitem"
+                  data-tree-key="scope:all"
+                  aria-level={1}
+                  aria-selected={allTerminalsSelected}
+                  tabIndex={focusedNodeKey === "scope:all" ? 0 : -1}
+                  onFocus={() => setFocusedNodeKey("scope:all")}
+                >
+                  <button
+                    type="button"
+                    className={`ui-tree-node ui-tree-project ui-focus-ring flex w-full items-center rounded-xl ${
+                      density === "compact" ? "gap-1.5 py-1 text-[12px]" : "gap-2 py-1.5 text-[13px]"
+                    }`}
+                    data-selected={allTerminalsSelected ? "true" : "false"}
+                    style={{ paddingLeft: density === "compact" ? 6 : 8, paddingRight: density === "compact" ? 8 : 10 }}
+                    onClick={onSelectAllTerminalScope}
+                  >
+                    <span className="ui-tree-leading-icon">
+                      <Terminal size={14} strokeWidth={1.5} />
+                    </span>
+                    <span className="truncate font-medium">{t("sidebar.tree.allTerminals")}</span>
+                  </button>
+                </div>
+              )}
+              {filteredTree.map((node) => (
+                <TreeNodeItem
+                  key={nodeKey(node)}
+                  node={node}
+                  depth={0}
+                  density={density}
+                  focusedNodeKey={focusedNodeKey}
+                  onFocusNode={setFocusedNodeKey}
+                  forceExpanded={searchActive}
+                  sortableEnabled={!searchActive && !projectFilterActive}
+                />
+              ))}
+            </div>
+          </SortableContext>
+          <DragOverlay dropAnimation={null}>
+            {activeId ? <DragGhost activeId={activeId} tree={filteredTree} /> : null}
+          </DragOverlay>
+        </DndContext>
 
-      {showOpenFilterEmptyState && (
-        <EmptyState
-          icon={<Terminal size={40} strokeWidth={1} />}
-          title={t("sidebar.tree.openFilterEmptyTitle")}
-          description={t("sidebar.tree.openFilterEmptyDescription")}
-          action={onClearProjectFilter ? { label: t("sidebar.tree.openFilterShowAll"), onClick: onClearProjectFilter } : undefined}
-        />
-      )}
-
-      {tree.length === 0 && loadError && !searchActive && (
-        <EmptyState
-          icon={<Terminal size={40} strokeWidth={1} />}
-          title={t("sidebar.tree.loadFailed")}
-          description={loadError}
-          action={{ label: t("sidebar.tree.retry"), onClick: onRetry }}
-        />
-      )}
-
-      {showWelcomeEmptyState && (
-        <div className="flex min-h-0 flex-1 items-center">
+        {searchActive && filteredTree.length === 0 && (
           <EmptyState
-            className="w-full"
-            icon={<Terminal size={40} strokeWidth={1} />}
-            title={t("sidebar.tree.welcome")}
-            description={t("sidebar.tree.welcomeDescription")}
-            action={{ label: t("sidebar.tree.quickAddProject"), onClick: onQuickAddProject }}
+            icon={<FolderCode size={36} strokeWidth={1.25} />}
+            title={t("sidebar.tree.searchEmptyTitle")}
+            description={t("sidebar.tree.searchEmptyDescription")}
           />
-        </div>
-      )}
+        )}
+
+        {showOpenFilterEmptyState && (
+          <EmptyState
+            icon={<FolderCode size={36} strokeWidth={1.25} />}
+            title={t("sidebar.tree.openFilterEmptyTitle")}
+            description={t("sidebar.tree.openFilterEmptyDescription")}
+            action={onClearProjectFilter ? { label: t("sidebar.tree.openFilterShowAll"), onClick: onClearProjectFilter } : undefined}
+          />
+        )}
+
+        {tree.length === 0 && loadError && !searchActive && (
+          <EmptyState
+            icon={<FolderCode size={36} strokeWidth={1.25} />}
+            title={t("sidebar.tree.loadFailed")}
+            description={loadError}
+            action={{ label: t("sidebar.tree.retry"), onClick: onRetry }}
+          />
+        )}
+
+        {showWelcomeEmptyState && (
+          <div className="flex min-h-0 flex-1 items-center">
+            <EmptyState
+              className="w-full"
+              icon={<FolderCode size={36} strokeWidth={1.25} />}
+              title={t("sidebar.tree.welcome")}
+              description={t("sidebar.tree.welcomeDescription")}
+              action={{ label: t("sidebar.tree.quickAddProject"), onClick: onQuickAddProject }}
+            />
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -834,26 +831,19 @@ function CollapsedProjectButton({ node, sizeClass }: { node: TNode; sizeClass: s
   const status = actions.getProjectStatus(p.id);
   const terminalCount = actions.getProjectTerminalCount(p.id);
   const selected = actions.selectedId === p.id || actions.selectedProjectIds.has(p.id);
-  const cliVendor = p.cli_tool ? inferVendor(p.cli_tool) : null;
   return (
     <button
       className={`ui-tree-collapsed-item relative my-0.5 flex ${sizeClass} items-center justify-center rounded-xl transition-colors`}
       data-selected={selected ? "true" : "false"}
+      data-tree-key={`p:${p.id}`}
       title={p.name}
       aria-label={t("sidebar.tree.openProject", { name: p.name })}
       onPointerDownCapture={preventSecondaryPointerFocus}
       onClick={() => actions.onOpenProject(p)}
       onContextMenu={(e) => actions.onContextMenuProject(e, p)}
     >
-      {status ? (
-        <span className="inline-block h-2.5 w-2.5 rounded-full" style={{ backgroundColor: STATUS_COLORS[status] }} />
-      ) : cliVendor ? (
-        <span className="pointer-events-none" aria-hidden="true">
-          <VendorIcon vendor={cliVendor} size={15} />
-        </span>
-      ) : (
-        <Terminal size={15} strokeWidth={1.5} />
-      )}
+      <FolderCode size={16} strokeWidth={1.5} aria-hidden="true" />
+      {status && <span className="ui-project-process-dot" style={{ backgroundColor: STATUS_COLORS[status] }} aria-hidden="true" />}
       {terminalCount > 0 && <span className="ui-tree-collapsed-badge">{terminalCount > 99 ? "99+" : terminalCount}</span>}
     </button>
   );
@@ -909,6 +899,7 @@ function CollapsedGroupButton({
       <PopoverAnchor asChild>
         <button
           className={`ui-flat-action ui-tree-collapsed-item relative my-0.5 px-0 text-primary ${sizeClass}`}
+          data-tree-key={`g:${g.id}`}
           title={g.name}
           aria-label={t("sidebar.tree.directoryProjectCount", { name: g.name, count })}
           onMouseEnter={openNow}
@@ -993,7 +984,6 @@ function renderFlyoutNodes(nodes: TNode[], depth: number, actions: TreeActions, 
     const p = child.project;
     const status = actions.getProjectStatus(p.id);
     const terminalCount = actions.getProjectTerminalCount(p.id);
-    const cliVendor = p.cli_tool ? inferVendor(p.cli_tool) : null;
     return (
       <button
         key={`p:${p.id}`}
@@ -1007,18 +997,13 @@ function renderFlyoutNodes(nodes: TNode[], depth: number, actions: TreeActions, 
         }}
         onContextMenu={(e) => actions.onContextMenuProject(e, p)}
       >
-        <span className="ui-tree-leading-icon flex shrink-0 items-center">
-          {status ? (
-            <span className="inline-block h-2 w-2 rounded-full" style={{ backgroundColor: STATUS_COLORS[status] }} />
-          ) : cliVendor ? (
-            <VendorIcon vendor={cliVendor} size={13} />
-          ) : (
-            <Terminal size={13} strokeWidth={1.5} />
-          )}
+        <span className="ui-tree-leading-icon relative flex shrink-0 items-center">
+          <FolderCode size={16} strokeWidth={1.5} aria-hidden="true" />
+          {status && <span className="ui-project-process-dot" style={{ backgroundColor: STATUS_COLORS[status] }} aria-hidden="true" />}
         </span>
         <span className="flex-1 truncate">{p.name}</span>
         {terminalCount > 0 && (
-          <span className="ui-tree-meta-chip shrink-0 rounded-full px-1.5 py-0.5 text-[10px] leading-none">
+          <span className="ui-tree-terminal-count shrink-0">
             {terminalCount}
           </span>
         )}
@@ -1046,7 +1031,7 @@ function DragGhost({ activeId, tree }: { activeId: string; tree: TNode[] }) {
   const node = findNodeById(tree, activeId);
   if (!node) return null;
   const label = node.type === "group" ? node.group.name : node.type === "worktree" ? node.worktree.name : node.project.name;
-  const icon = node.type === "group" ? <Folder size={14} strokeWidth={1.5} /> : node.type === "worktree" ? <WorktreeIcon className="h-3.5 w-3.5" /> : <Terminal size={14} strokeWidth={1.5} />;
+  const icon = node.type === "group" ? <Folder size={14} strokeWidth={1.5} /> : node.type === "worktree" ? <WorktreeIcon className="h-3.5 w-3.5" /> : <FolderCode size={16} strokeWidth={1.5} />;
   return (
     <div className="ui-tree-drag-ghost flex items-center gap-2 rounded-xl border border-border bg-surface-container-high px-3 py-1.5 text-[12px] font-medium shadow-lg">
       <span className="text-on-surface-variant">{icon}</span>

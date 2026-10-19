@@ -1,6 +1,7 @@
 ﻿import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, type MouseEvent as ReactMouseEvent } from "react";
 import { useShallow } from "zustand/shallow";
 import type { DragEndEvent } from "@dnd-kit/core";
+import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { invoke } from "@tauri-apps/api/core";
 import { useProjectStore } from "../../stores/projectStore";
 import { useTerminalStore, type SessionStatus, type SplitTerminalOptions } from "../../stores/terminalStore";
@@ -37,6 +38,8 @@ import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { toast } from "sonner";
 import { logError } from "../../lib/logger";
+import { WindowTitleBar } from "../WindowTitleBar";
+import { SidebarNavigation } from "./SidebarNavigation";
 import { SidebarHeader, type ProjectListFilter } from "./SidebarHeader";
 import { ProjectTree } from "./ProjectTree";
 import { BatchShellDialog } from "./BatchShellDialog";
@@ -66,6 +69,8 @@ import type { SettingsTab } from "../SettingsModal";
 import { useI18n } from "../../lib/i18n";
 import { getOsPlatform } from "../../lib/shell";
 import { SIDEBAR_TOGGLE_REQUEST_EVENT } from "../../lib/sidebarCommands";
+import { useProjectDirectoryDrop } from "../../hooks/useProjectDirectoryDrop";
+import { importProjectDirectories, projectDirectoryDropGroup } from "../../lib/projectDirectoryDrop";
 
 interface SidebarProps {
   onOpenSettings: (tab?: SettingsTab) => void;
@@ -273,6 +278,7 @@ export function Sidebar({
   const [isMacOs, setIsMacOs] = useState(isLikelyMacOs);
 
   const sidebarElementRef = useRef<HTMLElement | null>(null);
+  const projectDropZoneRef = useRef<HTMLDivElement | null>(null);
   const isResizingRef = useRef(false);
   const resizeFrameRef = useRef<number | null>(null);
   const sidebarCollapsedRef = useRef(initialSidebarWidth <= SIDEBAR_COLLAPSED_WIDTH);
@@ -314,6 +320,7 @@ export function Sidebar({
     targetPaneId?: string;
     direction?: TerminalPaneSplitDirection;
     taskName: string;
+    explicit?: boolean;
   } | null>(null);
   const [depsPrompt, setDepsPrompt] = useState<{
     project: Project;
@@ -533,6 +540,7 @@ export function Sidebar({
 
   const [contextMenu, setContextMenu] = useState<
     | null
+    | { kind: "project-header"; project: Project; x: number; y: number }
     | { kind: "project"; project: Project; x: number; y: number }
     | { kind: "worktree"; project: Project; worktree: WorktreeRecord; x: number; y: number }
     | { kind: "group"; groupId: string; groupName: string; x: number; y: number }
@@ -1451,6 +1459,68 @@ export function Sidebar({
     }
   }, [activateFirstProjectSession, closeHistory, onTerminalScopeChange, projectScopedTerminalViewEnabled]);
 
+  const handleProjectDirectoryDrop = useCallback(async (paths: string[], treeKey: string | null) => {
+    const store = useProjectStore.getState();
+    const groupId = projectDirectoryDropGroup(treeKey, store.projects, store.worktrees);
+    const result = await importProjectDirectories(paths, groupId, {
+      getProjects: () => useProjectStore.getState().projects,
+      getPathKind: (path) => invoke<string>("file_get_path_kind", { path }),
+      createProject: (input) => {
+        const current = useProjectStore.getState();
+        return current.createProject({
+          ...input,
+          group_id: current.groups.some((group) => group.id === input.group_id) ? input.group_id : null,
+        });
+      },
+    });
+    for (const failure of result.failed) logError("Failed to add dropped project folder", failure);
+
+    const selected = result.created[0] ?? result.existing[0];
+    if (selected) {
+      ensureSidebarExpanded();
+      setProjectFilter("all");
+      setSelectedGroupIds(new Set());
+      setSelectedWorktreeIds(new Set());
+      setCollapsedIds((previous) => {
+        const next = new Set(previous);
+        const currentGroups = useProjectStore.getState().groups;
+        const visited = new Set<string>();
+        let parentId = selected.group_id;
+        while (parentId && !visited.has(parentId)) {
+          visited.add(parentId);
+          next.delete(parentId);
+          parentId = currentGroups.find((group) => group.id === parentId)?.parent_id ?? null;
+        }
+        return next;
+      });
+      handleSelectProjectByKeyboard(selected);
+    }
+
+    const summary = [
+      result.created.length > 0 && result.existing.length > 0
+        ? t("sidebar.drop.existing", { count: result.existing.length }) : "",
+      result.invalid.length > 0 ? t("sidebar.drop.invalid", { count: result.invalid.length }) : "",
+      result.failed.length > 0 ? t("sidebar.drop.failed", { count: result.failed.length }) : "",
+    ].filter(Boolean).join(" · ");
+    const title = result.created.length > 0
+      ? t("sidebar.drop.created", { count: result.created.length })
+      : result.existing.length > 0
+        ? t("sidebar.drop.existing", { count: result.existing.length })
+        : result.failed.length > 0 ? t("sidebar.drop.failedTitle") : t("sidebar.drop.foldersOnly");
+    const notify = result.failed.length > 0 || result.invalid.length > 0
+      ? toast.warning : result.created.length > 0 ? toast.success : toast.info;
+    notify(title, { description: summary || undefined });
+  }, [ensureSidebarExpanded, handleSelectProjectByKeyboard, t]);
+
+  const directoryDropTarget = useProjectDirectoryDrop({
+    containerRef: projectDropZoneRef,
+    enabled: projectStoreLoaded && !initialLoading && !loadError
+      && !(showFileExplorer && fileProject && !sidebarCollapsed),
+    onDrop: handleProjectDirectoryDrop,
+  });
+  const directoryDropGroupId = projectDirectoryDropGroup(directoryDropTarget?.treeKey ?? null, projects, worktrees);
+  const directoryDropGroupName = groups.find((group) => group.id === directoryDropGroupId)?.name;
+
   const handleSelectGroupScope = useCallback((groupId: string) => {
     if (!projectScopedTerminalViewEnabled) return;
     setSelectedId(null);
@@ -1618,6 +1688,20 @@ export function Sidebar({
     setContextMenu({ kind: "project", project, x: e.clientX, y: e.clientY });
   }, []);
 
+  const handleContextMenuProjectHeader = useCallback((e: ReactMouseEvent, project: Project) => {
+    e.preventDefault();
+    e.stopPropagation();
+    preserveSidebarScrollAfterContextMenu(e, (until) => { contextMenuInternalScrollUntilRef.current = until; });
+    const rect = e.currentTarget.getBoundingClientRect();
+    contextMenuOpenedAtRef.current = Date.now();
+    setContextMenu({ kind: "project-header", project, x: rect.left, y: rect.bottom });
+  }, []);
+
+  const handleCreateWorkspace = useCallback((project: Project) => {
+    if (!projectSupportsCapability(project, "worktree")) return;
+    setWorktreePrompt({ project, taskName: createDefaultWorktreeTaskName(project.id), explicit: true });
+  }, []);
+
   const handleContextMenuWorktree = useCallback((e: ReactMouseEvent, project: Project, worktree: WorktreeRecord) => {
     e.preventDefault();
     e.stopPropagation();
@@ -1774,6 +1858,8 @@ export function Sidebar({
       onCancelRename: () => setRenamingGroupId(null),
       onProjectRenameConfirm: handleProjectRenameConfirm,
       onCancelProjectRename: () => setRenamingProjectId(null),
+      onContextMenuProjectHeader: handleContextMenuProjectHeader,
+      onCreateWorktree: handleCreateWorkspace,
       onContextMenuProject: handleContextMenuProject,
       onSelectWorktree: handleSelectWorktree,
       onOpenWorktree: handleOpenWorktree,
@@ -1808,6 +1894,8 @@ export function Sidebar({
       handleRequestDeleteGroup,
       handleRenameConfirm,
       handleProjectRenameConfirm,
+      handleContextMenuProjectHeader,
+      handleCreateWorkspace,
       handleContextMenuProject,
       handleSelectWorktree,
       handleOpenWorktree,
@@ -1990,17 +2078,8 @@ export function Sidebar({
     };
   })();
 
-  return (
-    <aside
-      ref={sidebarElementRef}
-      className={`ui-sidebar-shell relative flex select-none flex-col overflow-hidden ${
-        compactMode ? "min-w-0 flex-1" : "shrink-0"
-      } ${sidebarResizing ? "transition-none" : "transition-[width] duration-150"}`}
-      data-sidebar-density={sidebarDensity}
-      style={{ width: compactMode ? "100%" : sidebarWidth }}
-    >
-      {appConfirmDialog}
-      <div className="ui-sidebar-top">
+  const sidebarHeader = (
+    <div className="ui-sidebar-top">
         <SidebarHeader
           collapsed={compactMode ? false : sidebarCollapsed}
           density={sidebarDensity}
@@ -2021,14 +2100,30 @@ export function Sidebar({
           }}
         />
       </div>
+  );
 
-      <div className={`${compactMode ? "min-h-[220px]" : "min-h-0"} flex-1 overflow-hidden`}>
+  return (
+    <aside
+      ref={sidebarElementRef}
+      className={`ui-sidebar-shell relative flex select-none flex-col overflow-hidden ${
+        compactMode ? "min-w-0 flex-1" : "shrink-0"
+      } ${sidebarResizing ? "transition-none" : "transition-[width] duration-150"}`}
+      data-sidebar-density={sidebarDensity}
+      style={{ width: compactMode ? "100%" : sidebarWidth }}
+    >
+      {appConfirmDialog}
+      <WindowTitleBar sidebarChrome />
+
+
+      <div ref={projectDropZoneRef} className={`relative ${compactMode ? "min-h-[220px]" : "min-h-0"} flex-1 overflow-hidden`}>
         {showFileExplorer && fileProject && !sidebarCollapsed ? (
-          <FileExplorerSidebar onBackToProjects={handleBackToProjectTree} />
+          <>{sidebarHeader}<FileExplorerSidebar onBackToProjects={handleBackToProjectTree} /></>
         ) : (
           <TreeContext.Provider value={treeActions}>
             <div className="ui-sidebar-combined-list h-full min-h-0 overflow-y-auto overflow-x-hidden">
               <ProjectTree
+                header={sidebarHeader}
+                navigation={<SidebarNavigation collapsed={!compactMode && sidebarCollapsed} onOpenSettings={onOpenSettings} onShowTerminals={handleSelectAllTerminalScope} />}
                 tree={displayedTree}
                 initialLoading={initialLoading}
                 loadError={loadError}
@@ -2055,6 +2150,16 @@ export function Sidebar({
               />
             </div>
           </TreeContext.Provider>
+        )}
+        {directoryDropTarget && (
+          <div className="ui-project-directory-drop-overlay" data-collapsed={!compactMode && sidebarCollapsed} role="status">
+            <div className="ui-project-directory-drop-hint">
+              <FolderPlus size={16} className="shrink-0" aria-hidden="true" />
+              <span className={!compactMode && sidebarCollapsed ? "sr-only" : undefined}>{directoryDropGroupName
+                ? t("sidebar.drop.intoGroup", { name: directoryDropGroupName })
+                : t("sidebar.drop.hint")}</span>
+            </div>
+          </div>
         )}
       </div>
 
@@ -2085,8 +2190,40 @@ export function Sidebar({
               event.stopPropagation();
             }}
           >
+            {contextMenu.kind === "project-header" && (
+              <>
+                <div className="ui-context-label">{contextMenu.project.name}</div>
+                <button className="context-menu-item" role="menuitem" onClick={() => { setEditingProject(contextMenu.project); setContextMenu(null); }}>
+                  <Settings size={14} />{t("workspace.projectSettings")}
+                </button>
+                <button className="context-menu-item" role="menuitem" onClick={() => { toggleCollapsed(worktreeListCollapseId(contextMenu.project.id)); setContextMenu(null); }}>
+                  <FolderOpen size={14} />{t(collapsedIds.has(worktreeListCollapseId(contextMenu.project.id)) ? "workspace.showWorkspaces" : "workspace.hideWorkspaces")}
+                </button>
+                {projectSupportsCapability(contextMenu.project, "worktree") && <button className="context-menu-item" role="menuitem" onClick={() => { handleCreateWorkspace(contextMenu.project); setContextMenu(null); }}>
+                  <Plus size={14} />{t("workspace.create")}
+                </button>}
+                <button className="context-menu-item" role="menuitem" onClick={() => {
+                  const project = contextMenu.project;
+                  setContextMenu(null);
+                  void createGroup({ name: project.name, parent_id: project.group_id }).then((group) => updateProject(project.id, { group_id: group.id }))
+                    .catch((err) => toast.error(t("workspace.groupFailed"), { description: String(err) }));
+                }}><FolderPlus size={14} />{t("workspace.groupFromProject")}</button>
+                <div className="context-menu-separator" role="separator" />
+                <button className="context-menu-item danger" role="menuitem" onClick={() => { handleRequestDeleteProject(contextMenu.project); setContextMenu(null); }}>
+                  <Trash2 size={14} />{t("workspace.removeProject")}
+                </button>
+              </>
+            )}
             {contextMenu.kind === "project" && (
               <>
+                <div className="ui-context-label">{t("workspace.label")}</div>
+                <button className="context-menu-item" role="menuitem" onClick={() => {
+                  void writeText(contextMenu.project.remote_path || contextMenu.project.path).catch((err) => toast.error(t("workspace.copyFailed"), { description: String(err) })); setContextMenu(null);
+                }}><Copy size={14} />{t("workspace.copyPath")}</button>
+                <button className="context-menu-item" role="menuitem" onClick={() => {
+                  void writeText(contextMenu.project.name).catch((err) => toast.error(t("workspace.copyFailed"), { description: String(err) })); setContextMenu(null);
+                }}><Copy size={14} />{t("workspace.copyName")}</button>
+                <div className="context-menu-separator" role="separator" />
                 <button
                   className="context-menu-item"
                   hidden={showProjectBatchContextMenu}
@@ -2289,6 +2426,14 @@ export function Sidebar({
             )}
             {contextMenu.kind === "worktree" && (
               <>
+                <div className="ui-context-label">{t("workspace.label")}</div>
+                <button className="context-menu-item" role="menuitem" onClick={() => {
+                  void writeText(contextMenu.worktree.path).catch((err) => toast.error(t("workspace.copyFailed"), { description: String(err) })); setContextMenu(null);
+                }}><Copy size={14} />{t("workspace.copyPath")}</button>
+                <button className="context-menu-item" role="menuitem" onClick={() => {
+                  void writeText(contextMenu.worktree.name).catch((err) => toast.error(t("workspace.copyFailed"), { description: String(err) })); setContextMenu(null);
+                }}><Copy size={14} />{t("workspace.copyName")}</button>
+                <div className="context-menu-separator" role="separator" />
                 <button
                   className="context-menu-item"
                   role="menuitem"
@@ -2548,9 +2693,9 @@ export function Sidebar({
             <X size={15} strokeWidth={2} />
           </button>
           <div className="pr-10">
-            <DialogTitle>{t("worktree.prompt.title")}</DialogTitle>
+            <DialogTitle>{t(worktreePrompt?.explicit ? "workspace.create" : "worktree.prompt.title")}</DialogTitle>
             <DialogDescription className="mt-2">
-              {worktreePrompt ? t("worktree.prompt.description", { name: worktreePrompt.project.name }) : ""}
+              {worktreePrompt ? t(worktreePrompt.explicit ? "workspace.createDescription" : "worktree.prompt.description", { name: worktreePrompt.project.name }) : ""}
             </DialogDescription>
           </div>
           <div className="mt-4">
@@ -2567,6 +2712,7 @@ export function Sidebar({
           <DialogFooter className="ui-worktree-prompt-footer">
             <Button
               variant="outline"
+              hidden={worktreePrompt?.explicit}
               className="ui-worktree-prompt-action ui-worktree-prompt-action-neutral"
               onClick={() => {
                 if (worktreePrompt?.direction && activeSessionId) {
@@ -2582,6 +2728,7 @@ export function Sidebar({
             </Button>
             <Button
               variant="outline"
+              hidden={worktreePrompt?.explicit}
               className="ui-worktree-prompt-action ui-worktree-prompt-action-accent"
               onClick={() => {
                 if (worktreePrompt) {
@@ -2613,7 +2760,7 @@ export function Sidebar({
               }}
               disabled={!worktreePrompt || !validateWorktreeTaskName(worktreePrompt.taskName)}
             >
-              {t("worktree.prompt.isolate")}
+              {t(worktreePrompt?.explicit ? "workspace.createAndOpen" : "worktree.prompt.isolate")}
             </Button>
           </DialogFooter>
         </DialogContent>

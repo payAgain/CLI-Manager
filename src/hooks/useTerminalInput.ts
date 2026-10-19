@@ -45,6 +45,7 @@ import {
 } from "../lib/terminalTextEditing";
 import { TUI_BORDER_CHAR_PATTERN, TUI_COMPOSER_PROMPT_PATTERN } from "../lib/terminalTui";
 import { logError } from "../lib/logger";
+import { isNativeFileDropTarget } from "../lib/nativeFileDrop";
 import { translateCurrent } from "../lib/i18n";
 import { defaultShellForOs } from "../lib/shell";
 import { sshRemoteAttachFiles } from "../lib/sshRemoteFiles";
@@ -913,6 +914,7 @@ export function useTerminalInput({
       const scaleFactor = await getCurrentWindow().scaleFactor().catch(() => window.devicePixelRatio || 1);
       if (fileDropCancelled) return;
       const position = payload.position.toLogical(scaleFactor);
+      if (!isNativeFileDropTarget(pasteTarget, position.x, position.y)) return;
       const dropZoneId = getTerminalFileDropZoneIdAtPoint(position.x, position.y);
       if (dropZoneId && dropZoneId !== sessionId) return;
       if (!dropZoneId && (!isActiveRef.current || !isVisibleRef.current)) return;

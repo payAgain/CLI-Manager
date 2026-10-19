@@ -123,6 +123,8 @@ function resolveHistoryResumeCwd(
 
 interface HistoryWorkspaceProps {
   active?: boolean;
+  docked?: boolean;
+  onOpenDetail?: () => void;
 }
 
 type DeleteIntent =
@@ -169,7 +171,7 @@ function historySourceLabel(source: string): string {
   return HISTORY_SOURCE_DESCRIPTOR_BY_ID.get(source.trim().toLowerCase() as HistorySourceId)?.defaultLabel ?? source;
 }
 
-export function HistoryWorkspace({ active = true }: HistoryWorkspaceProps) {
+export function HistoryWorkspace({ active = true, docked = false, onOpenDetail }: HistoryWorkspaceProps) {
   const { language, t } = useI18n();
   const { confirm, confirmDialog } = useAppConfirm();
   const loadingSessions = useHistoryStore((s) => s.loadingSessions);
@@ -275,6 +277,7 @@ export function HistoryWorkspace({ active = true }: HistoryWorkspaceProps) {
     if (!active) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || event.isComposing) return;
+      if (docked && event.target instanceof Element && !event.target.closest("#history-workspace")) return;
       if (document.querySelector(".ui-history-transcript-image-preview")) return;
       // Let the active detail popover dismiss itself before closing its workspace.
       if (document.querySelector("[data-history-popover], [data-memory-popover]")) return;
@@ -300,7 +303,7 @@ export function HistoryWorkspace({ active = true }: HistoryWorkspaceProps) {
 
     window.addEventListener("keydown", onKeyDown, true);
     return () => window.removeEventListener("keydown", onKeyDown, true);
-  }, [active, closeHistory, diffOpen, editAuditOpen, promptOpen]);
+  }, [active, closeHistory, diffOpen, docked, editAuditOpen, promptOpen]);
 
   const activeView = useMemo(
     () => sessions.find((item) => item.sessionKey === activeSessionKey) ?? null,
@@ -1159,7 +1162,7 @@ export function HistoryWorkspace({ active = true }: HistoryWorkspaceProps) {
 
   return (
     <>
-      <div id="history-workspace" className="ui-history-shell flex h-full min-h-0 min-w-0 overflow-hidden rounded-2xl">
+      <div id="history-workspace" className="ui-history-shell flex h-full min-h-0 min-w-0 overflow-hidden rounded-2xl" data-docked={docked}>
         <HistoryListPane
           historySidebarWidth={historySidebarWidth}
           sidebarRef={sidebarRef}
@@ -1205,7 +1208,7 @@ export function HistoryWorkspace({ active = true }: HistoryWorkspaceProps) {
           onCancelSelectionMode={handleCancelSelectionMode}
           onToggleSelectAllVisible={handleToggleSelectAllVisible}
           onToggleSessionSelection={handleToggleSessionSelection}
-          onOpenSession={openSessionSafe}
+          onOpenSession={(key) => { onOpenDetail?.(); void openSessionSafe(key); }}
           onResumeSession={resumeSessionInTerminal}
           canConvertSession={canConvertSession}
           onConvertSession={(session) => {
@@ -1214,6 +1217,7 @@ export function HistoryWorkspace({ active = true }: HistoryWorkspaceProps) {
           onDeleteSession={(session) => setDeleteIntent({ type: "single", session })}
           onDeleteSelected={handleRequestBulkDelete}
           onOpenHit={(hit) => {
+            onOpenDetail?.();
             void openByHit(hit);
           }}
           onLoadMoreSessions={handleLoadMoreSessions}

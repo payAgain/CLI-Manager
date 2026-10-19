@@ -1,15 +1,15 @@
-import { useState, useEffect, useRef, memo, type PointerEvent as ReactPointerEvent } from "react";
+import { useState, useEffect, useRef, memo, type PointerEvent as ReactPointerEvent, type FocusEvent as ReactFocusEvent } from "react";
 import { useDroppable } from "@dnd-kit/core";
 import { SortableContext, verticalListSortingStrategy, useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import type { TreeNode as TNode } from "../../lib/types";
 import { useTreeActions, worktreeListCollapseId } from "./TreeContext";
-import { Folder, Terminal, Play, ChevronRight, AlertTriangle } from "../icons";
-import { WorktreeIcon } from "../WorktreeIcon";
+import { Folder, FolderCode, Play, Plus, MoreHorizontal, ChevronRight } from "../icons";
+import { WorkspaceCard } from "./WorkspaceCard";
+import { useProjectBranch } from "../../hooks/useProjectBranch";
+import { projectSupportsCapability } from "../../lib/projectCapabilities";
 import { useI18n } from "../../lib/i18n";
 import { DND_SORTABLE_TRANSITION } from "../../lib/dragInteraction";
-import { CliToolIcon } from "../CliToolIcon";
-import { resolveCliToolIconKey } from "../../lib/cliTools";
 
 function preventSecondaryPointerFocus(event: ReactPointerEvent<HTMLElement>) {
   if (event.button !== 2) return;
@@ -72,6 +72,7 @@ function TreeNodeItemImpl({
 }: TreeNodeItemProps) {
   const { t } = useI18n();
   const actions = useTreeActions();
+  const branch = useProjectBranch(node.type === "project" ? node.project : null);
   const itemId = node.type === "group" ? node.group.id : node.type === "project" ? node.project.id : `wt:${node.worktree.id}`;
   const { active, attributes, isOver, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: itemId,
@@ -79,6 +80,8 @@ function TreeNodeItemImpl({
     disabled: !sortableEnabled || node.type === "worktree",
     transition: DND_SORTABLE_TRANSITION,
   });
+  // Disabling sorting must not disable selection or keyboard navigation.
+  const treeAttributes = { ...attributes, "aria-disabled": undefined };
   const showCrossGroupDropPreview = Boolean(
     isOver &&
     active &&
@@ -95,75 +98,26 @@ function TreeNodeItemImpl({
   const indentStep = compact ? 14 : 16;
   const paddingLeft = indentBase + depth * indentStep;
 
+  const handleNodeFocus = (event: ReactFocusEvent<HTMLDivElement>) => {
+    // Child tree items bubble focus through their parent project/group.
+    if ((event.target as HTMLElement).closest('[role="treeitem"]') === event.currentTarget) {
+      onFocusNode(node.type === "group" ? `g:${node.group.id}` : node.type === "worktree" ? `wt:${node.worktree.id}` : `p:${node.project.id}`);
+    }
+  };
+
   if (node.type === "worktree") {
     const { project, worktree } = node;
     const treeKey = `wt:${worktree.id}`;
-    const isSelected = actions.selectedId === worktree.id;
-    const isMultiSelected = actions.selectedWorktreeIds.has(worktree.id);
-
+    const selected = actions.selectedId === worktree.id || actions.selectedWorktreeIds.has(worktree.id);
     return (
-      <div
-        ref={setNodeRef}
-        style={{ ...sortableStyle }}
-        {...attributes}
-        role="treeitem"
-        data-tree-key={treeKey}
-        aria-level={depth + 1}
-        aria-selected={isSelected || isMultiSelected}
-        tabIndex={focusedNodeKey === treeKey ? 0 : -1}
-        onFocus={() => onFocusNode(treeKey)}
-      >
-        <div
-          className={`ui-tree-node ui-tree-project ui-focus-ring flex items-center rounded-xl cursor-pointer group/item ${
-            compact ? "gap-1.5 py-1 text-[12px]" : "gap-2 py-1.5 text-[13px]"
-          }`}
-          data-selected={isSelected || isMultiSelected ? "true" : "false"}
-          data-status="idle"
-          data-invalid={worktree.status === "missing" ? "true" : "false"}
-          style={{ paddingLeft, paddingRight: compact ? 8 : 10 }}
-          onClick={(e) => actions.onSelectWorktree(e, worktree)}
-          onDoubleClick={() => actions.onOpenWorktree(project, worktree)}
-          onContextMenu={(e) => actions.onContextMenuWorktree(e, project, worktree)}
-        >
-          <span className="ui-tree-leading-icon ui-worktree-tree-icon" title={worktree.branch}>
-            <WorktreeIcon className="h-4 w-4" />
-          </span>
-          <span className="flex min-w-0 flex-1 items-center gap-1.5" title={`${worktree.branch}\n${worktree.path}`}>
-            <span className="block truncate font-medium">{worktree.name}</span>
-            <span
-              className="ui-worktree-short-chip inline-flex shrink-0 items-center rounded-full px-1.5 py-0.5 text-[10px] leading-none"
-              title={worktree.branch}
-              aria-label={worktree.branch}
-            >
-              WT
-            </span>
-          </span>
-          {worktree.status === "missing" && (
-            <span
-              className="ui-tree-warning-chip inline-flex shrink-0 items-center justify-center rounded-full"
-              title={t("worktree.status.missing")}
-              aria-label={t("worktree.status.missing")}
-            >
-              <AlertTriangle size={12} strokeWidth={1.5} />
-            </span>
-          )}
-          <span
-            className="ui-tree-item-actions hidden shrink-0 items-center gap-0.5 group-hover/item:flex group-focus-within/item:flex"
-            onDoubleClick={(e) => e.stopPropagation()}
-          >
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                actions.onOpenWorktree(project, worktree);
-              }}
-              className="icon-btn"
-              style={{ color: "var(--success)", opacity: 0.7 }}
-              title={t("worktree.menu.open")}
-            >
-              <Play size={14} strokeWidth={1.5} />
-            </button>
-          </span>
-        </div>
+      <div ref={setNodeRef} style={sortableStyle} {...treeAttributes} role="treeitem"
+        data-tree-key={treeKey} aria-level={depth + 1} aria-selected={selected}
+        tabIndex={focusedNodeKey === treeKey ? 0 : -1} onFocus={handleNodeFocus}>
+        <WorkspaceCard project={project} worktree={worktree} name={worktree.name} branch={worktree.branch}
+          selected={selected} compact={compact} invalid={worktree.status === "missing"}
+          onSelect={(e) => actions.onSelectWorktree(e, worktree)}
+          onOpen={() => actions.onOpenWorktree(project, worktree)}
+          onContextMenu={(e) => actions.onContextMenuWorktree(e, project, worktree)} />
       </div>
     );
   }
@@ -171,173 +125,49 @@ function TreeNodeItemImpl({
   if (node.type === "project") {
     const p = node.project;
     const treeKey = `p:${p.id}`;
-    const isSelected = actions.selectedId === p.id;
-    const isMultiSelected = actions.selectedProjectIds.has(p.id);
-    const status = actions.getProjectStatus(p.id);
-    const terminalCount = actions.getProjectTerminalCount(p.id);
-    const pathInvalid = actions.isPathInvalid(p.id);
-    const cliIcon = resolveCliToolIconKey(p.cli_tool);
+    const selected = actions.selectedId === p.id || actions.selectedProjectIds.has(p.id);
     const projectWorktrees = node.worktrees ?? [];
-    const hasWorktrees = projectWorktrees.length > 0;
-    const worktreeCollapseKey = worktreeListCollapseId(p.id);
-    const worktreesOpen = forceExpanded || !actions.collapsedIds.has(worktreeCollapseKey);
-
-    if (actions.renamingProjectId === p.id) {
-      return (
-        <div
-          ref={setNodeRef}
-          style={{ ...sortableStyle }}
-          {...attributes}
-          role="treeitem"
-          data-tree-key={treeKey}
-          aria-level={depth + 1}
-          aria-expanded={hasWorktrees ? worktreesOpen : undefined}
-          aria-selected={isSelected || isMultiSelected}
-          tabIndex={focusedNodeKey === treeKey ? 0 : -1}
-          onFocus={() => onFocusNode(treeKey)}
-        >
-          <div
-            className={`ui-tree-node ui-tree-project ui-focus-ring flex items-center rounded-xl ${
-              compact ? "gap-1.5 py-1 text-[12px]" : "gap-2 py-1.5 text-[13px]"
-            }`}
-            data-selected={isSelected || isMultiSelected ? "true" : "false"}
-            data-status={status ?? "idle"}
-            data-invalid={pathInvalid ? "true" : "false"}
-            style={{ paddingLeft, paddingRight: compact ? 8 : 10 }}
-          >
-            <span className="ui-tree-leading-icon">
-              {cliIcon ? (
-                <CliToolIcon icon={cliIcon} size={14} />
-              ) : (
-                <Terminal size={14} strokeWidth={1.5} />
-              )}
-            </span>
-            <InlineRename initial={p.name} onConfirm={(name) => actions.onProjectRenameConfirm(p.id, name)} onCancel={actions.onCancelProjectRename} />
-          </div>
-        </div>
-      );
-    }
-
+    const collapseKey = worktreeListCollapseId(p.id);
+    const open = forceExpanded || !actions.collapsedIds.has(collapseKey);
     return (
-      <div
-        ref={setNodeRef}
-        className={showCrossGroupDropPreview ? "relative" : undefined}
-        style={{ ...sortableStyle }}
-        {...attributes}
-        role="treeitem"
-        data-tree-key={treeKey}
-        aria-level={depth + 1}
-        aria-expanded={hasWorktrees ? worktreesOpen : undefined}
-        aria-selected={isSelected || isMultiSelected}
+      <div ref={setNodeRef} style={sortableStyle} {...treeAttributes} role="treeitem"
+        className="ui-project-section" data-tree-key={treeKey} aria-level={depth + 1}
+        aria-expanded={open} aria-selected={selected}
         tabIndex={focusedNodeKey === treeKey ? 0 : -1}
-        onPointerDownCapture={preventSecondaryPointerFocus}
-        onFocus={() => onFocusNode(treeKey)}
-      >
-        {showCrossGroupDropPreview && (
-          <span
-            aria-hidden="true"
-            className="pointer-events-none absolute z-10 h-0.5 rounded-full bg-primary"
-            style={{ left: paddingLeft, right: compact ? 8 : 10, top: -1 }}
-          />
-        )}
-        <div
-          className={`ui-tree-node ui-tree-project ui-focus-ring flex items-center rounded-xl cursor-pointer group/item ${
-            compact ? "gap-1.5 py-1 text-[12px]" : "gap-2 py-1.5 text-[13px]"
-          }`}
-          data-selected={isSelected || isMultiSelected ? "true" : "false"}
-          data-status={status ?? "idle"}
-          data-invalid={pathInvalid ? "true" : "false"}
-          style={{ paddingLeft, paddingRight: compact ? 8 : 10 }}
-          onMouseDown={(e) => {
-            if (e.button === 2) e.preventDefault();
-          }}
-          onClick={(e) => actions.onSelectProject(e, p)}
-          onDoubleClick={() => actions.onOpenProject(p)}
-          onContextMenu={(e) => actions.onContextMenuProject(e, p)}
-          {...listeners}
-        >
-          {hasWorktrees && (
-            <button
-              type="button"
-              className="ui-tree-chevron inline-flex items-center justify-center"
-              aria-label={worktreesOpen ? t("sidebar.tree.collapseWorktrees") : t("sidebar.tree.expandWorktrees")}
-              title={worktreesOpen ? t("sidebar.tree.collapseWorktrees") : t("sidebar.tree.expandWorktrees")}
-              onPointerDownCapture={(e) => e.stopPropagation()}
-              onClick={(e) => {
-                e.stopPropagation();
-                if (!forceExpanded) actions.toggleCollapsed(worktreeCollapseKey);
-              }}
-            >
-              <ChevronRight
-                size={12}
-                strokeWidth={2}
-                style={{ transition: "transform 150ms", transform: worktreesOpen ? "rotate(90deg)" : "rotate(0)" }}
-              />
-            </button>
-          )}
-          <span className="ui-tree-leading-icon">
-            {cliIcon ? (
-              <CliToolIcon icon={cliIcon} size={14} />
-            ) : (
-              <Terminal size={14} strokeWidth={1.5} />
-            )}
-          </span>
-          <span className="flex min-w-0 flex-1 items-center gap-1.5">
-            <span className="block truncate font-medium">{p.name}</span>
-            {p.environment_type === "ssh" && !p.ssh_host_id && (
-              <span
-                className="ui-tree-warning-chip inline-flex shrink-0 items-center justify-center rounded-full"
-                title={t("terminal.ssh.rebindRequired")}
-                aria-label={t("terminal.ssh.rebindRequired")}
-              >
-                <AlertTriangle size={12} strokeWidth={1.5} />
-              </span>
-            )}
-            {terminalCount > 0 && (
-              <span
-                className="ui-tree-meta-chip inline-flex shrink-0 items-center rounded-full px-1.5 py-0.5 text-[10px] leading-none"
-                title={t("sidebar.tree.terminalCount", { count: terminalCount })}
-                aria-label={t("sidebar.tree.terminalCount", { count: terminalCount })}
-              >
-                {terminalCount}
-              </span>
-            )}
-            {pathInvalid && (
-              <span
-                className="ui-tree-warning-chip inline-flex shrink-0 items-center justify-center rounded-full"
-                title={t("sidebar.tree.pathMissing")}
-                aria-label={t("sidebar.tree.pathMissing")}
-              >
-                <AlertTriangle size={12} strokeWidth={1.5} />
-              </span>
-            )}
-          </span>
-          <span
-            className="ui-tree-item-actions hidden shrink-0 items-center gap-0.5 group-hover/item:flex group-focus-within/item:flex"
-            onDoubleClick={(e) => e.stopPropagation()}
-          >
-            <button onClick={(e) => { e.stopPropagation(); actions.onOpenProject(p); }} className="icon-btn" style={{ color: "var(--success)", opacity: 0.7 }} title={t("sidebar.tree.openTerminal")}>
-              <Play size={14} strokeWidth={1.5} />
+        onPointerDownCapture={preventSecondaryPointerFocus} onFocus={handleNodeFocus}>
+        {showCrossGroupDropPreview && <span className="ui-project-insertion" aria-hidden="true" />}
+        <div className="ui-project-heading group/item" style={{ paddingLeft: depth * indentStep + 5 }}
+          onContextMenu={(e) => actions.onContextMenuProjectHeader(e, p)} {...listeners}>
+          {actions.renamingProjectId === p.id
+            ? <><FolderCode size={14} /><InlineRename initial={p.name} onConfirm={(name) => actions.onProjectRenameConfirm(p.id, name)} onCancel={actions.onCancelProjectRename} /></>
+            : <button type="button" className="ui-project-heading-name ui-focus-ring"
+                aria-expanded={open} title={p.path}
+                onClick={() => { if (!forceExpanded) actions.toggleCollapsed(collapseKey); }}>
+                <FolderCode size={14} strokeWidth={1.5} /><span>{p.name}</span>
+              </button>}
+          <span className="ui-project-heading-actions" onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") e.stopPropagation(); }}>
+            <button type="button" className="ui-sidebar-tool ui-focus-ring" aria-label={t("workspace.projectActions", { name: p.name })}
+              onPointerDown={(e) => e.stopPropagation()} onClick={(e) => actions.onContextMenuProjectHeader(e, p)}><MoreHorizontal size={14} /></button>
+            {projectSupportsCapability(p, "worktree") && <button type="button" className="ui-sidebar-tool ui-focus-ring"
+              aria-label={t("workspace.create")} title={t("workspace.create")}
+              onPointerDown={(e) => e.stopPropagation()} onClick={() => actions.onCreateWorktree(p)}><Plus size={14} /></button>}
+            <button type="button" className="ui-sidebar-tool ui-focus-ring" aria-label={t(open ? "sidebar.tree.collapseWorktrees" : "sidebar.tree.expandWorktrees")}
+              onPointerDown={(e) => e.stopPropagation()} onClick={() => { if (!forceExpanded) actions.toggleCollapsed(collapseKey); }}>
+              <ChevronRight size={12} style={{ transform: open ? "rotate(90deg)" : undefined }} />
             </button>
           </span>
         </div>
-        {hasWorktrees && worktreesOpen && (
-          <div className={`ui-worktree-children ${compact ? "space-y-0.5" : "space-y-0.5"}`} role="group">
-            {projectWorktrees.map((worktree) => (
-              <TreeNodeItem
-                key={`wt:${worktree.id}`}
-                node={{ type: "worktree", project: p, worktree }}
-                depth={depth + 1}
-                parentGroupId={parentGroupId}
-                density={density}
-                focusedNodeKey={focusedNodeKey}
-                onFocusNode={onFocusNode}
-                forceExpanded={forceExpanded}
-                sortableEnabled={false}
-              />
-            ))}
-          </div>
-        )}
+        {open && <div className="ui-project-workspaces" style={{ marginLeft: depth * indentStep }}>
+          <WorkspaceCard project={p} name={branch || t("workspace.primaryName")} branch={branch || (p.environment_type === "ssh" ? p.remote_path || p.path : p.path)}
+            primary selected={selected} compact={compact} invalid={actions.isPathInvalid(p.id)}
+            onSelect={(e) => actions.onSelectProject(e, p)} onOpen={() => actions.onOpenProject(p)}
+            onContextMenu={(e) => actions.onContextMenuProject(e, p)} />
+          {projectWorktrees.length > 0 && <div role="group" className="ui-worktree-children">
+            {projectWorktrees.map((worktree) => <TreeNodeItem key={`wt:${worktree.id}`} node={{ type: "worktree", project: p, worktree }}
+              depth={depth + 1} parentGroupId={parentGroupId} density={density} focusedNodeKey={focusedNodeKey}
+              onFocusNode={onFocusNode} forceExpanded={forceExpanded} sortableEnabled={false} />)}
+          </div>}
+        </div>}
       </div>
     );
   }
@@ -357,14 +187,14 @@ function TreeNodeItemImpl({
       <div
         ref={setNodeRef}
         style={{ ...sortableStyle }}
-        {...attributes}
+        {...treeAttributes}
         role="treeitem"
         data-tree-key={treeKey}
         aria-level={depth + 1}
         aria-expanded="true"
         aria-selected={false}
         tabIndex={focusedNodeKey === treeKey ? 0 : -1}
-        onFocus={() => onFocusNode(treeKey)}
+        onFocus={handleNodeFocus}
       >
         <div className={`flex items-center px-2 ${compact ? "gap-1 py-1" : "gap-1.5 py-1.5"}`}>
           <ChevronRight size={12} strokeWidth={2} style={{ transform: "rotate(90deg)" }} />
@@ -379,7 +209,7 @@ function TreeNodeItemImpl({
       ref={setNodeRef}
       className={showCrossGroupDropPreview ? "relative" : undefined}
       style={{ ...sortableStyle }}
-      {...attributes}
+      {...treeAttributes}
       role="treeitem"
       data-tree-key={treeKey}
       aria-level={depth + 1}
@@ -387,7 +217,7 @@ function TreeNodeItemImpl({
       aria-selected={isSelected || isMultiSelected}
       tabIndex={focusedNodeKey === treeKey ? 0 : -1}
       onPointerDownCapture={preventSecondaryPointerFocus}
-      onFocus={() => onFocusNode(treeKey)}
+      onFocus={handleNodeFocus}
     >
       {showCrossGroupDropPreview && (
         <span
@@ -419,7 +249,7 @@ function TreeNodeItemImpl({
           <span className="ui-tree-leading-icon"><Folder size={16} strokeWidth={1.5} /></span>
           <span className="flex-1 text-left truncate">{g.name}</span>
           <span className="ui-tree-item-actions hidden shrink-0 items-center gap-0.5 group-hover/grp:flex group-focus-within/grp:flex">
-            <button onClick={(e) => { e.stopPropagation(); actions.onStartGroup(g.id); }} className="icon-btn" style={{ color: "var(--success)", opacity: 0.7 }} title={t("sidebar.tree.startDirectory")}><Play size={14} strokeWidth={1.5} /></button>
+            <button onClick={(e) => { e.stopPropagation(); actions.onStartGroup(g.id); }} className="icon-btn" title={t("sidebar.tree.startDirectory")}><Play size={14} strokeWidth={1.5} /></button>
           </span>
         </div>
 

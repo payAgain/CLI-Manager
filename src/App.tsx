@@ -12,6 +12,7 @@ import type { LucideIcon } from "lucide-react";
 import type { SettingsTab } from "./components/SettingsModal";
 const loadSettingsModal = () => import("./components/SettingsModal").then((module) => ({ default: module.SettingsModal }));
 const SettingsModal = lazy(loadSettingsModal);
+import { WorkspaceStatusBar } from "./components/WorkspaceStatusBar";
 import { WindowTitleBar } from "./components/WindowTitleBar";
 import { CloseConfirmDialog } from "./components/CloseConfirmDialog";
 import { RunningTasksExitDialog } from "./components/RunningTasksExitDialog";
@@ -1551,6 +1552,7 @@ function App() {
           </main>
         </div>
       )}
+      <WorkspaceStatusBar terminalScope={projectScopedTerminalViewEnabled ? terminalScope : undefined} />
       <CommandPalette />
       <ExternalSessionSyncDialog />
       <Suspense fallback={null}>
