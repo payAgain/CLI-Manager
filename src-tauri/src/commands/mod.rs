@@ -24,6 +24,7 @@ pub mod subagent_transcript;
 pub mod system_notification;
 pub mod system_resources;
 pub mod terminal;
+pub mod terminal_memory;
 pub mod terminal_shell;
 pub mod third_party_notification;
 pub mod version;

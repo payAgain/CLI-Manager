@@ -276,6 +276,8 @@ export function HistoryWorkspace({ active = true }: HistoryWorkspaceProps) {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || event.isComposing) return;
       if (document.querySelector(".ui-history-transcript-image-preview")) return;
+      // Let the active detail popover dismiss itself before closing its workspace.
+      if (document.querySelector("[data-history-popover], [data-memory-popover]")) return;
       // 行内消息编辑/插入表单自行处理 Esc（取消编辑），不关闭历史工作区。
       const target = event.target as HTMLElement | null;
       if (target?.closest?.(".ui-history-message-edit, .ui-history-message-insert")) return;

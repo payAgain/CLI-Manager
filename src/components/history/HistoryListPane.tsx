@@ -705,7 +705,7 @@ export function HistoryListPane({
               aria-label={t("history.filter.source")}
               aria-haspopup="listbox"
               aria-expanded={sourceMenuOpen}
-              className="ui-focus-ring flex h-10 w-full items-center gap-2 rounded-xl border border-border/60 bg-surface-container-lowest px-2.5 text-left text-[11px] font-semibold"
+              className="ui-history-filter ui-focus-ring flex h-8 w-full items-center gap-2 rounded-md border border-border/60 bg-transparent px-2 text-left text-xs font-normal"
             >
               <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center text-primary">
                 {selectedSourceIcon ? <CliToolIcon icon={selectedSourceIcon} size={13} /> : <Bot size={13} />}
@@ -770,7 +770,7 @@ export function HistoryListPane({
           <button
             onClick={onRefresh}
             aria-label={t("history.refreshList")}
-            className="ui-flat-action ui-toolbar-button-compact ui-history-list-action h-8 w-8 shrink-0 px-0"
+            className="ui-flat-action ui-focus-ring ui-history-icon-button ui-history-list-action"
             title={t("history.refreshList")}
           >
             <RefreshCw size={12} className={indexBusy ? "animate-spin" : undefined} />
@@ -779,7 +779,7 @@ export function HistoryListPane({
             type="button"
             onClick={onClose}
             aria-label={t("history.close")}
-            className="ui-flat-action ui-toolbar-button-compact ui-history-close-action h-8 w-8 shrink-0 px-0"
+            className="ui-flat-action ui-focus-ring ui-history-icon-button ui-history-close-action"
             title={t("history.close")}
           >
             <X size={14} strokeWidth={2.2} aria-hidden="true" />
@@ -816,7 +816,7 @@ export function HistoryListPane({
           <button
             type="button"
             onClick={() => setProjectMenuOpen((open) => !open)}
-            className="ui-focus-ring flex h-9 w-full items-center gap-2 rounded-xl border border-border/60 bg-surface-container-lowest px-2.5 text-left text-[12px] transition-colors hover:bg-surface-container-high"
+            className="ui-history-filter ui-focus-ring flex h-8 w-full items-center gap-2 rounded-md border border-border/60 bg-transparent px-2 text-left text-xs transition-colors hover:bg-surface-container-high"
             aria-haspopup="tree"
             aria-expanded={projectMenuOpen}
             title={projectPathFilter ?? t("history.allProjects")}
@@ -829,8 +829,8 @@ export function HistoryListPane({
               <Folder size={13} className="shrink-0 text-text-muted" />
             )}
             <span className="min-w-0 flex-1 truncate">
-              <span className="mr-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-text-muted">{t("history.projectFilter.source")}</span>
-              <span className="font-semibold text-text-primary">{selectedProjectLabel}</span>
+              <span className="mr-1 text-[10px] text-text-muted">{t("history.projectFilter.source")}</span>
+              <span className="text-text-primary">{selectedProjectLabel}</span>
             </span>
             <ChevronDown
               size={13}
@@ -1023,8 +1023,8 @@ export function HistoryListPane({
                       className={[
                         "ui-list-row group/session-row flex w-full items-center gap-2 border text-left",
                         row.depth > 0
-                          ? "min-h-[58px] rounded-lg border-border/45 bg-surface-container-low px-2 py-1.5"
-                          : "min-h-[68px] rounded-xl border-border/70 bg-surface-container-lowest px-2.5 py-2",
+                          ? "min-h-[54px] rounded-md border-transparent bg-transparent px-2 py-1.5"
+                          : "min-h-[60px] rounded-md border-transparent bg-transparent px-2.5 py-2",
                         selectionMode ? "cursor-pointer" : "",
                       ].join(" ")}
                       style={{ backgroundColor: row.item.sessionKey === activeSessionKey ? "var(--bg-tertiary)" : undefined }}

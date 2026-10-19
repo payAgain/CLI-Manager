@@ -73,11 +73,12 @@ export function WindowTitleBar() {
       >
         <img
           src={appIcon32}
-          alt="App Icon"
-          className="h-4 w-4 shrink-0 rounded-[3px]"
+          alt=""
+          aria-hidden="true"
+          className="h-3.5 w-3.5 shrink-0 rounded-[3px] grayscale opacity-70"
           draggable={false}
         />
-        <span className="truncate text-[13px] font-semibold tracking-[0.005em] text-on-surface">CLI-Manager</span>
+        <span className="truncate text-[12px] font-medium tracking-normal text-on-surface">CLI-Manager</span>
       </div>
       {!isMacOs && IN_TAURI && (
         <div className="flex items-center">

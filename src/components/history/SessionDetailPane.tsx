@@ -1,8 +1,10 @@
 ﻿import { useVirtualizer } from "@tanstack/react-virtual";
 import { invoke } from "@tauri-apps/api/core";
+import { Close as PopoverClose } from "@radix-ui/react-popover";
 import {
   ArrowRightLeft,
   BookCopy,
+  Bot,
   Check,
   CheckSquare,
   ChevronDown,
@@ -13,22 +15,23 @@ import {
   GitCompare,
   History,
   ListChecks,
+  MoreHorizontal,
   Pencil,
   Square,
   Star,
   Terminal,
   Trash2,
+  UserRound,
   X,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type RefObject } from "react";
 import { toast } from "sonner";
-import aiAvatarUrl from "../../assets/history-ai-avatar.svg";
-import userAvatarUrl from "../../assets/history-user-avatar.svg";
 import type { HistoryFileChangeSummary, HistoryMessage, HistorySessionDetail, HistorySessionView } from "../../lib/types";
 import { useI18n, type TranslationKey } from "../../lib/i18n";
 import { resolveHistorySourceIconKey } from "../../lib/cliTools";
 import { CliToolIcon } from "../CliToolIcon";
 import { EmptyState } from "../ui/EmptyState";
+import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 import { SessionTranscriptContent } from "./SessionTranscriptContent";
 import { MetaEditor } from "./MetaEditor";
 import { formatTime, makeSessionLabel } from "./historyViewUtils";
@@ -290,7 +293,6 @@ function HistoryMessageCard({
 }: HistoryMessageCardProps) {
   const { t } = useI18n();
   const roleKind = normalizeMessageRole(message.role);
-  const avatarUrl = roleKind === "user" ? userAvatarUrl : aiAvatarUrl;
   const forceOpen = isMatched || isFocused;
   const collapsible = shouldCollapseMessage(message);
   const messageMeta = formatMessageMeta(message);
@@ -369,7 +371,7 @@ function HistoryMessageCard({
     >
       {roleKind !== "user" && (
         <span className="ui-history-message-avatar" aria-hidden="true">
-          <img src={avatarUrl} alt="" />
+          <Bot size={16} strokeWidth={1.5} />
         </span>
       )}
       <div className="ui-history-message-stack">
@@ -552,7 +554,7 @@ function HistoryMessageCard({
       </div>
       {roleKind === "user" && (
         <span className="ui-history-message-avatar" aria-hidden="true">
-          <img src={avatarUrl} alt="" />
+          <UserRound size={16} strokeWidth={1.5} />
         </span>
       )}
     </div>
@@ -776,9 +778,9 @@ export function SessionDetailPane({
   return (
     <>
       <div className="ui-history-detail-top [grid-row:1] min-h-0 shrink-0 overflow-y-auto p-3">
-        <div className="flex flex-wrap items-start justify-between gap-2">
-          <div className="min-w-0">
-            <h3 className="truncate text-sm font-semibold text-text-primary">{activeView.displayTitle}</h3>
+        <div className="ui-history-detail-heading">
+          <div className="min-w-0 flex-1">
+            <h3 className="truncate text-sm font-medium text-text-primary" title={activeView.displayTitle}>{activeView.displayTitle}</h3>
             <div className="ui-dev-label mt-1 flex items-center gap-1.5 text-[11px] text-text-muted">
               {sourceIcon && (
                 <span className="inline-flex h-4 w-4 shrink-0 items-center justify-center text-primary">
@@ -789,118 +791,104 @@ export function SessionDetailPane({
                 {activeView.source} · {makeSessionLabel(activeView)} · {t("history.detail.updatedAt", { time: formatTime(activeView.updated_at, language) })}
               </span>
             </div>
-            <div className="mt-1 flex min-w-0 flex-wrap items-center gap-1.5 text-[11px] text-text-muted">
-              <span className="ui-dev-label max-w-full truncate rounded border border-border bg-bg-secondary px-1.5 py-0.5">
-                sessionId: {activeView.session_id}
+            <div className="ui-history-session-identity">
+              <span className="ui-dev-label min-w-0 truncate" title={activeView.session_id}>
+                {activeView.session_id}
               </span>
               <button
+                type="button"
                 onClick={() => copyText(activeView.session_id, "sessionId")}
-                className="ui-flat-action ui-toolbar-button ui-toolbar-button-compact"
-                style={{ color: "var(--accent)" }}
+                className="ui-flat-action ui-focus-ring ui-history-icon-button"
+                aria-label={t("history.detail.copySessionId")}
                 title={t("history.detail.copySessionId")}
               >
                 <Copy size={11} />
-                {t("history.detail.copyId")}
               </button>
-              {activeView.session_ref?.transportKind !== "ssh" && (
-                <button
-                  onClick={openSessionFile}
-                  aria-label={t("history.detail.openFile")}
-                  className="ui-flat-action ui-toolbar-button ui-toolbar-button-compact"
-                  style={{ color: "var(--primary)" }}
-                  title={t("history.detail.openFileTitle")}
-                >
-                  <FolderOpen size={11} />
-                  {t("history.detail.openFile")}
-                </button>
-              )}
             </div>
           </div>
-          <div className="flex shrink-0 items-center gap-1.5">
+          <div className="ui-history-detail-actions">
             <button
+              type="button"
               onClick={onResumeSession}
               disabled={loadingSessionDetail || !activeSession}
               aria-label={t("history.detail.resume")}
-              className="ui-flat-action ui-toolbar-button ui-toolbar-button-compact ui-history-detail-resume-action"
+              className="ui-flat-action ui-toolbar-button ui-toolbar-button-compact ui-history-detail-resume-action ui-focus-ring"
               title={t("history.detail.resumeTitle")}
             >
               <Terminal size={12} />
               {t("history.detail.resume")}
             </button>
-            {canConvertSession ? (
-              <button
-                onClick={onConvertSession}
-                disabled={loadingSessionDetail || !activeSession}
-                aria-label={activeView?.source === "claude" ? t("history.detail.convertToCodex") : t("history.detail.convertToClaude")}
-                className="ui-flat-action ui-toolbar-button ui-toolbar-button-compact"
-                style={{ color: "var(--accent)" }}
-                title={activeView?.source === "claude" ? t("history.detail.convertToCodexTitle") : t("history.detail.convertToClaudeTitle")}
-              >
-                <ArrowRightLeft size={12} />
-                {activeView?.source === "claude" ? t("history.detail.convertToCodexShort") : t("history.detail.convertToClaudeShort")}
-              </button>
-            ) : null}
             <button
+              type="button"
               onClick={onOpenPrompt}
               aria-label={t("history.detail.openPrompt")}
-              className="ui-flat-action ui-toolbar-button ui-toolbar-button-compact"
-              style={{ color: "var(--success)" }}
+              className="ui-flat-action ui-toolbar-button ui-toolbar-button-compact ui-focus-ring"
               title={t("history.detail.promptLibrary")}
             >
               <BookCopy size={12} />
               {t("history.detail.promptShort")}
             </button>
             <button
+              type="button"
               onClick={() => onOpenDiff()}
               aria-label={t("history.detail.openDiff")}
-              className="ui-flat-action ui-toolbar-button ui-toolbar-button-compact"
-              style={{ color: "var(--danger)" }}
+              className="ui-flat-action ui-toolbar-button ui-toolbar-button-compact ui-focus-ring"
               title={t("history.detail.diffView")}
             >
               <GitCompare size={12} />
-              Diff
+              {t("history.detail.diffShort")}
             </button>
             <button
-              onClick={onOpenEditAudit}
-              aria-label={t("history.edit.auditTitle")}
-              className="ui-flat-action ui-toolbar-button ui-toolbar-button-compact"
-              style={{ color: "var(--text-secondary)" }}
-              title={t("history.edit.auditTitle")}
-            >
-              <History size={12} />
-              {t("history.edit.auditOpen")}
-            </button>
-            {canEditMessages && (
-              <button
-                onClick={toggleMessageSelectionMode}
-                aria-label={t("history.edit.batchDelete")}
-                aria-pressed={messageSelectionMode}
-                className="ui-flat-action ui-toolbar-button ui-toolbar-button-compact"
-                style={{ color: messageSelectionMode ? "var(--accent)" : "var(--text-secondary)" }}
-                title={t("history.edit.batchDelete")}
-              >
-                <ListChecks size={12} />
-                {t("history.edit.batchDelete")}
-              </button>
-            )}
-            <button
+              type="button"
               onClick={onToggleStar}
               aria-label={activeView.starred ? t("history.detail.unstar") : t("history.detail.star")}
-              className="ui-flat-action ui-toolbar-button ui-toolbar-button-compact"
-              style={{
-                color: activeView.starred
-                  ? "var(--warning)"
-                  : "color-mix(in srgb, var(--warning) 78%, var(--on-surface-variant))",
-              }}
-              title={t("history.detail.starTitle")}
+              aria-pressed={activeView.starred}
+              className="ui-flat-action ui-focus-ring ui-history-icon-button"
+              title={activeView.starred ? t("history.detail.unstar") : t("history.detail.star")}
             >
-              <Star size={12} fill={activeView.starred ? "currentColor" : "none"} />
-              {activeView.starred ? t("history.detail.starred") : t("history.detail.starTitle")}
+              <Star size={14} fill={activeView.starred ? "currentColor" : "none"} />
             </button>
+            <Popover key={activeView.sessionKey}>
+              <PopoverTrigger asChild>
+                <button type="button" className="ui-flat-action ui-focus-ring ui-history-icon-button" aria-label={t("history.detail.moreActions")} title={t("history.detail.moreActions")}>
+                  <MoreHorizontal size={16} />
+                </button>
+              </PopoverTrigger>
+              <PopoverContent align="end" className="ui-history-action-menu" data-history-popover="actions" aria-label={t("history.detail.moreActions")}>
+                {canConvertSession && (
+                  <PopoverClose asChild>
+                    <button type="button" onClick={onConvertSession} disabled={loadingSessionDetail || !activeSession}>
+                      <ArrowRightLeft size={14} />
+                      {activeView.source === "claude" ? t("history.detail.convertToCodex") : t("history.detail.convertToClaude")}
+                    </button>
+                  </PopoverClose>
+                )}
+                {activeView.session_ref?.transportKind !== "ssh" && (
+                  <PopoverClose asChild>
+                    <button type="button" onClick={openSessionFile} title={t("history.detail.openFileTitle")}>
+                      <FolderOpen size={14} />{t("history.detail.openFile")}
+                    </button>
+                  </PopoverClose>
+                )}
+                <PopoverClose asChild>
+                  <button type="button" onClick={onOpenEditAudit}>
+                    <History size={14} />{t("history.edit.auditOpen")}
+                  </button>
+                </PopoverClose>
+                {canEditMessages && (
+                  <PopoverClose asChild>
+                    <button type="button" onClick={toggleMessageSelectionMode} aria-pressed={messageSelectionMode}>
+                      <ListChecks size={14} />{t("history.edit.batchDelete")}
+                    </button>
+                  </PopoverClose>
+                )}
+              </PopoverContent>
+            </Popover>
           </div>
         </div>
 
         <MetaEditor
+          key={activeView.sessionKey}
           aliasDraft={aliasDraft}
           tagsDraft={tagsDraft}
           tagSuggestions={tagSuggestions}

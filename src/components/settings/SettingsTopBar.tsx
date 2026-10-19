@@ -1,5 +1,5 @@
 import { TextInput } from "@mantine/core";
-import { Search } from "../icons";
+import { Search, X } from "../icons";
 import { useI18n } from "../../lib/i18n";
 
 interface SettingsTopBarProps {
@@ -22,23 +22,18 @@ export function SettingsTopBar({
   const { t } = useI18n();
 
   return (
-    <header className="ui-surface-base ui-glass z-10 border-b border-border px-4 py-3 min-[1280px]:px-6 min-[1280px]:py-4">
+    <header className="ui-settings-topbar z-10">
       <div className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-x-4 gap-y-3">
         <div className="min-w-0">
-          <h2 className="truncate text-base font-medium text-on-surface min-[1280px]:text-lg">{title}</h2>
-          <p className="mt-1 line-clamp-2 text-xs text-on-surface-variant min-[1280px]:text-sm">{description}</p>
+          <h2 className="text-on-surface">{title}</h2>
+          <p>{description}</p>
         </div>
         <button
           onClick={onClose}
-          className="ui-interactive shrink-0 rounded-xl border px-2.5 py-1.5 text-xs font-medium"
-          style={{
-            borderColor: "color-mix(in srgb, var(--primary) 38%, transparent)",
-            backgroundColor: "color-mix(in srgb, var(--primary) 8%, transparent)",
-            color: "var(--primary)",
-          }}
+          className="ui-settings-close ui-focus-ring"
           aria-label={t("settings.closeLabel")}
         >
-          {t("common.close")}
+          <X size={17} strokeWidth={1.6} aria-hidden="true" />
         </button>
         {searchPlaceholder && (
           <TextInput

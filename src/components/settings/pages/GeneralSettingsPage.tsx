@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Badge, Box, Button, Group, NumberInput, SegmentedControl, Select, SimpleGrid, Slider, Stack, Text, TextInput, UnstyledButton } from "@mantine/core";
+import { Box, Button, Group, NumberInput, SegmentedControl, Select, SimpleGrid, Slider, Stack, Text, TextInput } from "@mantine/core";
 import { debugConsoleWarn } from "../../../lib/debugConsole";
 import {
   useSettingsStore,
@@ -29,61 +29,51 @@ const LIGHT_PALETTE_OPTIONS: {
   value: LightThemePalette;
   labelKey: TranslationKey;
   descriptionKey: TranslationKey;
-  swatches: [string, string, string];
 }[] = [
   {
     value: "warm-paper",
     labelKey: "settings.palette.light.warmPaper.label",
     descriptionKey: "settings.palette.light.warmPaper.description",
-    swatches: ["#f8f4ec", "#2d261d", "#c46a2d"],
   },
   {
     value: "cream-green",
     labelKey: "settings.palette.light.creamGreen.label",
     descriptionKey: "settings.palette.light.creamGreen.description",
-    swatches: ["#f6f7f1", "#1f2a20", "#3f7a4f"],
   },
   {
     value: "ink-red",
     labelKey: "settings.palette.light.inkRed.label",
     descriptionKey: "settings.palette.light.inkRed.description",
-    swatches: ["#f7f7f5", "#1f1f1c", "#c43d2f"],
   },
   {
     value: "emerald-mist",
     labelKey: "settings.palette.light.emeraldMist.label",
     descriptionKey: "settings.palette.light.emeraldMist.description",
-    swatches: ["#fbfdfc", "#18211d", "#039d74"],
   },
   {
     value: "saas-analytics-dashboard",
     labelKey: "settings.palette.light.saasAnalyticsDashboard.label",
     descriptionKey: "settings.palette.light.saasAnalyticsDashboard.description",
-    swatches: ["#f8fbff", "#1e293b", "#3b82f6"],
   },
   {
     value: "apple-pure",
     labelKey: "settings.palette.light.applePure.label",
     descriptionKey: "settings.palette.light.applePure.description",
-    swatches: ["#ffffff", "#1d1d1f", "#007aff"],
   },
   {
     value: "apple-mist",
     labelKey: "settings.palette.light.appleMist.label",
     descriptionKey: "settings.palette.light.appleMist.description",
-    swatches: ["#fcfcfd", "#1c1f23", "#0a84ff"],
   },
   {
     value: "apple-warm",
     labelKey: "settings.palette.light.appleWarm.label",
     descriptionKey: "settings.palette.light.appleWarm.description",
-    swatches: ["#fdfcf9", "#1f1d1a", "#ff9f0a"],
   },
   {
     value: "apple-mono",
     labelKey: "settings.palette.light.appleMono.label",
     descriptionKey: "settings.palette.light.appleMono.description",
-    swatches: ["#ffffff", "#1d1d1f", "#3a3a3c"],
   },
 ];
 
@@ -91,61 +81,51 @@ const DARK_PALETTE_OPTIONS: {
   value: DarkThemePalette;
   labelKey: TranslationKey;
   descriptionKey: TranslationKey;
-  swatches: [string, string, string];
 }[] = [
   {
     value: "night-indigo",
     labelKey: "settings.palette.dark.nightIndigo.label",
     descriptionKey: "settings.palette.dark.nightIndigo.description",
-    swatches: ["#1a1b26", "#c0caf5", "#7aa2f7"],
   },
   {
     value: "forest-night",
     labelKey: "settings.palette.dark.forestNight.label",
     descriptionKey: "settings.palette.dark.forestNight.description",
-    swatches: ["#111714", "#d8e5dc", "#52a36e"],
   },
   {
     value: "graphite-red",
     labelKey: "settings.palette.dark.graphiteRed.label",
     descriptionKey: "settings.palette.dark.graphiteRed.description",
-    swatches: ["#171616", "#e6dfdb", "#c95b4a"],
   },
   {
     value: "investment-platform",
     labelKey: "settings.palette.dark.investmentPlatform.label",
     descriptionKey: "settings.palette.dark.investmentPlatform.description",
-    swatches: ["#0f172a", "#f8fafc", "#f59e0b"],
   },
   {
     value: "github-dark",
     labelKey: "settings.palette.dark.githubDark.label",
     descriptionKey: "settings.palette.dark.githubDark.description",
-    swatches: ["#24292f", "#f0f3f6", "#58a6ff"],
   },
   {
     value: "catppuccin-mocha",
     labelKey: "settings.palette.dark.catppuccinMocha.label",
     descriptionKey: "settings.palette.dark.catppuccinMocha.description",
-    swatches: ["#1e1e2e", "#cdd6f4", "#89b4fa"],
   },
   {
     value: "terminal-green",
     labelKey: "settings.palette.dark.terminalGreen.label",
     descriptionKey: "settings.palette.dark.terminalGreen.description",
-    swatches: ["#0a0a0a", "#e2e2e2", "#3dd68c"],
   },
   {
     value: "dracula-purple",
     labelKey: "settings.palette.dark.draculaPurple.label",
     descriptionKey: "settings.palette.dark.draculaPurple.description",
-    swatches: ["#282a36", "#f8f8f2", "#bd93f9"],
   },
   {
     value: "carbon-black",
     labelKey: "settings.palette.dark.carbonBlack.label",
     descriptionKey: "settings.palette.dark.carbonBlack.description",
-    swatches: ["#161616", "#f2f4f8", "#78a9ff"],
   },
 ];
 
@@ -157,27 +137,27 @@ function clampUiFontSize(value: number) {
 }
 
 const LIGHT_TEXT_COLORS: Record<LightThemePalette, string> = {
-  "warm-paper": "#2e3336",
-  "cream-green": "#25302a",
-  "ink-red": "#1f1f1c",
-  "emerald-mist": "#18211d",
-  "saas-analytics-dashboard": "#1e293b",
-  "apple-pure": "#1d1d1f",
-  "apple-mist": "#1c1f23",
-  "apple-warm": "#1f1d1a",
-  "apple-mono": "#0f0f10",
+  "warm-paper": "#302d28",
+  "cream-green": "#293127",
+  "ink-red": "#332c27",
+  "emerald-mist": "#2b302a",
+  "saas-analytics-dashboard": "#2b3038",
+  "apple-pure": "#282828",
+  "apple-mist": "#2b2e33",
+  "apple-warm": "#302d28",
+  "apple-mono": "#292928",
 };
 
 const DARK_TEXT_COLORS: Record<DarkThemePalette, string> = {
-  "night-indigo": "#c0caf5",
-  "forest-night": "#d8e5dc",
-  "graphite-red": "#e6dfdb",
-  "investment-platform": "#f8fafc",
-  "github-dark": "#f0f3f6",
-  "catppuccin-mocha": "#cdd6f4",
-  "terminal-green": "#e2e2e2",
-  "dracula-purple": "#f8f8f2",
-  "carbon-black": "#f2f4f8",
+  "night-indigo": "#e8e8e9",
+  "forest-night": "#e5e8e3",
+  "graphite-red": "#ebe6e2",
+  "investment-platform": "#e8e9eb",
+  "github-dark": "#e6e8e9",
+  "catppuccin-mocha": "#ebe7ed",
+  "terminal-green": "#ecebe7",
+  "dracula-purple": "#ece9ef",
+  "carbon-black": "#ececec",
 };
 
 function getDefaultUiTextColor(
@@ -188,31 +168,31 @@ function getDefaultUiTextColor(
   return resolvedTheme === "dark" ? DARK_TEXT_COLORS[darkPalette] : LIGHT_TEXT_COLORS[lightPalette];
 }
 
-// 与 App.css 各配色块的 --bg-primary 保持一致（同 LIGHT_TEXT_COLORS 的维护方式）。
+// 与 themes.css 各配色块的 --bg-primary 保持一致（同 LIGHT_TEXT_COLORS 的维护方式）。
 // 用纯映射而非 getComputedStyle：data-theme/data-*-palette 由 App.tsx 的 effect 在
 // render 之后才更新，render 期间读 computed style 会在切换主题/配色时拿到旧背景色。
 const LIGHT_BG_COLORS: Record<LightThemePalette, string> = {
-  "warm-paper": "#f9f9fb",
-  "cream-green": "#f7faf7",
-  "ink-red": "#f7f6f4",
-  "emerald-mist": "#fbfdfc",
-  "saas-analytics-dashboard": "#f8fafc",
+  "warm-paper": "#faf9f6",
+  "cream-green": "#f8faf6",
+  "ink-red": "#faf8f6",
+  "emerald-mist": "#fafaf8",
+  "saas-analytics-dashboard": "#fafbfc",
   "apple-pure": "#ffffff",
   "apple-mist": "#fcfcfd",
-  "apple-warm": "#fdfcf9",
-  "apple-mono": "#ffffff",
+  "apple-warm": "#faf9f6",
+  "apple-mono": "#fcfcfb",
 };
 
 const DARK_BG_COLORS: Record<DarkThemePalette, string> = {
-  "night-indigo": "#1a1b26",
-  "forest-night": "#111714",
-  "graphite-red": "#171616",
-  "investment-platform": "#0f172a",
-  "github-dark": "#24292f",
-  "catppuccin-mocha": "#1e1e2e",
-  "terminal-green": "#0a0a0a",
-  "dracula-purple": "#282a36",
-  "carbon-black": "#161616",
+  "night-indigo": "#242426",
+  "forest-night": "#232623",
+  "graphite-red": "#272422",
+  "investment-platform": "#232529",
+  "github-dark": "#242628",
+  "catppuccin-mocha": "#272529",
+  "terminal-green": "#242423",
+  "dracula-purple": "#27262b",
+  "carbon-black": "#242424",
 };
 
 function getDefaultUiBgColor(
@@ -281,101 +261,6 @@ const UI_FONT_FAMILY_OPTIONS: { value: string; label: string; labelKey?: Transla
     label: "Courier New",
   },
 ];
-
-function PaletteCard({
-  active,
-  label,
-  description,
-  activeLabel,
-  swatches,
-  onClick,
-}: {
-  active: boolean;
-  label: string;
-  description: string;
-  activeLabel: string;
-  swatches: [string, string, string];
-  onClick: () => void;
-}) {
-  return (
-    <UnstyledButton
-      type="button"
-      onClick={onClick}
-      className="ui-interactive ui-focus-ring ui-selection-card relative rounded-xl border p-4 text-left transition-[transform,box-shadow,border-color,background-color]"
-      data-selected={active ? "true" : "false"}
-      aria-pressed={active}
-      w="100%"
-      style={{
-        display: "block",
-        minHeight: 108,
-        minWidth: 0,
-        overflow: "hidden",
-        whiteSpace: "normal",
-        backgroundColor: active
-          ? "color-mix(in srgb, var(--primary) 6%, var(--surface-container-lowest))"
-          : "var(--surface-container-lowest)",
-        borderColor: active
-          ? "color-mix(in srgb, var(--primary) 56%, var(--border))"
-          : "color-mix(in srgb, var(--border) 88%, transparent)",
-        boxShadow: active
-          ? "0 2px 8px color-mix(in srgb, var(--primary) 8%, transparent), inset 0 0 0 1px color-mix(in srgb, var(--primary) 24%, transparent)"
-          : "0 2px 8px color-mix(in srgb, var(--on-surface) 6%, transparent), inset 0 1px 0 color-mix(in srgb, #fff 12%, transparent)",
-      }}
-    >
-      {active && (
-        <Badge
-          className="absolute right-3 top-3"
-          size="xs"
-          variant="light"
-          style={{
-            backgroundColor: "color-mix(in srgb, var(--primary) 10%, transparent)",
-            border: "1px solid color-mix(in srgb, var(--primary) 22%, transparent)",
-            color: "var(--primary)",
-          }}
-        >
-          {activeLabel}
-        </Badge>
-      )}
-      <Stack gap={8} pr={active ? 48 : 0} style={{ minWidth: 0, padding: "4px 8px 2px" }}>
-        <Group gap={8}>
-          {swatches.map((color, index) => (
-            <Box
-              key={`${color}-${index}`}
-              component="span"
-              w={16}
-              h={16}
-              style={{
-                backgroundColor: color,
-                border: "1px solid var(--border)",
-                borderColor: active ? "color-mix(in srgb, var(--primary) 48%, var(--border))" : "var(--border)",
-                borderRadius: 4,
-                boxShadow: "none",
-              }}
-            />
-          ))}
-        </Group>
-        <Stack gap={2}>
-          <Text
-            size="sm"
-            fw={600}
-            c={active ? "var(--on-surface)" : "var(--on-surface-variant)"}
-            style={{ whiteSpace: "normal", overflowWrap: "anywhere", lineHeight: 1.25 }}
-          >
-            {label}
-          </Text>
-          <Text
-            size="xs"
-            lh={1.55}
-            c={active ? "var(--on-surface-variant)" : "var(--text-muted)"}
-            style={{ whiteSpace: "normal", overflowWrap: "anywhere" }}
-          >
-            {description}
-          </Text>
-        </Stack>
-      </Stack>
-    </UnstyledButton>
-  );
-}
 
 export function GeneralSettingsPage() {
   const { t } = useI18n();
@@ -517,47 +402,30 @@ export function GeneralSettingsPage() {
               />
             </Stack>
 
-            {showLightPalettes && (
-              <Stack gap="xs">
-                <Text size="xs" c="var(--on-surface-variant)">
-                  {t("settings.general.lightTheme")}
-                </Text>
-                <SimpleGrid cols={{ base: 1, md: 3 }} spacing="xs">
-                  {LIGHT_PALETTE_OPTIONS.map((option) => (
-                    <PaletteCard
-                      key={option.value}
-                      active={lightThemePalette === option.value}
-                      label={t(option.labelKey)}
-                      description={t(option.descriptionKey)}
-                      activeLabel={t("common.current")}
-                      swatches={option.swatches}
-                      onClick={() => void update("lightThemePalette", option.value)}
-                    />
-                  ))}
-                </SimpleGrid>
-              </Stack>
-            )}
-
-            {showDarkPalettes && (
-              <Stack gap="xs">
-                <Text size="xs" c="var(--on-surface-variant)">
-                  {t("settings.general.darkTheme")}
-                </Text>
-                <SimpleGrid cols={{ base: 1, md: 3 }} spacing="xs">
-                  {DARK_PALETTE_OPTIONS.map((option) => (
-                    <PaletteCard
-                      key={option.value}
-                      active={darkThemePalette === option.value}
-                      label={t(option.labelKey)}
-                      description={t(option.descriptionKey)}
-                      activeLabel={t("common.current")}
-                      swatches={option.swatches}
-                      onClick={() => void update("darkThemePalette", option.value)}
-                    />
-                  ))}
-                </SimpleGrid>
-              </Stack>
-            )}
+            <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="md">
+              {showLightPalettes && (
+                <Select<LightThemePalette>
+                  label={t("settings.general.lightTheme")}
+                  value={lightThemePalette}
+                  onChange={(value) => { if (value) void update("lightThemePalette", value); }}
+                  data={LIGHT_PALETTE_OPTIONS.map((option) => ({ value: option.value, label: t(option.labelKey) }))}
+                  description={t((LIGHT_PALETTE_OPTIONS.find((option) => option.value === lightThemePalette) ?? LIGHT_PALETTE_OPTIONS[0]).descriptionKey)}
+                  allowDeselect={false}
+                  size="xs"
+                />
+              )}
+              {showDarkPalettes && (
+                <Select<DarkThemePalette>
+                  label={t("settings.general.darkTheme")}
+                  value={darkThemePalette}
+                  onChange={(value) => { if (value) void update("darkThemePalette", value); }}
+                  data={DARK_PALETTE_OPTIONS.map((option) => ({ value: option.value, label: t(option.labelKey) }))}
+                  description={t((DARK_PALETTE_OPTIONS.find((option) => option.value === darkThemePalette) ?? DARK_PALETTE_OPTIONS[0]).descriptionKey)}
+                  allowDeselect={false}
+                  size="xs"
+                />
+              )}
+            </SimpleGrid>
 
             <FontFamilySelect
               label={t("settings.general.uiFont")}

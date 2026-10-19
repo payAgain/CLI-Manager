@@ -22,19 +22,19 @@ export function AboutSection() {
   }, []);
 
   return (
-    <div className="space-y-4">
-      <section className="ui-surface-card rounded-2xl border border-border p-5">
-        <div className="flex items-center gap-3">
-          <Terminal className="h-8 w-8 text-primary" aria-hidden="true" />
+    <div className="ui-about">
+      <section>
+        <div className="ui-about-identity">
+          <Terminal size={30} strokeWidth={1.35} aria-hidden="true" />
           <div>
-            <h2 className="text-lg font-semibold text-on-surface">CLI-Manager</h2>
-            <p className="text-sm text-on-surface-variant">
+            <h2>CLI-Manager</h2>
+            <p className="ui-about-version">
               {t("about.lean.version", { version: version ?? "—" })}
             </p>
           </div>
         </div>
-        <p className="mt-4 text-sm leading-6 text-on-surface-variant">{t("about.lean.description")}</p>
-        <p className="mt-2 text-xs leading-5 text-on-surface-variant">{t("about.lean.releasePolicy")}</p>
+        <p className="ui-about-description">{t("about.lean.description")}</p>
+        <p className="ui-about-policy">{t("about.lean.releasePolicy")}</p>
       </section>
       {[
         { url: REPOSITORY_URL, label: t("about.lean.repository"), icon: Github },
@@ -44,7 +44,7 @@ export function AboutSection() {
           key={url}
           type="button"
           onClick={() => void openUrl(url).catch(() => {})}
-          className="ui-interactive ui-focus-ring flex w-full items-center gap-3 rounded-xl border border-border p-4 text-left text-sm text-on-surface hover:bg-surface-container-high"
+          className="ui-about-link ui-focus-ring"
         >
           <Icon size={16} aria-hidden="true" />
           {label}

@@ -1,7 +1,8 @@
 ﻿import { Input } from "@/components/ui/input";
-import { Search } from "lucide-react";
-import { useMemo, useState, type RefObject } from "react";
+import { ArrowDown, ArrowUp, Pencil, Search } from "lucide-react";
+import { useMemo, useRef, useState, type RefObject } from "react";
 import { useI18n } from "../../lib/i18n";
+import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 
 interface MetaEditorProps {
   aliasDraft: string;
@@ -36,6 +37,7 @@ export function MetaEditor({
 }: MetaEditorProps) {
   const { t } = useI18n();
   const [tagPickerOpen, setTagPickerOpen] = useState(false);
+  const tagInputRef = useRef<HTMLInputElement | null>(null);
   const selectedTags = useMemo(
     () => new Set(tagsDraft.split(",").map((tag) => tag.trim()).filter(Boolean)),
     [tagsDraft]
@@ -59,83 +61,105 @@ export function MetaEditor({
       .map((item) => item.trim())
       .filter(Boolean);
     onTagsDraftChange([...previousTags, tag].join(", "));
+    tagInputRef.current?.focus();
     setTagPickerOpen(false);
   };
 
   return (
-    <>
-      <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] sm:items-center">
-        <Input
-          value={aliasDraft}
-          onChange={(e) => onAliasDraftChange(e.target.value)}
-          aria-label={t("history.meta.alias")}
-          placeholder={t("history.meta.aliasPlaceholder")}
-          className="h-7 px-2 text-xs"
-        />
-        <div className="relative min-w-0">
-          <Input
-            value={tagsDraft}
-            onChange={(e) => {
-              onTagsDraftChange(e.target.value);
-              setTagPickerOpen(true);
-            }}
-            onFocus={() => setTagPickerOpen(true)}
-            onBlur={() => window.setTimeout(() => setTagPickerOpen(false), 120)}
-            onKeyDown={(e) => {
-              if (e.key === "Escape") setTagPickerOpen(false);
-            }}
-            aria-label={t("history.meta.tags")}
-            placeholder={t("history.meta.tagsPlaceholder")}
-            className="h-7 px-2 text-xs"
-          />
-          {showTagPicker && (
-            <div className="absolute left-0 right-0 top-[calc(100%+4px)] z-50 max-h-44 overflow-y-auto rounded-md border border-border bg-bg-secondary p-1 shadow-lg">
-              {visibleTagSuggestions.map((tag) => (
-                <button
-                  key={tag}
-                  type="button"
-                  onMouseDown={(e) => {
-                    e.preventDefault();
-                    applyTagSuggestion(tag);
-                  }}
-                  className="block w-full rounded px-2 py-1.5 text-left text-xs text-text-primary hover:bg-bg-tertiary focus:bg-bg-tertiary focus:outline-none"
-                >
-                  {tag}
-                </button>
-              ))}
+    <div className="ui-history-detail-controls">
+      <Popover>
+        <PopoverTrigger asChild>
+          <button type="button" className="ui-flat-action ui-toolbar-button ui-toolbar-button-compact ui-focus-ring">
+            <Pencil size={12} />
+            {t("history.meta.edit")}
+          </button>
+        </PopoverTrigger>
+        <PopoverContent className="ui-history-meta-popover" data-history-popover="metadata" aria-label={t("history.meta.edit")}>
+          <label className="ui-history-meta-field">
+            <span>{t("history.meta.alias")}</span>
+            <Input
+              value={aliasDraft}
+              onChange={(e) => onAliasDraftChange(e.target.value)}
+              aria-label={t("history.meta.alias")}
+              placeholder={t("history.meta.aliasPlaceholder")}
+              className="h-7 px-2 text-xs"
+            />
+          </label>
+          <div className="ui-history-meta-field">
+            <span>{t("history.meta.tags")}</span>
+            <div className="relative min-w-0">
+              <Input
+                ref={tagInputRef}
+                value={tagsDraft}
+                onChange={(e) => {
+                  onTagsDraftChange(e.target.value);
+                  setTagPickerOpen(true);
+                }}
+                onFocus={() => setTagPickerOpen(true)}
+                onBlur={(event) => {
+                  if (!event.currentTarget.parentElement?.contains(event.relatedTarget)) setTagPickerOpen(false);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Escape") setTagPickerOpen(false);
+                }}
+                aria-label={t("history.meta.tags")}
+                placeholder={t("history.meta.tagsPlaceholder")}
+                className="h-7 px-2 text-xs"
+              />
+              {showTagPicker && (
+                <div className="ui-history-tag-suggestions">
+                  {visibleTagSuggestions.map((tag) => (
+                    <button
+                      key={tag}
+                      type="button"
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => applyTagSuggestion(tag)}
+                      className="block w-full rounded px-2 py-1.5 text-left text-xs text-text-primary hover:bg-bg-tertiary focus:bg-bg-tertiary focus:outline-none"
+                    >
+                      {tag}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
-          )}
-        </div>
-        <button onClick={onSaveMeta} className="ui-btn ui-btn-primary h-7 text-xs">
-          {t("history.meta.save")}
-        </button>
-      </div>
-
-      <div className="ui-input mt-2 rounded-md px-2 py-1">
-        <div className="flex items-center gap-2">
-          <Search size={12} className="text-text-muted" />
-          <input
-            ref={sessionSearchRef}
-            value={sessionQuery}
-            onChange={(e) => onSessionQueryChange(e.target.value)}
-            aria-label={t("history.meta.search")}
-            placeholder={t("history.meta.search")}
-            className="flex-1 min-w-0 bg-transparent text-xs outline-none"
-          />
-        </div>
-
-        <div className="mt-2 flex items-center justify-end gap-2">
-          <button onClick={onJumpPrev} aria-label={t("history.meta.prevMatch")} className="ui-btn px-2 py-0.5 text-[11px]" title={t("history.meta.prevMatch")}>
-            ↑
+          </div>
+          <button type="button" onClick={onSaveMeta} className="ui-btn ui-btn-primary ui-focus-ring h-7 text-xs">
+            {t("history.meta.save")}
           </button>
-          <button onClick={onJumpNext} aria-label={t("history.meta.nextMatch")} className="ui-btn px-2 py-0.5 text-[11px]" title={t("history.meta.nextMatch")}>
-            ↓
-          </button>
-          <span className="shrink-0 text-[10px] text-text-muted">
-            {matchCount === 0 ? "0" : `${Math.min(matchCursor + 1, matchCount)}/${matchCount}`}
-          </span>
-        </div>
+        </PopoverContent>
+      </Popover>
+
+      <div className="ui-input ui-history-session-search">
+        <Search size={13} className="shrink-0 text-text-muted" aria-hidden="true" />
+        <input
+          ref={sessionSearchRef}
+          value={sessionQuery}
+          onChange={(e) => onSessionQueryChange(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.nativeEvent.isComposing && matchCount > 0) {
+              e.preventDefault();
+              if (e.shiftKey) onJumpPrev();
+              else onJumpNext();
+            }
+          }}
+          aria-label={t("history.meta.search")}
+          placeholder={t("history.meta.search")}
+          className="min-w-0 flex-1 bg-transparent text-xs outline-none"
+        />
+        {sessionQuery.trim() && (
+          <>
+            <span className="shrink-0 text-[10px] text-text-muted" aria-live="polite">
+              {matchCount === 0 ? "0" : `${Math.min(matchCursor + 1, matchCount)}/${matchCount}`}
+            </span>
+            <button type="button" onClick={onJumpPrev} disabled={matchCount === 0} aria-label={t("history.meta.prevMatch")} className="ui-flat-action ui-focus-ring ui-history-icon-button" title={t("history.meta.prevMatch")}>
+              <ArrowUp size={12} aria-hidden="true" />
+            </button>
+            <button type="button" onClick={onJumpNext} disabled={matchCount === 0} aria-label={t("history.meta.nextMatch")} className="ui-flat-action ui-focus-ring ui-history-icon-button" title={t("history.meta.nextMatch")}>
+              <ArrowDown size={12} aria-hidden="true" />
+            </button>
+          </>
+        )}
       </div>
-    </>
+    </div>
   );
 }

@@ -64,7 +64,7 @@ export function SidebarHeader({
         </button>
         <button
           onClick={onCreateProject}
-          className={`ui-flat-action ui-primary-action px-0 ${compact ? "h-7 w-7" : "h-8 w-8"}`}
+          className={`ui-flat-action ui-sidebar-create px-0 ${compact ? "h-7 w-7" : "h-8 w-8"}`}
           title={t("sidebar.newTerminal")}
           aria-label={t("sidebar.newTerminal")}
         >
@@ -77,7 +77,7 @@ export function SidebarHeader({
   return (
     <div className={compact ? "pb-1.5 pt-2.5" : "pb-2 pt-3"}>
       <div className={`flex items-center justify-between ${compact ? "px-2.5" : "px-3"}`}>
-        <span className="text-[12px] font-semibold tracking-[0.03em] text-primary">{t("sidebar.projects")}</span>
+        <span className="text-[12px] font-medium tracking-normal text-text-muted">{t("sidebar.projects")}</span>
         <div className={`flex items-center ${compact ? "gap-0.5" : "gap-1"}`}>
           <button
             onClick={onToggleCollapse}
@@ -97,7 +97,7 @@ export function SidebarHeader({
           </button>
           <button
             onClick={onCreateProject}
-            className={`ui-flat-action ui-primary-action ui-toolbar-button-compact ${compact ? "h-7 px-2 text-[12px]" : "px-2.5 text-[12px]"}`}
+            className={`ui-flat-action ui-sidebar-create ui-toolbar-button-compact ${compact ? "h-7 px-2 text-[12px]" : "px-2.5 text-[12px]"}`}
             aria-label={t("sidebar.newTerminal")}
           >
             {t("sidebar.new")}
@@ -122,7 +122,7 @@ export function SidebarHeader({
                 type="button"
                 className={`ui-focus-ring h-7 min-w-0 flex-1 rounded-lg px-2 text-[11px] font-medium transition-colors ${
                   active
-                    ? "bg-surface-container-high text-primary"
+                    ? "bg-surface-container-high text-on-surface"
                     : "text-text-muted hover:bg-surface-container-high hover:text-on-surface"
                 }`}
                 aria-pressed={active}

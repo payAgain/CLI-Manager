@@ -4,6 +4,7 @@
 @import "./styles/themes.css";
 @import "./styles/base.css";
 @import "./styles/components.css";
+@import "./styles/desktop.css";
 /* Design Tokens — Tailwind CSS 4 @theme */
 @theme {
   --color-bg-primary: var(--bg-primary);
@@ -68,8 +69,8 @@
   --line-height-body: 1.55;
   --line-height-meta: 1.45;
 
-  --animate-duration-fast: 150ms;
-  --animate-duration-normal: 250ms;
+  --animate-duration-fast: 120ms;
+  --animate-duration-normal: 160ms;
   --ease-standard: cubic-bezier(0.2, 0, 0, 1);
   --ease-snappy: cubic-bezier(0.2, 0.8, 0.2, 1);
 

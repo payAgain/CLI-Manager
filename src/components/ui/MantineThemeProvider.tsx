@@ -1,35 +1,7 @@
 import { MantineProvider, createTheme, type MantineColorsTuple } from "@mantine/core";
 import { useMemo, type ReactNode } from "react";
-import {
-  useSettingsStore,
-  type DarkThemePalette,
-  type LightThemePalette,
-} from "../../stores/settingsStore";
+import { useSettingsStore } from "../../stores/settingsStore";
 import { normalizeFontFamilyStack } from "../../lib/systemFonts";
-
-const LIGHT_PRIMARY_COLORS: Record<LightThemePalette, string> = {
-  "warm-paper": "#c46a2d",
-  "cream-green": "#3f7a4f",
-  "ink-red": "#c43d2f",
-  "emerald-mist": "#039d74",
-  "saas-analytics-dashboard": "#3b82f6",
-  "apple-pure": "#007aff",
-  "apple-mist": "#0a84ff",
-  "apple-warm": "#ff9f0a",
-  "apple-mono": "#3a3a3c",
-};
-
-const DARK_PRIMARY_COLORS: Record<DarkThemePalette, string> = {
-  "night-indigo": "#7aa2f7",
-  "forest-night": "#52a36e",
-  "graphite-red": "#c95b4a",
-  "investment-platform": "#f59e0b",
-  "github-dark": "#58a6ff",
-  "catppuccin-mocha": "#89b4fa",
-  "terminal-green": "#3dd68c",
-  "dracula-purple": "#bd93f9",
-  "carbon-black": "#78a9ff",
-};
 
 interface AppMantineThemeProviderProps {
   children: ReactNode;
@@ -49,7 +21,7 @@ function mixHex(hex: string, target: string, ratio: number): string {
 }
 
 // Mantine 的 light/subtle 变体依赖完整色阶（浅色背景取 1、文字取 9）。
-// 基色放在索引 6，配合 primaryShade=6 保证 filled 变体仍是用户选择的主色。
+// 基色放在索引 6，深浅模式的实心控件使用对应的中性色。
 function buildPrimaryShades(base: string): MantineColorsTuple {
   const WHITE_MIX = [0.93, 0.85, 0.75, 0.6, 0.4, 0.2];
   const BLACK_MIX = [0.12, 0.24, 0.38];
@@ -62,13 +34,10 @@ function buildPrimaryShades(base: string): MantineColorsTuple {
 
 export function AppMantineThemeProvider({ children }: AppMantineThemeProviderProps) {
   const resolvedTheme = useSettingsStore((s) => s.resolvedTheme);
-  const lightThemePalette = useSettingsStore((s) => s.lightThemePalette);
-  const darkThemePalette = useSettingsStore((s) => s.darkThemePalette);
   const uiFontFamily = useSettingsStore((s) => s.uiFontFamily);
   const uiFontSize = useSettingsStore((s) => s.uiFontSize);
   const effectiveUiFontFamily = normalizeFontFamilyStack(uiFontFamily);
-  const primaryColor =
-    resolvedTheme === "dark" ? DARK_PRIMARY_COLORS[darkThemePalette] : LIGHT_PRIMARY_COLORS[lightThemePalette];
+  const primaryColor = resolvedTheme === "dark" ? "#e8e7e3" : "#302e2a";
 
   const mantineTheme = useMemo(() => {
     const metaSize = Math.max(9, uiFontSize - 1);
@@ -78,6 +47,7 @@ export function AppMantineThemeProvider({ children }: AppMantineThemeProviderPro
       },
       primaryColor: "cliPrimary",
       primaryShade: 6,
+      autoContrast: true,
       fontFamily: effectiveUiFontFamily,
       fontFamilyMonospace: effectiveUiFontFamily,
       fontSizes: {
@@ -90,7 +60,9 @@ export function AppMantineThemeProvider({ children }: AppMantineThemeProviderPro
       headings: {
         fontFamily: effectiveUiFontFamily,
       },
-      defaultRadius: "md",
+      defaultRadius: "sm",
+      radius: { xs: "4px", sm: "6px", md: "8px", lg: "10px", xl: "12px" },
+      defaultGradient: { from: "cliPrimary.6", to: "cliPrimary.6", deg: 0 },
     });
   }, [effectiveUiFontFamily, primaryColor, uiFontSize]);
 

@@ -67,6 +67,7 @@ import { Activity, Terminal, TerminalSquare, Sparkles, Plus, ListClockIcon, X, C
 import { WorktreeIcon } from "./WorktreeIcon";
 import { VendorIcon, inferVendor, type VendorKey } from "./VendorIcon";
 import { CliToolIcon } from "./CliToolIcon";
+import { WorkspaceWelcome } from "./WorkspaceWelcome";
 import { EmptyState } from "./ui/EmptyState";
 import { useAppPrompt } from "./ui/useAppPrompt";
 import { useAppConfirm } from "./ui/useAppConfirm";
@@ -2404,29 +2405,18 @@ function CpuCatIndicator({
   if (!enabled) return null;
 
   const usage = snapshot ? Math.max(0, Math.min(100, snapshot.cpu.usagePercent)) : 0;
-  const baseDuration = 1 / (0.6 + 2.6 * (usage / 100));
-  // 45% 以下保持原变速，超过后平滑加速，100% 时约 0.20s/圈
-  const urgencyFactor = usage <= 45 ? 1 : 1 - 0.35 * ((usage - 45) / 55);
-  const speed = `${(baseDuration * urgencyFactor).toFixed(2)}s`;
-  const color =
-    usage >= 75
-      ? "var(--term-panel-red, #f25e5e)"
-      : usage >= 45
-        ? "var(--term-panel-yellow, #e5c453)"
-        : "var(--term-panel-green, #3dd68c)";
   const label = t("systemResources.cpuCatTitle", { usage: `${usage.toFixed(0)}%` });
 
   return (
     <button
       type="button"
-      className="ui-focus-ring ui-cpu-cat"
+      className="ui-focus-ring ui-cpu-indicator"
       data-active={active ? "true" : "false"}
       onClick={onClick}
       title={label}
       aria-label={label}
-      style={{ "--cpu-cat-speed": speed, "--cpu-cat-color": color } as CSSProperties}
     >
-      <span aria-hidden="true">🐱</span>
+      <Cpu size={15} strokeWidth={1.6} aria-hidden="true" />
     </button>
   );
 }
@@ -2911,8 +2901,18 @@ export function TerminalTabs({
     terminalThemeSelection,
   ]);
   const terminalActionSidebarStyle = useMemo(
-    () => getTerminalSidePanelSkinStyle(terminalSidePanelSkin),
-    [terminalSidePanelSkin]
+    () => visibleSessions.length > 0
+      ? getTerminalSidePanelSkinStyle(terminalSidePanelSkin)
+      : {
+          ...getTerminalSidePanelSkinStyle(terminalSidePanelSkin),
+          "--term-panel-bg": "var(--surface)",
+          "--term-panel-card": "var(--surface)",
+          "--term-panel-card-inner": "var(--surface-container-low)",
+          "--term-panel-fg": "var(--text-secondary)",
+          "--term-panel-dim": "var(--text-muted)",
+          "--term-panel-border": "var(--border)",
+        } as CSSProperties,
+    [terminalSidePanelSkin, visibleSessions.length]
   );
   const terminalPopoverStyle = useMemo(
     () => ({ ...terminalWellStyle, ...terminalActionSidebarStyle }),
@@ -4367,6 +4367,7 @@ export function TerminalTabs({
         <div
           className="ui-terminal-well absolute inset-0 min-h-0 flex"
           data-terminal-mode="independent"
+          data-empty={visibleSessions.length === 0 ? "true" : "false"}
           data-terminal-theme-tone={terminalThemeTone}
           style={{ display: historyActive ? "none" : "flex" }}
         >
@@ -4635,13 +4636,7 @@ export function TerminalTabs({
             )}
             {sessions.length === 0 && !useExternalTerminal && !hasScopedTerminalFilter && (
               <div className="flex h-full items-center justify-center">
-                <EmptyState
-                  icon={<Terminal size={40} strokeWidth={1} />}
-                  title={t("terminal.empty.title")}
-                  description={t("terminal.empty.description")}
-                  tone="inverse"
-                  action={{ label: t("terminal.empty.action"), onClick: handleNewTab }}
-                />
+                <WorkspaceWelcome onOpenTerminal={handleNewTab} onOpenHistory={handleOpenHistoryTab} />
               </div>
             )}
           </div>

@@ -1636,8 +1636,6 @@ pub(super) async fn search_sessions(
     Ok(merge_search_results(v2, legacy, max_hits))
 }
 
-
-
 fn v2_raw_pointer_line_index(raw_pointers_json: Option<String>) -> Option<usize> {
     let raw = raw_pointers_json?;
     let pointers = serde_json::from_str::<Vec<Value>>(&raw).ok()?;

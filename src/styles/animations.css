@@ -31,28 +31,8 @@
 @keyframes tab-runtime-breathe {
   0%, 100% {
     opacity: 1;
-    box-shadow: 0 0 0 0 color-mix(in srgb, currentColor 35%, transparent);
   }
   50% {
     opacity: 0.55;
-    box-shadow: 0 0 0 4px color-mix(in srgb, currentColor 8%, transparent);
-  }
-}
-
-@keyframes magic-float {
-  0%, 100% {
-    transform: translate3d(0, 0, 0) scale(1);
-  }
-  50% {
-    transform: translate3d(0, -6px, 0) scale(1.02);
-  }
-}
-
-@keyframes magic-pan {
-  0% {
-    transform: translate3d(-8%, -4%, 0);
-  }
-  100% {
-    transform: translate3d(8%, 4%, 0);
   }
 }

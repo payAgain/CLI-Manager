@@ -219,7 +219,7 @@ export function SettingsModal({ open, onClose, onAfterClose, initialTab, onActiv
   return (
     <AppMantineThemeProvider>
       <div
-        className={`fixed inset-x-0 bottom-0 ${isLikelyMacOs() ? "top-0" : "top-[26px]"} z-50 ${
+        className={`ui-settings-overlay fixed inset-x-0 bottom-0 ${isLikelyMacOs() ? "top-0" : "top-[26px]"} z-50 ${
           closing ? "animate-fade-out" : "animate-fade-in"
         }`}
         style={{ fontFamily: effectiveUiFontFamily }}
@@ -227,7 +227,7 @@ export function SettingsModal({ open, onClose, onAfterClose, initialTab, onActiv
       >
         <div
           ref={dialogRef}
-          className={`ui-surface-base flex h-full w-full overflow-hidden${
+          className={`ui-settings-dialog ui-surface-base flex h-full w-full overflow-hidden${
             closing ? "" : " animate-slide-down"
           }`}
           onClick={(e) => e.stopPropagation()}

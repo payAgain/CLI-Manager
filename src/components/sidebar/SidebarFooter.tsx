@@ -6,6 +6,7 @@ import type { SettingsTab } from "../SettingsModal";
 import { getErrorMessage, getPiHookErrorMessage } from "../../lib/hookErrors";
 import { useSettingsStore } from "../../stores/settingsStore";
 import { useI18n } from "../../lib/i18n";
+import { MemoryUsage } from "./MemoryUsage";
 
 type HookInstallStatus = "directoryMissing" | "notInstalled" | "partialInstalled" | "installed";
 type HookLightStatus = "missing" | "partial" | "installed";
@@ -214,11 +215,12 @@ export function SidebarFooter({ collapsed, onOpenSettings }: SidebarFooterProps)
   const settingsButton = (
     <button
       onClick={() => onOpenSettings()}
-      className="ui-focus-ring ui-icon-action ui-sidebar-action-settings"
+      className={`ui-focus-ring ui-icon-action ui-sidebar-action-settings ${collapsed ? "" : "ui-sidebar-settings"}`}
       title={t("sidebar.settings")}
       aria-label={t("sidebar.openSettings")}
     >
-      <Settings size={14} strokeWidth={1.5} />
+      <Settings size={16} strokeWidth={1.5} />
+      {!collapsed && <span>{t("sidebar.settings")}</span>}
     </button>
   );
 
@@ -226,7 +228,7 @@ export function SidebarFooter({ collapsed, onOpenSettings }: SidebarFooterProps)
     return (
       <div className="px-2 py-2">
         <div className="flex flex-col items-center gap-1.5">
-
+          <MemoryUsage collapsed />
           <HookStatusLight onOpenSettings={onOpenSettings} />
           {settingsButton}
         </div>
@@ -236,10 +238,11 @@ export function SidebarFooter({ collapsed, onOpenSettings }: SidebarFooterProps)
 
   return (
     <div className="px-2.5 py-2.5">
+      <MemoryUsage collapsed={false} />
       <div className="flex items-center gap-2">
 
-        <HookStatusLight onOpenSettings={onOpenSettings} />
         {settingsButton}
+        <HookStatusLight onOpenSettings={onOpenSettings} />
       </div>
     </div>
   );

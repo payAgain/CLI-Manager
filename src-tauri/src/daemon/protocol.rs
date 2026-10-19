@@ -25,6 +25,7 @@ pub const FEATURE_WS_BINARY_INPUT: &str = "ws_binary_input_v1";
 pub const FEATURE_CHECKPOINT_REPLAY: &str = "checkpoint_replay_v1";
 pub const FEATURE_PIXEL_RESIZE: &str = "pixel_resize_v1";
 pub const FEATURE_PROCESS_TRAITS: &str = "process_traits_v1";
+pub const FEATURE_SESSION_PROCESS_ID: &str = "session_process_id_v1";
 pub const FEATURE_TERMINAL_COLORS: &str = "terminal_colors_v1";
 pub const FEATURE_SSH_AGENT_RPC: &str = "ssh_agent_rpc_v1";
 
@@ -35,6 +36,7 @@ pub fn supported_features() -> Vec<String> {
         FEATURE_CHECKPOINT_REPLAY,
         FEATURE_PIXEL_RESIZE,
         FEATURE_PROCESS_TRAITS,
+        FEATURE_SESSION_PROCESS_ID,
         FEATURE_TERMINAL_COLORS,
         FEATURE_SSH_AGENT_RPC,
     ]
@@ -212,6 +214,11 @@ fn windows_build_number() -> Option<u32> {
 #[serde(rename_all = "camelCase")]
 pub struct SessionMeta {
     pub session_id: String,
+    /// Read-only process identity; absent on older daemons or reserved sessions.
+    #[serde(default)]
+    pub root_pid: Option<u32>,
+    #[serde(default)]
+    pub root_started_at: Option<u64>,
     pub cwd: Option<String>,
     pub shell: Option<String>,
     #[serde(default)]

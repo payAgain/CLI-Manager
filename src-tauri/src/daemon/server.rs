@@ -833,6 +833,8 @@ impl DaemonHost {
             Arc::new(Mutex::new(SessionEntry {
                 meta: SessionMeta {
                     session_id: session_id.to_string(),
+                    root_pid: None,
+                    root_started_at: None,
                     cwd,
                     shell,
                     environment_type: ssh_launch.map(|_| "ssh".to_string()),
@@ -2257,6 +2259,8 @@ impl DaemonServer {
                             entry.meta.process_traits = Some(ProcessTraits::current_platform(
                                 process_traits.uses_conpty_dll,
                             ));
+                            entry.meta.root_pid = Some(process_traits.root_pid);
+                            entry.meta.root_started_at = process_traits.root_started_at;
                             entry.meta.clone()
                         })
                     })
@@ -2370,6 +2374,8 @@ mod tests {
         Arc::new(Mutex::new(SessionEntry {
             meta: SessionMeta {
                 session_id: session_id.to_string(),
+                root_pid: None,
+                root_started_at: None,
                 cwd: None,
                 shell: None,
                 environment_type: None,

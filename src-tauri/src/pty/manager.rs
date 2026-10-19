@@ -146,6 +146,8 @@ pub struct PtyManager {
 #[derive(Debug, Clone, Copy)]
 pub struct PtyProcessTraits {
     pub uses_conpty_dll: bool,
+    pub root_pid: u32,
+    pub root_started_at: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -692,8 +694,19 @@ PS0='\e]133;C\a${PS0:0:$((__cli_manager_ran=1,0))}'
         let mut reader = spawned.reader;
         let controller = spawned.controller;
         let child = spawned.child;
+        let root_pid = child.process_id();
+        let mut identity_system = sysinfo::System::new();
+        identity_system.refresh_processes_specifics(
+            sysinfo::ProcessesToUpdate::Some(&[sysinfo::Pid::from_u32(root_pid)]),
+            true,
+            sysinfo::ProcessRefreshKind::nothing().without_tasks(),
+        );
         let process_traits = PtyProcessTraits {
             uses_conpty_dll: spawned.traits.uses_conpty_dll,
+            root_pid,
+            root_started_at: identity_system
+                .process(sysinfo::Pid::from_u32(root_pid))
+                .map(|process| process.start_time()),
         };
         let diagnostics = Arc::new(Mutex::new(PtySessionDiagnostics {
             session_id: session_id.to_string(),
