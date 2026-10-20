@@ -3,6 +3,7 @@ use crate::shell_resolver::silent_command;
 use crate::ssh_launch::SshLaunchPlan;
 use crate::ssh_transport::posix_quote;
 use chrono::{DateTime, Datelike, SecondsFormat, Utc};
+use cli_manager_history_core::title::title_candidate_from_text;
 use cli_manager_history_core::{
     RemoteHistorySearchHit, RemoteHistorySessionDetail, RemoteHistorySyncResult,
 };
@@ -23,6 +24,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
 mod catalog;
+mod codex_titles;
 
 use super::history_backup::{
     create_file_backup_snapshot, default_backup_root, ensure_source_mutation_unlocked,
@@ -37,7 +39,7 @@ const OOM_HISTORY_DETAIL_WARN_BYTES: usize = 10 * 1024 * 1024;
 
 const OOM_HISTORY_MESSAGES_WARN_COUNT: usize = 2_000;
 const CODEX_HISTORY_INDEX_TEXT_MAX_CHARS: usize = 4_000;
-const HISTORY_INDEX_V2_ADAPTER_PARSER_VERSION: i64 = 3;
+const HISTORY_INDEX_V2_ADAPTER_PARSER_VERSION: i64 = 4;
 const HISTORY_INDEX_V2_ADAPTER_MODEL_VERSION: i64 = 1;
 const OPENCODE_SESSION_LOCATOR_MARKER: &str = "#session=";
 const DAEMON_READY_WAIT_ATTEMPTS: usize = 60;
@@ -2444,7 +2446,7 @@ pub(crate) fn invalidate_history_caches() {
 // 内存索引（HISTORY_SESSION_INDEX）每次 App 启动后为空，首次读取历史索引必须
 // 全量解析所有 JSONL（可能上千个），冷启动耗时不可接受。这里把 per-file 解析结果落盘，
 // 重启后载入作为 build_history_index 的 previous，按 fingerprint 仅重解析变更文件。
-const HISTORY_INDEX_CACHE_VERSION: u32 = 12;
+const HISTORY_INDEX_CACHE_VERSION: u32 = 13;
 const HISTORY_INDEX_CACHE_FILE: &str = "history-index-cache.json";
 
 static HISTORY_INDEX_CACHE_DIR: OnceLock<PathBuf> = OnceLock::new();
@@ -2637,6 +2639,9 @@ fn build_history_index(
                     existing.computed.created_at = fingerprint.created_at;
                     existing.computed.updated_at = fingerprint.updated_at;
                 }
+                if existing.file_ref.source == "codex" {
+                    apply_codex_saved_title(&existing.file_ref.path, &mut existing.computed);
+                }
                 entries.push(Some(existing));
                 continue;
             }
@@ -2711,7 +2716,7 @@ fn history_index_entries_match(previous: &[HistoryIndexEntry], next: &[HistoryIn
         return false;
     }
 
-    let previous_by_path: HashMap<String, (&str, &str, SessionFileFingerprint)> = previous
+    let previous_by_path: HashMap<String, (&str, &str, SessionFileFingerprint, &str)> = previous
         .iter()
         .map(|entry| {
             (
@@ -2720,6 +2725,7 @@ fn history_index_entries_match(previous: &[HistoryIndexEntry], next: &[HistoryIn
                     entry.file_ref.source.as_str(),
                     entry.file_ref.project_key.as_str(),
                     entry.fingerprint,
+                    entry.computed.title.as_str(),
                 ),
             )
         })
@@ -2729,10 +2735,11 @@ fn history_index_entries_match(previous: &[HistoryIndexEntry], next: &[HistoryIn
         let path_key = path_to_key(&entry.file_ref.path);
         previous_by_path
             .get(&path_key)
-            .map(|(source, project_key, fingerprint)| {
+            .map(|(source, project_key, fingerprint, title)| {
                 *source == entry.file_ref.source.as_str()
                     && *project_key == entry.file_ref.project_key.as_str()
                     && *fingerprint == entry.fingerprint
+                    && *title == entry.computed.title
             })
             .unwrap_or(false)
     })
@@ -2881,7 +2888,16 @@ fn build_session_computation(
     if looks_like_grok_updates_file(path) {
         apply_grok_summary_metadata(path, &mut computed);
     }
+    if is_codex_rollout_session_path(path) {
+        apply_codex_saved_title(path, &mut computed);
+    }
     computed
+}
+
+fn apply_codex_saved_title(path: &Path, computed: &mut CachedSessionComputation) {
+    if let Some(title) = codex_titles::saved_title(path, &computed.session_id) {
+        computed.title = title;
+    }
 }
 
 /// Enrich list/detail summary fields from Grok `summary.json` so the history list
@@ -6916,9 +6932,7 @@ fn scan_session_inner(
             message_count += 1;
             let title_candidate = message_title_candidate(&msg);
             if first_message.is_none() {
-                first_message = title_candidate
-                    .clone()
-                    .or_else(|| Some(msg.content.clone()));
+                first_message = title_candidate.clone();
             }
             if first_user_message.is_none() && msg.role == "user" {
                 first_user_message = title_candidate;
@@ -10720,241 +10734,12 @@ fn message_title_candidate(message: &HistoryMessage) -> Option<String> {
     title_candidate_from_text(&message.content)
 }
 
-fn title_candidate_from_text(text: &str) -> Option<String> {
-    if let Some(objective) = extract_simple_tag_block(text, "objective") {
-        if let Some(candidate) = title_candidate_from_lines(objective) {
-            return Some(candidate);
-        }
-    }
-    title_candidate_from_lines(text)
-}
-
 fn extract_simple_tag_block<'a>(text: &'a str, tag: &str) -> Option<&'a str> {
     let open = format!("<{tag}>");
     let close = format!("</{tag}>");
     let start = text.find(&open)? + open.len();
     let end = text[start..].find(&close)? + start;
     Some(&text[start..end])
-}
-
-fn title_candidate_from_lines(text: &str) -> Option<String> {
-    let lines: Vec<&str> = text.lines().collect();
-    let mut index = 0usize;
-
-    while index < lines.len() {
-        let trimmed = lines[index].trim();
-        if trimmed.is_empty()
-            || trimmed.eq_ignore_ascii_case("</image>")
-            || is_title_noise_line(trimmed)
-        {
-            index += 1;
-            continue;
-        }
-
-        if is_injected_prompt_title_line(trimmed) {
-            return None;
-        }
-
-        if is_workflow_state_start_line(trimmed) {
-            index += 1;
-            while index < lines.len() && !is_workflow_state_end_line(lines[index].trim()) {
-                index += 1;
-            }
-            if index < lines.len() {
-                index += 1;
-            }
-            continue;
-        }
-
-        if let Some(tag) = title_xml_tag_name(trimmed) {
-            if is_title_noise_block_tag(&tag) {
-                index += 1;
-                if !title_line_closes_tag(trimmed, &tag) {
-                    while index < lines.len() && !title_line_closes_tag(lines[index].trim(), &tag) {
-                        index += 1;
-                    }
-                    if index < lines.len() {
-                        index += 1;
-                    }
-                }
-                continue;
-            }
-        }
-
-        if let Some(candidate) = image_title_candidate_from_lines(&lines, index) {
-            return Some(candidate);
-        }
-
-        return Some(trimmed.to_string());
-    }
-
-    None
-}
-
-fn image_title_candidate_from_lines(lines: &[&str], start_index: usize) -> Option<String> {
-    let mut image_tokens: Vec<String> = Vec::new();
-    let mut text_suffix: Option<String> = None;
-    let mut index = start_index;
-
-    while index < lines.len() {
-        let trimmed = lines[index].trim();
-        if trimmed.is_empty()
-            || trimmed.eq_ignore_ascii_case("</image>")
-            || is_title_noise_line(trimmed)
-        {
-            index += 1;
-            continue;
-        }
-
-        let (line_images, remaining_text) = extract_image_title_parts(trimmed);
-        if line_images.is_empty() {
-            if image_tokens.is_empty() {
-                return None;
-            }
-            text_suffix = Some(trimmed.to_string());
-            break;
-        }
-
-        for image in line_images {
-            if !image_tokens
-                .iter()
-                .any(|existing| existing.eq_ignore_ascii_case(&image))
-            {
-                image_tokens.push(image);
-            }
-        }
-        if !remaining_text.is_empty() {
-            text_suffix = Some(remaining_text);
-            break;
-        }
-        index += 1;
-    }
-
-    if image_tokens.is_empty() {
-        return None;
-    }
-
-    let mut title = image_tokens.join("");
-    if let Some(text) = text_suffix {
-        if !text.is_empty() {
-            title.push(' ');
-            title.push_str(&text);
-        }
-    }
-    Some(title)
-}
-
-fn extract_image_title_parts(line: &str) -> (Vec<String>, String) {
-    let mut rest = line;
-    let mut image_tokens = Vec::new();
-    let mut remaining_text = String::new();
-
-    while !rest.is_empty() {
-        let tag_pos = find_ascii_ci(rest, "<image");
-        let label_pos = find_ascii_ci(rest, "[image #");
-        let close_pos = find_ascii_ci(rest, "</image>");
-        let next_pos = [tag_pos, label_pos, close_pos].into_iter().flatten().min();
-
-        let Some(pos) = next_pos else {
-            remaining_text.push_str(rest);
-            break;
-        };
-
-        remaining_text.push_str(&rest[..pos]);
-        rest = &rest[pos..];
-
-        if starts_with_ascii_ci(rest, "</image>") {
-            rest = &rest["</image>".len()..];
-            continue;
-        }
-
-        if starts_with_ascii_ci(rest, "<image") {
-            let end = rest.find('>').map(|idx| idx + 1).unwrap_or(rest.len());
-            let token = &rest[..end];
-            image_tokens.push(extract_image_label(token).unwrap_or_else(|| "[Image]".to_string()));
-            rest = &rest[end..];
-            continue;
-        }
-
-        if starts_with_ascii_ci(rest, "[image #") {
-            let end = rest.find(']').map(|idx| idx + 1).unwrap_or(rest.len());
-            image_tokens.push(rest[..end].to_string());
-            rest = &rest[end..];
-            continue;
-        }
-    }
-
-    (image_tokens, remaining_text.trim().to_string())
-}
-
-fn extract_image_label(token: &str) -> Option<String> {
-    let start = find_ascii_ci(token, "[image #")?;
-    let end = token[start..].find(']')? + start + 1;
-    Some(token[start..end].to_string())
-}
-
-fn find_ascii_ci(haystack: &str, needle: &str) -> Option<usize> {
-    haystack.to_ascii_lowercase().find(needle)
-}
-
-fn starts_with_ascii_ci(value: &str, prefix: &str) -> bool {
-    value
-        .get(..prefix.len())
-        .map(|start| start.eq_ignore_ascii_case(prefix))
-        .unwrap_or(false)
-}
-
-fn title_xml_tag_name(line: &str) -> Option<String> {
-    let rest = line.trim_start().strip_prefix('<')?;
-    if rest.starts_with('/') || rest.starts_with('!') || rest.starts_with('?') {
-        return None;
-    }
-    let name: String = rest
-        .chars()
-        .take_while(|ch| ch.is_ascii_alphanumeric() || *ch == '-' || *ch == '_')
-        .collect();
-    (!name.is_empty()).then(|| name.to_lowercase())
-}
-
-fn is_title_noise_block_tag(tag: &str) -> bool {
-    matches!(
-        tag,
-        "codex_internal_context"
-            | "current-state"
-            | "instructions"
-            | "session-context"
-            | "system-reminder"
-            | "workflow"
-    )
-}
-
-fn title_line_closes_tag(line: &str, tag: &str) -> bool {
-    line.to_lowercase().contains(&format!("</{tag}>"))
-}
-
-fn is_workflow_state_start_line(line: &str) -> bool {
-    line.starts_with("[workflow-state:")
-}
-
-fn is_workflow_state_end_line(line: &str) -> bool {
-    line.starts_with("[/workflow-state")
-}
-
-fn is_title_noise_line(line: &str) -> bool {
-    let lower = line.to_lowercase();
-    lower == "<objective>"
-        || lower == "</objective>"
-        || lower.starts_with("knowledge cutoff:")
-        || lower.starts_with("current date:")
-        || lower.starts_with("continuation behavior:")
-        || lower.starts_with("budget:")
-}
-
-fn is_injected_prompt_title_line(line: &str) -> bool {
-    let normalized = line.trim_start_matches('#').trim().to_lowercase();
-    normalized.starts_with("agents.md instructions for ")
-        || normalized.starts_with("system prompt")
-        || normalized.starts_with("developer instructions")
 }
 
 fn extract_role(value: &Value) -> Option<String> {
@@ -13389,6 +13174,38 @@ mod tests {
         let computed = scan_session_computation(&file, 1, 2);
 
         assert_eq!(computed.session_id, "claude-session");
+    }
+
+    #[test]
+    fn build_session_computation_title_skips_codex_desktop_context_without_changing_messages() {
+        let temp_dir = TempDir::new().unwrap();
+        let file = temp_dir.path().join("rollout-session.jsonl");
+        let context =
+            r#"<external_codex_apps_open_page>{"page_id":null}</external_codex_apps_open_page>"#;
+        let request = "熟悉这个项目，帮我把 UI 分支合并到主线。然后编译一下";
+        let lines: Vec<String> = ["# AGENTS.md instructions for /project\n<INSTRUCTIONS>project rules</INSTRUCTIONS>", context, request]
+            .iter().map(|content| serde_json::json!({
+                "type":"response_item", "payload":{"type":"message", "role":"user", "content":[{"type":"input_text","text":content}]}
+            }).to_string()).collect();
+        write_text(&file, &lines.join("\n"));
+
+        let summary = scan_session_computation(&file, 1, 2);
+        let (detail_summary, messages) = scan_session_computation_with_messages(&file, 1, 2);
+        assert_eq!(summary.title, request);
+        assert_eq!(detail_summary.title, request);
+        assert_eq!(messages.len(), 3);
+        assert_eq!(messages[1].content, context);
+        assert_eq!(detail_summary.message_count, 3);
+    }
+
+    #[test]
+    fn build_session_computation_title_does_not_restore_context_as_fallback() {
+        let temp_dir = TempDir::new().unwrap();
+        let file = temp_dir.path().join("rollout-context-only.jsonl");
+        let line = serde_json::json!({"type":"response_item", "payload":{"type":"message", "role":"user", "content":[{"type":"input_text","text":"<external_codex_apps_open_page>{\"page_id\":null}</external_codex_apps_open_page>"}]}});
+        write_text(&file, &line.to_string());
+        let computed = scan_session_computation(&file, 1, 2);
+        assert_eq!(computed.title, computed.session_id);
     }
 
     #[test]

@@ -1,3 +1,4 @@
+import type { AgentDetection } from "../../lib/terminalAgent";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { logInfo, logWarn } from "../../lib/logger";
@@ -159,6 +160,22 @@ export class PtyHostSocket {
   private readonly pendingOutput = new Map<string, TerminalBinaryFrame[]>();
   private readonly pendingOutputBytes = new Map<string, number>();
   private readonly pendingOutputWarned = new Set<string>();
+  private readonly agentDetections = new Map<string, AgentDetection>();
+  private readonly agentListeners = new Set<(sessionId: string, detection: AgentDetection) => void>();
+
+  getAgentDetection(sessionId: string): AgentDetection | undefined { return this.agentDetections.get(sessionId); }
+  subscribeAgentDetection(listener: (sessionId: string, detection: AgentDetection) => void): () => void {
+    this.agentListeners.add(listener);
+    return () => { this.agentListeners.delete(listener); };
+  }
+  private receiveAgentDetection(sessionId: string, detection: AgentDetection | null | undefined): void {
+    if (!detection || !sessionId || this.closedSessions.has(sessionId)) return;
+    const previous = this.agentDetections.get(sessionId);
+    if (previous && previous.updatedAtMs > detection.updatedAtMs) return;
+    this.agentDetections.set(sessionId, detection);
+    this.agentListeners.forEach((listener) => listener(sessionId, detection));
+  }
+
   private readonly pendingStatus = new Map<string, PtyHostStatusEvent>();
   private readonly pendingCheckpoints = new Map<string, {
     resolve: () => void;
@@ -195,6 +212,7 @@ export class PtyHostSocket {
     this.pendingOutputBytes.clear();
     this.pendingOutputWarned.clear();
     this.pendingStatus.clear();
+    this.agentDetections.clear();
     this.latestReceivedSequence.clear();
     this.latestCommittedSequence.clear();
     this.legacyOutputUnlisten?.();
@@ -269,6 +287,7 @@ export class PtyHostSocket {
         terminal_colors: terminalColors,
       });
       const meta = (frame.meta ?? {}) as Record<string, unknown>;
+      this.receiveAgentDetection(sessionId, meta.agentDetection as AgentDetection | undefined);
       return normalizeProcessTraits(meta.processTraits);
     } catch (error) {
       try {
@@ -324,6 +343,7 @@ export class PtyHostSocket {
     this.pendingOutputBytes.clear();
     this.pendingOutputWarned.clear();
     this.pendingStatus.clear();
+    this.agentDetections.clear();
     this.pendingCheckpoints.forEach(({ reject, timeoutId }) => {
       window.clearTimeout(timeoutId);
       reject(new Error("PtyHost sessions closed"));
@@ -350,6 +370,7 @@ export class PtyHostSocket {
       });
       const meta = (frame.meta ?? {}) as Record<string, unknown>;
       if (this.transportMode === "legacy") this.deliverLegacyReplay(sessionId, frame);
+      this.receiveAgentDetection(sessionId, meta.agentDetection as AgentDetection | undefined);
       const latestSequence = Number(frame.latest_sequence ?? 0);
       this.latestReceivedSequence.set(sessionId, latestSequence);
       return {
@@ -708,6 +729,10 @@ export class PtyHostSocket {
     if (frame.type === "pong") {
       this.lastPongAt = Date.now();
     }
+    if (frame.type === "agent_changed") {
+      this.receiveAgentDetection(String(frame.session_id ?? ""), frame.detection as AgentDetection);
+      return;
+    }
     if (frame.type === "exit") {
       const sessionId = String(frame.session_id ?? "");
       if (!sessionId || this.closedSessions.has(sessionId)) return;
@@ -1032,6 +1057,7 @@ export class PtyHostSocket {
   }
 
   private clearSession(sessionId: string): void {
+    this.agentDetections.delete(sessionId);
     this.attachedSessions.delete(sessionId);
     this.clearPendingOutput(sessionId);
     this.pendingStatus.delete(sessionId);

@@ -1,9 +1,11 @@
+pub mod title;
+
 use chrono::DateTime;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 
-pub const PARSER_VERSION: u32 = 1;
+pub const PARSER_VERSION: u32 = 2;
 pub const INDEX_SCHEMA_VERSION: u32 = 2;
 const SEARCH_TEXT_LIMIT: usize = 16 * 1024;
 const TITLE_LIMIT: usize = 240;
@@ -208,12 +210,13 @@ pub fn apply_jsonl_line(
     if let Some((role, content)) = parse_message(&value) {
         state.message_count = state.message_count.saturating_add(1);
         append_search_text(&mut state.search_text, &content);
-        let excerpt = excerpt(&content, TITLE_LIMIT);
-        if state.first_message.is_none() && !excerpt.is_empty() {
-            state.first_message = Some(excerpt.clone());
+        let candidate =
+            title::title_candidate_from_text(&content).map(|text| excerpt(&text, TITLE_LIMIT));
+        if state.first_message.is_none() {
+            state.first_message = candidate.clone();
         }
-        if role == "user" && state.first_user_message.is_none() && !excerpt.is_empty() {
-            state.first_user_message = Some(excerpt);
+        if role == "user" && state.first_user_message.is_none() {
+            state.first_user_message = candidate;
         }
     }
 
@@ -768,6 +771,26 @@ fn non_empty(value: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{apply_jsonl_line, parse_detail, path_matches_scope, ParserState};
+
+    #[test]
+    fn codex_title_ignores_desktop_context_but_keeps_it_in_history() {
+        let mut state = ParserState::default();
+        let context =
+            r#"<external_codex_apps_open_page>{"page_id":null}</external_codex_apps_open_page>"#;
+        for (index, text) in [context, "修复 CLI-Manager 的会话名称"].iter().enumerate() {
+            let line = serde_json::json!({"type":"response_item", "payload":{"type":"message", "role":"user", "content":[{"type":"input_text","text":text}]}});
+            apply_jsonl_line(&mut state, "codex", &line.to_string(), index);
+            if index == 0 {
+                assert_eq!(state.first_message, None);
+            }
+        }
+        assert_eq!(
+            state.first_user_message.as_deref(),
+            Some("修复 CLI-Manager 的会话名称")
+        );
+        assert_eq!(state.message_count, 2);
+        assert!(state.search_text.contains(context));
+    }
 
     #[test]
     fn claude_duplicate_usage_is_counted_once() {

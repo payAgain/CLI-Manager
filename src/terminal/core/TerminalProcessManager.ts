@@ -1,3 +1,4 @@
+import type { AgentDetection } from "../../lib/terminalAgent";
 import { invoke } from "@tauri-apps/api/core";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import {
@@ -106,6 +107,11 @@ export interface TerminalProcessDiagnosticsSnapshot {
 export class TerminalProcessManager {
   private readonly outputStates = new Map<string, TerminalOutputState>();
   private readonly processTraits = new Map<string, TerminalProcessTraits>();
+
+  getAgentDetection(sessionId: string): AgentDetection | undefined { return ptyHostSocket.getAgentDetection(sessionId); }
+  subscribeAgentDetection(listener: (sessionId: string, detection: AgentDetection) => void): () => void {
+    return ptyHostSocket.subscribeAgentDetection(listener);
+  }
 
   create(request: TerminalCreateRequest): Promise<string> {
     return invoke<PreparedTerminalCreate>("pty_prepare_create", request).then(async (prepared) => {

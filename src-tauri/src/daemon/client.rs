@@ -209,6 +209,15 @@ impl DaemonClient {
                     }),
                 );
             }
+            DaemonFrame::AgentChanged {
+                session_id,
+                detection,
+            } => {
+                let _ = app_handle.emit(
+                    "pty-agent-changed",
+                    serde_json::json!({ "sessionId": session_id, "detection": detection }),
+                );
+            }
             DaemonFrame::HookReport { payload } => {
                 let _ = app_handle.emit("claude-hook-notification", payload);
             }
@@ -403,7 +412,13 @@ pub fn connect_or_spawn(
             match DaemonClient::connect(info.clone(), app_handle.clone()) {
                 Ok(client) => {
                     // 版本不匹配且无存活会话 → 让旧 daemon 自杀后重拉（契约升级路径）。
-                    if client.info().version != env!("CARGO_PKG_VERSION") {
+                    if client.info().version != env!("CARGO_PKG_VERSION")
+                        || !client
+                            .info()
+                            .features
+                            .iter()
+                            .any(|feature| feature == super::protocol::FEATURE_AGENT_DISCOVERY)
+                    {
                         let no_alive = client
                             .list()
                             .map(|sessions| sessions.iter().all(|s| !s.alive))

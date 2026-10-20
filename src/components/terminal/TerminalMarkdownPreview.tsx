@@ -1,3 +1,4 @@
+import { runtimeAgentTool } from "../../lib/terminalAgent";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type WheelEvent as ReactWheelEvent } from "react";
 import * as SelectPrimitive from "@radix-ui/react-select";
 import type { ITheme } from "@xterm/xterm";
@@ -79,6 +80,10 @@ export function resolveTerminalMarkdownSource(
   project: Project | null | undefined,
 ): "claude" | "codex" | null {
   if (!session && !project) return null;
+  if (session && runtimeAgentTool(session) !== undefined) {
+    const source = resolveCliToolHistorySourceId(runtimeAgentTool(session));
+    return source === "claude" || source === "codex" ? source : null;
+  }
   const explicitSource = [session?.cliTool, project?.cli_tool]
     .map((value) => resolveCliToolHistorySourceId(value))
     .find((value): value is "claude" | "codex" => value === "claude" || value === "codex");

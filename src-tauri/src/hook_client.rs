@@ -115,6 +115,7 @@ fn try_notify(source: &str, event: &str) -> Result<(), HookNotifyError> {
     // 字段名为 camelCase，对应 claude_hook::ClaudeHookRequest 的 serde(rename_all = "camelCase")。
     let payload = json!({
         "tabId": tab_id,
+        "hookProcessId": std::process::id(),
         "source": source,
         "event": event,
         "title": title_for(source, event),

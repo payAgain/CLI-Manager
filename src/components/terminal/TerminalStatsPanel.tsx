@@ -1,3 +1,4 @@
+import { runtimeAgentTool } from "../../lib/terminalAgent";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { Copy, FolderGit2, GitBranch, RefreshCw, FolderOpen, Save } from "lucide-react";
@@ -448,9 +449,11 @@ export function TerminalStatsPanel({ activeSessionId, open, visible = true, embe
   const sourceFilter = useMemo(
     () =>
       inferHistorySource(
-        `${terminalSession?.startupCmd ?? ""} ${terminalSession?.title ?? ""} ${project?.cli_tool ?? ""}`
+        terminalSession && runtimeAgentTool(terminalSession) !== undefined
+          ? runtimeAgentTool(terminalSession) ?? ""
+          : `${terminalSession?.startupCmd ?? ""} ${terminalSession?.title ?? ""} ${project?.cli_tool ?? ""}`
       ),
-    [terminalSession?.startupCmd, terminalSession?.title, project?.cli_tool]
+    [terminalSession?.runtimeAgent, terminalSession?.startupCmd, terminalSession?.title, project?.cli_tool]
   );
 
   // 「会话级」卡片只认 hook 绑定的当前 CLI 会话；未绑定时保持空态。

@@ -28,6 +28,7 @@ pub const FEATURE_PROCESS_TRAITS: &str = "process_traits_v1";
 pub const FEATURE_SESSION_PROCESS_ID: &str = "session_process_id_v1";
 pub const FEATURE_TERMINAL_COLORS: &str = "terminal_colors_v1";
 pub const FEATURE_SSH_AGENT_RPC: &str = "ssh_agent_rpc_v1";
+pub const FEATURE_AGENT_DISCOVERY: &str = "agent_discovery_v1";
 
 pub fn supported_features() -> Vec<String> {
     [
@@ -39,6 +40,7 @@ pub fn supported_features() -> Vec<String> {
         FEATURE_SESSION_PROCESS_ID,
         FEATURE_TERMINAL_COLORS,
         FEATURE_SSH_AGENT_RPC,
+        FEATURE_AGENT_DISCOVERY,
     ]
     .into_iter()
     .map(str::to_string)
@@ -209,6 +211,25 @@ fn windows_build_number() -> Option<u32> {
     })
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentIdentity {
+    pub tool: String,
+    pub pid: u32,
+    pub started_at: u64,
+    pub run_id: String,
+    pub detected_at_ms: u64,
+    #[serde(default)]
+    pub cli_session_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentDetection {
+    pub agent: Option<AgentIdentity>,
+    pub updated_at_ms: u64,
+}
+
 /// daemon 会话元数据（List/Attach 应答用）。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -219,6 +240,9 @@ pub struct SessionMeta {
     pub root_pid: Option<u32>,
     #[serde(default)]
     pub root_started_at: Option<u64>,
+    /// None means unsupported/unavailable, not a confirmed Agent exit.
+    #[serde(default)]
+    pub agent_detection: Option<AgentDetection>,
     pub cwd: Option<String>,
     pub shell: Option<String>,
     #[serde(default)]
@@ -338,6 +362,10 @@ pub enum DaemonFrame {
     /// 主动推送：CLI hook 上报（daemon 稳定端口收到后转发；无客户端时缓存补发）。
     HookReport {
         payload: serde_json::Value,
+    },
+    AgentChanged {
+        session_id: String,
+        detection: AgentDetection,
     },
     SshAgentHookGap {
         host_id: String,
@@ -522,6 +550,7 @@ const DAEMON_FRAME_TYPES: &[&str] = &[
     "output",
     "exit",
     "hook_report",
+    "agent_changed",
     "ssh_agent_hook_gap",
     "checkpoint_accepted",
     "checkpoint_rejected",

@@ -1,3 +1,4 @@
+import { runtimeAgentTool } from "../lib/terminalAgent";
 import { Suspense, lazy, memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useShallow } from "zustand/shallow";
@@ -366,8 +367,8 @@ function buildTerminalTabHoverInfo(session: TerminalSession, project?: Project):
     : undefined;
   return {
     name: session.title.trim() || "Terminal",
-    cli: formatCliToolLabel(project?.cli_tool),
-    cliVendor: inferVendor(project?.cli_tool) ?? inferSessionVendor(session),
+    cli: formatCliToolLabel(runtimeAgentTool(session) === undefined ? project?.cli_tool : runtimeAgentTool(session)),
+    cliVendor: inferSessionVendor(session, project),
     shell: session.environmentType === "ssh" ? "SSH" : formatShellLabel(session.shell ?? project?.shell),
     project: project?.name.trim() || "\u672a\u7ed1\u5b9a\u9879\u76ee",
     path: session.remotePath?.trim() || session.cwd?.trim() || project?.remote_path.trim() || project?.path.trim() || "-",
@@ -440,12 +441,15 @@ function resolveHistorySourceFilter(cliTool: string | null | undefined): History
 }
 
 // 终端 Tab 厂商图标：从启动命令 + 标题推断（未配自定义启动命令时 startupCmd 即为 cli_tool）
-function inferSessionVendor(session: TerminalSession): VendorKey | null {
-  return inferVendor(`${session.startupCmd ?? ""} ${session.title}`);
+function inferSessionVendor(session: TerminalSession, project?: Project): VendorKey | null {
+  const live = runtimeAgentTool(session);
+  return live !== undefined ? inferVendor(live) : inferVendor(project?.cli_tool) ?? inferVendor(`${session.startupCmd ?? ""} ${session.title}`);
 }
 
 // 无厂商归属的 CLI 工具（OpenCode / Pi / Amp 等）回退到 CLI 工具图标
 function inferSessionCliToolIcon(session: TerminalSession, project?: Project): CliToolIconKey | null {
+  const live = runtimeAgentTool(session);
+  if (live !== undefined) return resolveCliToolIconKey(live);
   return (
     resolveCliToolIconKey(project?.cli_tool)
     ?? resolveCliToolIconKey(session.startupCmd)
@@ -1528,7 +1532,7 @@ function PaneTabBar({
               isActive={session.id === activeSessionId}
               isEditing={editingSessionId === session.id}
               notification={tabNotifications[session.id] ?? "none"}
-              vendor={inferVendor(projectById.get(session.projectId!)?.cli_tool) ?? inferSessionVendor(session)}
+              vendor={inferSessionVendor(session, projectById.get(session.projectId!))}
               cliToolIcon={inferSessionCliToolIcon(session, projectById.get(session.projectId!))}
               worktree={session.worktreeId ? worktreeById.get(session.worktreeId) ?? null : null}
               worktreeMenuContent={session.worktreeId && worktreeById.get(session.worktreeId) && session.projectId && projectById.get(session.projectId) ? (closeMenu) => {
@@ -2729,7 +2733,7 @@ export function TerminalTabs({
       singleSession,
       title: workspan.customTitle ?? singleSession?.title ?? t("terminal.workspan.title", { count: memberSessions.length }),
       notification: getWorkspanNotification(sessionIds, tabNotifications),
-      vendor: singleSession ? (inferVendor(projectById.get(singleSession.projectId!)?.cli_tool) ?? inferSessionVendor(singleSession)) : null,
+      vendor: singleSession ? (inferSessionVendor(singleSession, projectById.get(singleSession.projectId!))) : null,
       cliToolIcon: singleSession
         ? inferSessionCliToolIcon(singleSession, projectById.get(singleSession.projectId!))
         : null,

@@ -7,9 +7,9 @@
 use super::discovery::{remove_daemon_info, write_daemon_info_exclusive, DaemonInfo};
 use super::protocol::{
     decode_binary_terminal_frame, decode_client_frame, encode_binary_terminal_frame, encode_frame,
-    supported_features, ClientFrame, DaemonFrame, ProcessTraits, ProtocolError, ReplayEntry,
-    SessionMeta, SessionStatusInfo, BINARY_KIND_CHECKPOINT, BINARY_KIND_INPUT, BINARY_KIND_OUTPUT,
-    BINARY_KIND_REPLAY, BINARY_KIND_REPLAY_RESET, BINARY_PROTOCOL_VERSION,
+    supported_features, AgentDetection, ClientFrame, DaemonFrame, ProcessTraits, ProtocolError,
+    ReplayEntry, SessionMeta, SessionStatusInfo, BINARY_KIND_CHECKPOINT, BINARY_KIND_INPUT,
+    BINARY_KIND_OUTPUT, BINARY_KIND_REPLAY, BINARY_KIND_REPLAY_RESET, BINARY_PROTOCOL_VERSION,
     CONTROL_PROTOCOL_VERSION, MAX_FRAME_BYTES,
 };
 use super::ssh_agent_bridge::SshAgentBridgeManager;
@@ -697,6 +697,7 @@ pub struct DaemonHost {
     hook_sink: Mutex<Option<HookPayloadSink>>,
     ssh_agent_bridges: SshAgentBridgeManager,
     spool_dir: PathBuf,
+    agent_tracker: Mutex<super::agent_tracker::AgentTracker>,
 }
 
 impl DaemonHost {
@@ -720,6 +721,7 @@ impl DaemonHost {
             hook_sink: Mutex::new(None),
             ssh_agent_bridges: SshAgentBridgeManager::default(),
             spool_dir,
+            agent_tracker: Mutex::new(super::agent_tracker::AgentTracker::default()),
         }
     }
 
@@ -835,6 +837,7 @@ impl DaemonHost {
                     session_id: session_id.to_string(),
                     root_pid: None,
                     root_started_at: None,
+                    agent_detection: None,
                     cwd,
                     shell,
                     environment_type: ssh_launch.map(|_| "ssh".to_string()),
@@ -921,6 +924,107 @@ impl DaemonHost {
         }
     }
 
+    fn refresh_agents(&self) {
+        let Ok(mut tracker) = self.agent_tracker.lock() else {
+            return;
+        };
+        if !tracker.refresh() {
+            return;
+        }
+        let sessions = self
+            .sessions
+            .lock()
+            .map(|sessions| sessions.values().cloned().collect::<Vec<_>>())
+            .unwrap_or_default();
+        let mut changes = Vec::new();
+        for session in sessions {
+            let Ok(mut entry) = session.lock() else {
+                continue;
+            };
+            if !entry.meta.alive {
+                continue;
+            }
+            let Some(agent) = tracker.discover(&entry.meta, std::process::id(), now_ms()) else {
+                continue;
+            };
+            let previous = entry
+                .meta
+                .agent_detection
+                .as_ref()
+                .and_then(|d| d.agent.as_ref());
+            if entry.meta.agent_detection.is_some()
+                && previous.map(|a| &a.run_id) == agent.as_ref().map(|a| &a.run_id)
+            {
+                continue;
+            }
+            let detection = AgentDetection {
+                agent,
+                updated_at_ms: now_ms(),
+            };
+            entry.meta.agent_detection = Some(detection.clone());
+            entry.meta.task_status = None;
+            entry.meta.task_updated_at_ms = None;
+            changes.push(DaemonFrame::AgentChanged {
+                session_id: entry.meta.session_id.clone(),
+                detection,
+            });
+        }
+        if let Ok(clients) = self.clients.lock() {
+            for frame in changes {
+                for client in clients.values() {
+                    let _ = client.writer.send_frame(&frame);
+                }
+            }
+        }
+    }
+
+    /// Correlate Hooks to the live process incarnation before notifying any consumer.
+    fn correlate_agent_hook(&self, payload: &mut serde_json::Value) -> bool {
+        if payload.get("environmentType").and_then(|v| v.as_str()) == Some("ssh")
+            || payload
+                .get("wslDistroName")
+                .and_then(|v| v.as_str())
+                .is_some()
+        {
+            return true;
+        }
+        let Some(session_id) = payload.get("tabId").and_then(|v| v.as_str()) else {
+            return true;
+        };
+        let Some(session) = self.get_session(session_id) else {
+            return true;
+        };
+        // Hook helpers wait for this response, so their ancestry remains observable.
+        self.refresh_agents();
+        let Ok(tracker) = self.agent_tracker.lock() else {
+            return false;
+        };
+        let Ok(entry) = session.lock() else {
+            return false;
+        };
+        if !entry.meta.alive {
+            return false;
+        }
+        let Some(detection) = entry.meta.agent_detection.as_ref() else {
+            return true;
+        };
+        let Some(agent) = detection.agent.clone() else {
+            return false;
+        };
+        if payload.get("source").and_then(|v| v.as_str()) != Some(agent.tool.as_str()) {
+            return false;
+        }
+        if let Some(pid) = payload.get("hookProcessId").and_then(|v| v.as_u64()) {
+            if !tracker.belongs_to(pid as u32, agent.pid) {
+                return false;
+            }
+        }
+        payload["agentRunId"] = serde_json::json!(agent.run_id);
+        // WebSocket metadata and the Tauri Hook relay can arrive in either order.
+        payload["agentDetection"] = serde_json::json!(detection);
+        true
+    }
+
     fn update_task_status_from_hook(&self, payload: &serde_json::Value) {
         let Some(session_id) = payload
             .get("tabId")
@@ -932,12 +1036,44 @@ impl DaemonHost {
         let Some(event) = payload.get("event").and_then(|value| value.as_str()) else {
             return;
         };
-        let Some(task_status) = map_hook_event_to_task_status(event) else {
-            return;
-        };
+        let task_status = map_hook_event_to_task_status(event);
         let updated_at_ms = now_ms();
         if let Some(session) = self.get_session(session_id) {
             if let Ok(mut entry) = session.lock() {
+                if let Some(run_id) = payload.get("agentRunId").and_then(|v| v.as_str()) {
+                    if entry
+                        .meta
+                        .agent_detection
+                        .as_ref()
+                        .and_then(|d| d.agent.as_ref())
+                        .map(|a| a.run_id.as_str())
+                        != Some(run_id)
+                    {
+                        return;
+                    }
+                }
+                if let Some(id) = payload
+                    .get("sessionId")
+                    .and_then(|v| v.as_str())
+                    .filter(|id| !id.trim().is_empty())
+                {
+                    if let Some(agent) = entry
+                        .meta
+                        .agent_detection
+                        .as_mut()
+                        .and_then(|d| d.agent.as_mut())
+                    {
+                        if agent.cli_session_id.as_deref() != Some(id) {
+                            agent.cli_session_id = Some(id.to_string());
+                            if let Some(detection) = entry.meta.agent_detection.as_mut() {
+                                detection.updated_at_ms = updated_at_ms;
+                            }
+                        }
+                    }
+                }
+                let Some(task_status) = task_status else {
+                    return;
+                };
                 entry.meta.task_status = Some(task_status.to_string());
                 entry.meta.task_updated_at_ms = Some(updated_at_ms);
                 log::debug!(
@@ -1350,6 +1486,10 @@ fn emit_daemon_status(host: &DaemonHost, session_id: &str, status: PtyProcessSta
     if let Some(session) = host.get_session(session_id) {
         if let Ok(mut entry) = session.lock() {
             entry.meta.alive = false;
+            entry.meta.agent_detection = Some(AgentDetection {
+                agent: None,
+                updated_at_ms: now_ms(),
+            });
             if !matches!(entry.meta.task_status.as_deref(), Some("done" | "failed")) {
                 entry.meta.task_status = Some(if status.status == "error" {
                     "failed".to_string()
@@ -1532,6 +1672,12 @@ impl DaemonServer {
         let hook_host = Arc::clone(&server.host);
         let dispatcher = DispatcherHandle::start("daemon");
         let hook_sink: HookPayloadSink = Arc::new(move |payload| {
+            let Ok(mut value) = serde_json::to_value(&payload) else {
+                return;
+            };
+            if !hook_host.correlate_agent_hook(&mut value) {
+                return;
+            }
             // 仅当没有已连接的前端客户端时（app 已彻底退到后台，例如托盘退出后
             // 转入后台继续执行）才拉起 app 处理审批或回答。app 正在运行时，事件会通过
             // 下方 broadcast_hook 送达前端，由前端决定是否通知/切换，绝不在此
@@ -1541,18 +1687,20 @@ impl DaemonServer {
                 maybe_activate_app_for_hook(&payload);
             }
             dispatcher.try_enqueue(payload.to_notification_job());
-            match serde_json::to_value(&payload) {
-                Ok(value) => {
-                    hook_host.update_task_status_from_hook(&value);
-                    hook_host.broadcast_hook(value);
-                }
-                Err(err) => log::warn!("daemon hook payload serialize failed: {err}"),
-            }
+            hook_host.update_task_status_from_hook(&value);
+            hook_host.broadcast_hook(value);
         });
         server.host.set_hook_sink(Arc::clone(&hook_sink));
         spawn_hook_listener(hook_listener, token, hook_sink);
 
         server.spawn_idle_watchdog();
+        let agent_host = Arc::clone(&server.host);
+        std::thread::spawn(move || loop {
+            if agent_host.alive_session_count() > 0 {
+                agent_host.refresh_agents();
+            }
+            std::thread::sleep(Duration::from_secs(1));
+        });
 
         let websocket_server = Arc::clone(&server);
         std::thread::spawn(move || {
@@ -2376,6 +2524,7 @@ mod tests {
                 session_id: session_id.to_string(),
                 root_pid: None,
                 root_started_at: None,
+                agent_detection: None,
                 cwd: None,
                 shell: None,
                 environment_type: None,
@@ -2927,5 +3076,140 @@ mod tests {
         assert_eq!(map_hook_event_to_task_status("Stop"), Some("done"));
         assert_eq!(map_hook_event_to_task_status("StopFailure"), Some("failed"));
         assert_eq!(map_hook_event_to_task_status("SessionStart"), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn foreground_agent_discovery_follows_real_ptys_without_ui_or_hooks() {
+        struct Cleanup(Arc<DaemonHost>, PathBuf);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                let _ = self.0.pty.close_all();
+                let _ = std::fs::remove_dir_all(&self.1);
+            }
+        }
+        let host = Arc::new(DaemonHost::new());
+        let dir =
+            std::env::temp_dir().join(format!("cli-manager-discovery-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let _cleanup = Cleanup(host.clone(), dir.clone());
+        // Harmless foreground binaries: no network calls or AI requests.
+        for name in ["codex", "claude"] {
+            let path = if name == "claude" {
+                dir.join(".local/share/claude/versions/2.1.278")
+            } else {
+                dir.join(name)
+            };
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::copy("/bin/cat", &path).unwrap();
+            #[cfg(target_os = "macos")]
+            assert!(Command::new("/usr/bin/codesign")
+                .args(["--force", "--sign", "-"])
+                .arg(&path)
+                .output()
+                .unwrap()
+                .status
+                .success());
+            if name == "claude" {
+                std::os::unix::fs::symlink(&path, dir.join(name)).unwrap();
+            }
+        }
+        for id in ["one", "two"] {
+            host.reserve_session(id, Some(dir.to_string_lossy().into()), Some("bash".into()))
+                .unwrap();
+            let sink = Arc::new(DaemonPtyEventSink::new(host.clone(), id.to_string()));
+            let traits = host
+                .pty
+                .create(id, dir.to_str(), None, Some("bash"), sink)
+                .unwrap();
+            let session = host.get_session(id).unwrap();
+            let mut entry = session.lock().unwrap();
+            entry.meta.root_pid = Some(traits.root_pid);
+            entry.meta.root_started_at = traits.root_started_at;
+        }
+        let wait = |id: &str, tool: Option<&str>| {
+            let deadline = Instant::now() + Duration::from_secs(8);
+            loop {
+                host.refresh_agents();
+                let meta = host.get_session(id).unwrap().lock().unwrap().meta.clone();
+                if let Some(detection) = &meta.agent_detection {
+                    if detection.agent.as_ref().map(|a| a.tool.as_str()) == tool {
+                        return meta;
+                    }
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "expected {tool:?} in {id}, got {:?}",
+                    meta.agent_detection
+                );
+                std::thread::sleep(Duration::from_millis(60));
+            }
+        };
+        wait("one", None);
+        host.pty
+            .write("one", &format!("{}/codex\r", dir.display()))
+            .unwrap();
+        let first = wait("one", Some("codex"));
+        let first_id = first.agent_detection.unwrap().agent.unwrap().run_id;
+        assert!(
+            first.task_status.is_none(),
+            "process presence must not claim a running turn"
+        );
+        wait("two", None);
+        let mut hook = serde_json::json!({"tabId":"one", "source":"codex", "event":"Stop", "hookProcessId":std::process::id()});
+        assert!(
+            !host.correlate_agent_hook(&mut hook),
+            "unrelated process must not impersonate the Agent"
+        );
+        hook.as_object_mut().unwrap().remove("hookProcessId");
+        assert!(
+            host.correlate_agent_hook(&mut hook),
+            "live metadata: {:?}",
+            host.get_session("one").unwrap().lock().unwrap().meta
+        );
+        assert_eq!(hook["agentRunId"], first_id);
+        host.update_task_status_from_hook(&hook);
+        host.refresh_agents();
+        assert_eq!(
+            host.get_session("one")
+                .unwrap()
+                .lock()
+                .unwrap()
+                .meta
+                .task_status
+                .as_deref(),
+            Some("done")
+        );
+        host.pty.write("one", "\u{1a}").unwrap(); // suspend to shell
+        wait("one", None);
+        assert!(
+            !host.correlate_agent_hook(&mut hook),
+            "old Hook must not revive a suspended Agent"
+        );
+        host.pty.write("one", "fg\r").unwrap();
+        wait("one", Some("codex"));
+        host.pty.write("one", "\u{4}").unwrap();
+        wait("one", None);
+        host.pty
+            .write("one", &format!("{}/claude\r", dir.display()))
+            .unwrap();
+        let switched = wait("one", Some("claude"));
+        assert_ne!(
+            switched.agent_detection.unwrap().agent.unwrap().run_id,
+            first_id
+        );
+        assert!(
+            !host.correlate_agent_hook(&mut hook),
+            "late Codex Hook must not bind to Claude"
+        );
+        wait("two", None);
+        host.pty
+            .write("two", &format!("exec {}/codex\r", dir.display()))
+            .unwrap();
+        let replaced_shell = wait("two", Some("codex"));
+        assert_eq!(
+            replaced_shell.root_pid,
+            replaced_shell.agent_detection.unwrap().agent.map(|a| a.pid)
+        );
     }
 }

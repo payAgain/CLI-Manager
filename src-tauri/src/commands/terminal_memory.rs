@@ -1,4 +1,5 @@
 //! Read-only working-set accounting for this app and its daemon-owned PTYs.
+use crate::daemon::agent_recognition::executable_stem;
 use crate::daemon::{client::DaemonBridge, protocol::SessionMeta};
 use serde::Serialize;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -72,69 +73,8 @@ fn belongs_to(pid: u32, root: u32, processes: &HashMap<u32, &ProcessSample>) -> 
     false
 }
 
-fn executable_stem(value: &str) -> String {
-    value
-        .rsplit(['/', '\\'])
-        .next()
-        .unwrap_or(value)
-        .to_ascii_lowercase()
-        .trim_end_matches(".exe")
-        .trim_end_matches(".js")
-        .trim_end_matches(".cjs")
-        .trim_end_matches(".mjs")
-        .to_string()
-}
-
-fn agent_label(value: &str) -> Option<&'static str> {
-    match value {
-        "claude" => Some("Claude"),
-        "codex" => Some("Codex"),
-        "gemini" => Some("Gemini"),
-        "pi" => Some("Pi"),
-        "grok" => Some("Grok"),
-        "opencode" => Some("OpenCode"),
-        "aider" => Some("Aider"),
-        "amp" => Some("Amp"),
-        "copilot" => Some("Copilot"),
-        "qwen" => Some("Qwen"),
-        "kimi" => Some("Kimi"),
-        _ => None,
-    }
-}
-
 fn identify_agent(process: &ProcessSample) -> Option<&'static str> {
-    let executable = executable_stem(&process.name);
-    if let Some(label) = agent_label(&executable) {
-        return Some(label);
-    }
-    // Shell command text and arbitrary directory names are not agent identities.
-    if !matches!(
-        executable.as_str(),
-        "node" | "nodejs" | "bun" | "deno" | "python" | "python3"
-    ) {
-        return None;
-    }
-    let script = process
-        .command
-        .iter()
-        .skip(1)
-        .find(|arg| !arg.starts_with('-'))?;
-    if let Some(label) = agent_label(&executable_stem(script)) {
-        return Some(label);
-    }
-    let script = script.replace('\\', "/").to_ascii_lowercase();
-    for (package, label) in [
-        ("/@anthropic-ai/claude-code/", "Claude"),
-        ("/@openai/codex/", "Codex"),
-        ("/@google/gemini-cli/", "Gemini"),
-        ("/@mariozechner/pi-coding-agent/", "Pi"),
-        ("/@vibe-kit/grok-cli/", "Grok"),
-    ] {
-        if script.contains(package) {
-            return Some(label);
-        }
-    }
-    None
+    crate::daemon::agent_recognition::identify_agent(&process.name, &process.command)
 }
 
 fn nearest_terminal(
@@ -353,6 +293,7 @@ fn sample(
         ProcessRefreshKind::nothing()
             .with_memory()
             .with_cmd(UpdateKind::Always)
+            .with_exe(UpdateKind::Always)
             .without_tasks(),
     );
     let processes: Vec<_> = identities
@@ -360,6 +301,12 @@ fn sample(
         .map(|mut process| {
             if let Some(current) = system.process(Pid::from_u32(process.pid)) {
                 if current.start_time() == process.started_at {
+                    process.name = current
+                        .exe()
+                        .map(|path| path.as_os_str())
+                        .unwrap_or(current.name())
+                        .to_string_lossy()
+                        .into_owned();
                     process.memory = current.memory();
                     process.command = current
                         .cmd()

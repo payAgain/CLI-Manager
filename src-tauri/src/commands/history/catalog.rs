@@ -12,7 +12,7 @@ use tauri::{AppHandle, Emitter};
 use tokio::sync::Mutex as AsyncMutex;
 
 const CATALOG_DB_FILE: &str = "history-catalog.db";
-const CATALOG_PARSER_VERSION: i64 = 1;
+const CATALOG_PARSER_VERSION: i64 = 2;
 const HISTORY_INDEX_SCHEMA_VERSION: i64 = 5;
 const HISTORY_INDEX_MODEL_VERSION: i64 = 1;
 const CATALOG_REFRESH_TTL_MS: i64 = 10_000;
@@ -48,6 +48,24 @@ struct V2LegacySessionRow {
     file_ref: SessionFileRef,
     fingerprint: SessionFileFingerprint,
     session_id: String,
+    title: String,
+}
+
+struct CachedCatalogFile {
+    source: String,
+    fingerprint: SessionFileFingerprint,
+    parser_version: i64,
+    session_id: String,
+    title: String,
+}
+
+fn catalog_file_reusable(cached: &CachedCatalogFile, file: &CatalogFile) -> bool {
+    cached.source == file.file_ref.source
+        && cached.fingerprint == file.fingerprint
+        && cached.parser_version == CATALOG_PARSER_VERSION
+        && (cached.source != "codex"
+            || codex_titles::saved_title(&file.file_ref.path, &cached.session_id)
+                .map_or(true, |title| title == cached.title))
 }
 
 fn catalog_refresh_lock() -> &'static AsyncMutex<()> {
@@ -2823,7 +2841,7 @@ async fn legacy_sessions_for_v2(
     source_id: &str,
 ) -> Result<Vec<V2LegacySessionRow>, String> {
     let rows = sqlx::query(
-        "SELECT file_path, source, project_key, session_id,
+        "SELECT file_path, source, project_key, session_id, title,
                 file_created_at, file_updated_at, file_size
          FROM history_catalog_sessions
          WHERE roots_key = ?1 AND source = ?2
@@ -2857,6 +2875,7 @@ async fn legacy_sessions_for_v2(
                         .max(0) as u64,
                 },
                 session_id: row.try_get("session_id").map_err(|err| err.to_string())?,
+                title: row.try_get("title").map_err(|err| err.to_string())?,
             })
         })
         .collect()
@@ -2865,9 +2884,9 @@ async fn legacy_sessions_for_v2(
 async fn existing_v2_session_fingerprints(
     conn: &mut SqliteConnection,
     source_instance_id: &str,
-) -> Result<HashMap<String, String>, String> {
+) -> Result<HashMap<String, (String, String)>, String> {
     let rows = sqlx::query(
-        "SELECT source_session_id, fingerprint_value
+        "SELECT source_session_id, fingerprint_value, title
          FROM history_sessions
          WHERE source_instance_id = ?1
            AND parser_version = ?2
@@ -2885,8 +2904,11 @@ async fn existing_v2_session_fingerprints(
             Ok((
                 row.try_get("source_session_id")
                     .map_err(|err| err.to_string())?,
-                row.try_get("fingerprint_value")
-                    .map_err(|err| err.to_string())?,
+                (
+                    row.try_get("fingerprint_value")
+                        .map_err(|err| err.to_string())?,
+                    row.try_get("title").map_err(|err| err.to_string())?,
+                ),
             ))
         })
         .collect()
@@ -3276,7 +3298,9 @@ async fn shadow_build_v2_for_instance(
         let fingerprint_value = v2_fingerprint_value(session.fingerprint);
         if existing
             .get(&session.session_id)
-            .is_some_and(|existing| existing == &fingerprint_value)
+            .is_some_and(|(fingerprint, title)| {
+                fingerprint == &fingerprint_value && title == &session.title
+            })
         {
             continue;
         }
@@ -3447,29 +3471,37 @@ async fn refresh_catalog(
     };
     let total_files = files.len() + opencode_documents.len();
     let rows = sqlx::query(
-        "SELECT file_path, source, file_created_at, file_updated_at, file_size, parser_version
+        "SELECT file_path, source, session_id, title, file_created_at, file_updated_at, file_size, parser_version
          FROM history_catalog_sessions WHERE roots_key = ?1",
     )
     .bind(&roots_key)
     .fetch_all(&mut conn)
     .await
     .map_err(|err| err.to_string())?;
-    let mut existing: HashMap<String, (String, i64, i64, u64, i64)> = HashMap::new();
+    let mut existing: HashMap<String, CachedCatalogFile> = HashMap::new();
     for row in rows {
         existing.insert(
             row.try_get("file_path").map_err(|err| err.to_string())?,
-            (
-                row.try_get("source").map_err(|err| err.to_string())?,
-                row.try_get("file_created_at")
+            CachedCatalogFile {
+                source: row.try_get("source").map_err(|err| err.to_string())?,
+                session_id: row.try_get("session_id").map_err(|err| err.to_string())?,
+                title: row.try_get("title").map_err(|err| err.to_string())?,
+                parser_version: row
+                    .try_get("parser_version")
                     .map_err(|err| err.to_string())?,
-                row.try_get("file_updated_at")
-                    .map_err(|err| err.to_string())?,
-                row.try_get::<i64, _>("file_size")
-                    .map_err(|err| err.to_string())?
-                    .max(0) as u64,
-                row.try_get("parser_version")
-                    .map_err(|err| err.to_string())?,
-            ),
+                fingerprint: SessionFileFingerprint {
+                    created_at: row
+                        .try_get("file_created_at")
+                        .map_err(|err| err.to_string())?,
+                    updated_at: row
+                        .try_get("file_updated_at")
+                        .map_err(|err| err.to_string())?,
+                    size: row
+                        .try_get::<i64, _>("file_size")
+                        .map_err(|err| err.to_string())?
+                        .max(0) as u64,
+                },
+            },
         );
     }
 
@@ -3484,8 +3516,9 @@ async fn refresh_catalog(
         .collect();
     for stale in existing
         .iter()
-        .filter(|(path, (source, _, _, _, _))| {
-            !current_paths.contains(*path) && !(preserve_opencode_rows && source == "opencode")
+        .filter(|(path, cached)| {
+            !current_paths.contains(*path)
+                && !(preserve_opencode_rows && cached.source == "opencode")
         })
         .map(|(path, _)| path.clone())
         .collect::<Vec<_>>()
@@ -3498,12 +3531,7 @@ async fn refresh_catalog(
         let path = file.file_ref.path.to_string_lossy().to_string();
         let reusable = existing
             .get(&path)
-            .is_some_and(|(_, created, updated, size, version)| {
-                *created == file.fingerprint.created_at
-                    && *updated == file.fingerprint.updated_at
-                    && *size == file.fingerprint.size
-                    && *version == CATALOG_PARSER_VERSION
-            });
+            .is_some_and(|cached| catalog_file_reusable(cached, &file));
         if !reusable {
             pending.push(file);
         }
@@ -3512,14 +3540,10 @@ async fn refresh_catalog(
     let mut pending_documents = Vec::new();
     for document in opencode_documents {
         let path = document.file_ref.path.to_string_lossy().to_string();
-        let reusable = existing
-            .get(&path)
-            .is_some_and(|(_, created, updated, size, version)| {
-                *created == document.fingerprint.created_at
-                    && *updated == document.fingerprint.updated_at
-                    && *size == document.fingerprint.size
-                    && *version == CATALOG_PARSER_VERSION
-            });
+        let reusable = existing.get(&path).is_some_and(|cached| {
+            cached.fingerprint == document.fingerprint
+                && cached.parser_version == CATALOG_PARSER_VERSION
+        });
         if !reusable {
             pending_documents.push(document);
         }
@@ -4920,6 +4944,44 @@ mod tests {
                 .await
                 .unwrap();
         assert!(raw_pointers_json.contains("codex-state-thread-row"));
+
+        // Renaming in Desktop changes metadata, not the rollout fingerprint.
+        let index = resolve_codex_config_root(&roots).join("session_index.jsonl");
+        std::fs::write(
+            &index,
+            "{\"id\":\"codex-session\",\"thread_name\":\"合并 UI 分支并编译\"}\n",
+        )
+        .unwrap();
+        let cached = CachedCatalogFile {
+            source: "codex".into(),
+            fingerprint,
+            parser_version: CATALOG_PARSER_VERSION,
+            session_id: "codex-session".into(),
+            title: "hello codex".into(),
+        };
+        assert!(!catalog_file_reusable(
+            &cached,
+            &CatalogFile {
+                file_ref: SessionFileRef {
+                    source: "codex".into(),
+                    project_key: "proj".into(),
+                    path: file.clone()
+                },
+                fingerprint,
+            }
+        ));
+        sqlx::query("UPDATE history_catalog_sessions SET title = '合并 UI 分支并编译' WHERE session_id = 'codex-session'").execute(&mut conn).await.unwrap();
+        shadow_build_v2(&mut conn, &roots, &roots_key, 8)
+            .await
+            .unwrap();
+        let renamed: String = sqlx::query_scalar(
+            "SELECT title FROM history_sessions WHERE source_session_id = 'codex-session'",
+        )
+        .fetch_one(&mut conn)
+        .await
+        .unwrap();
+        assert_eq!(renamed, "合并 UI 分支并编译");
+        assert!(fingerprint == session_file_fingerprint(&file));
     }
 
     #[tokio::test]
@@ -5021,6 +5083,7 @@ mod tests {
                 size: 3,
             },
             session_id: "session-1".to_string(),
+            title: "hello".to_string(),
         };
 
         record_v2_index_failure(

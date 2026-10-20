@@ -1,3 +1,4 @@
+import { acceptsAgentHook, applyAgentDetection, applyHookAgentIdentity, type AgentDetection } from "../lib/terminalAgent";
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
 import type { UnlistenFn } from "@tauri-apps/api/event";
@@ -105,6 +106,7 @@ interface DaemonSessionState {
   sshHostId?: string | null;
   remotePath?: string | null;
   createdAtMs?: number;
+  agentDetection?: AgentDetection | null;
   taskStatus?: TabNotificationState | null;
   taskUpdatedAtMs?: number | null;
 }
@@ -162,7 +164,7 @@ function formatTerminalCreateError(error: unknown): string {
     return translateCurrent("terminal.ssh.credentialMissing");
   }
   if (message.includes("pty_host_upgrade_sessions_active")) {
-    return translateCurrent("terminal.ssh.daemonUpgradeBlocked");
+    return translateCurrent("terminal.daemonUpgradeBlocked");
   }
   return message;
 }
@@ -170,6 +172,8 @@ function formatTerminalCreateError(error: unknown): string {
 export interface CliHookPayload {
   tabId: string;
   source?: CliHookSource | null;
+  agentRunId?: string | null;
+  agentDetection?: AgentDetection | null;
   event: CliHookEventName;
   title?: string | null;
   message?: string | null;
@@ -1192,7 +1196,10 @@ function applyPtyStatusToSessions(
   payload: PtyStatusPayload
 ): TerminalSession[] {
   return sessions.map((session) => (
-    session.id === sessionId ? applySshExitState(session, payload) : session
+    session.id === sessionId ? {
+      ...applySshExitState(session, payload),
+      ...(payload.status !== "running" ? { runtimeAgent: null, cliSessionId: undefined, cliReasoningEffort: undefined } : {}),
+    } : session
   ));
 }
 
@@ -1917,7 +1924,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
             : findWorktreeByPath(projectState.worktrees, session.cwd);
           return {
             id: session.id,
-            source: inferHookBindingSource(
+            source: session.runtimeAgent ? inferHookBindingSource(session.runtimeAgent.tool) : inferHookBindingSource(
               `${session.cliTool ?? ""} ${session.startupCmd ?? ""} ${session.title ?? ""} ${project?.cli_tool ?? ""}`
             ),
             paths: [session.cwd, worktree?.path, project?.path].filter((path): path is string => Boolean(path?.trim())),
@@ -1947,6 +1954,22 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
         reason: resolution.reason,
       });
     }
+    if (payload.agentDetection) receiveAgentDetection(tabId, payload.agentDetection);
+    const target = get().sessions.find((session) => session.id === tabId);
+    if (target && !acceptsAgentHook(target, payload)) return null;
+    // Hooks also establish identity when the process is in a WSL/SSH guest.
+    if (target) {
+      const next = applyHookAgentIdentity(target, payload);
+      if (next !== target) {
+        clearHookRunningTimeout(tabId);
+        set((state) => ({
+          sessions: state.sessions.map((session) => session.id === tabId ? next : session),
+          tabStatuses: { ...state.tabStatuses, [tabId]: {} },
+          tabNotifications: { ...state.tabNotifications, [tabId]: "none" },
+          tabStatusDetails: { ...state.tabStatusDetails, [tabId]: { status: "none", updatedAt: null } },
+        }));
+      }
+    }
     const cliSessionId = payload.sessionId?.trim();
     const remoteTranscriptRef = payload.environmentType === "ssh" ? payload.remoteTranscriptRef?.trim() : undefined;
     const cliReasoningEffort = payload.reasoningEffort?.trim();
@@ -1962,6 +1985,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
           return {
             ...session,
             ...(cliSessionRebind.changed ? { cliSessionId: cliSessionRebind.cliSessionId } : {}),
+            runtimeAgentObservedAtMs: Math.max(session.runtimeAgentObservedAtMs ?? 0, Date.now()),
             ...(remoteTranscriptRef && session.remoteTranscriptRef !== remoteTranscriptRef
               ? { remoteTranscriptRef }
               : {}),
@@ -2618,7 +2642,11 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
               // 仅保留给 Tab 厂商识别；daemon attach 不会重新执行该命令。
               startupCmd: ps.startupCmd,
               ...getRestoredAgentTerminalMetadata(ps, attachedMeta.projectId),
-              cliSessionId: ps.cliSessionId,
+              cliSessionId: daemonSession.agentDetection ? daemonSession.agentDetection.agent?.cliSessionId ?? undefined : ps.cliSessionId,
+              ...(daemonSession.agentDetection ? {
+                runtimeAgent: daemonSession.agentDetection.agent ? { ...daemonSession.agentDetection.agent, source: "process" as const } : null,
+                runtimeAgentObservedAtMs: daemonSession.agentDetection.updatedAtMs,
+              } : {}),
               remoteHistoryConsumerId: ps.remoteHistoryConsumerId,
               remoteHistorySourceInstanceId: ps.remoteHistorySourceInstanceId,
               deferStartupUntilInitialOutput: false,
@@ -2892,7 +2920,11 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
       // 元数据用于 Tab 厂商识别；daemon attach 不会重新执行该命令。
       startupCmd: persisted?.startupCmd,
       ...getRestoredAgentTerminalMetadata(persisted, attachedMeta.projectId),
-      cliSessionId: persisted?.cliSessionId,
+      cliSessionId: daemonSession.agentDetection ? daemonSession.agentDetection.agent?.cliSessionId ?? undefined : persisted?.cliSessionId,
+      ...(daemonSession.agentDetection ? {
+        runtimeAgent: daemonSession.agentDetection.agent ? { ...daemonSession.agentDetection.agent, source: "process" as const } : null,
+        runtimeAgentObservedAtMs: daemonSession.agentDetection.updatedAtMs,
+      } : {}),
       remoteHistoryConsumerId: persisted?.remoteHistoryConsumerId,
       remoteHistorySourceInstanceId: persisted?.remoteHistorySourceInstanceId,
       deferStartupUntilInitialOutput: false,
@@ -3581,3 +3613,43 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
 }));
 
 startPtyOrphanReconcileHeartbeat();
+
+// One subscription for every PTY, including hidden panes and Workspans.
+function receiveAgentDetection(sessionId: string, detection: AgentDetection): void {
+  const state = useTerminalStore.getState();
+  const session = state.sessions.find((item) => item.id === sessionId);
+  if (!session || (session.kind ?? "pty") !== "pty") return;
+  const next = applyAgentDetection(session, detection);
+  if (next === session) return;
+  const sameRun = session.runtimeAgent?.runId === next.runtimeAgent?.runId
+    || (session.runtimeAgent?.source === "hook" && session.runtimeAgent.tool === next.runtimeAgent?.tool
+      && session.cliSessionId === next.cliSessionId);
+  if (sameRun) {
+    useTerminalStore.setState({ sessions: state.sessions.map((item) => item.id === sessionId ? next : item), statsPanelRefreshSeq: state.statsPanelRefreshSeq + 1 });
+    void queueSshSessionPersistence(useTerminalStore.getState().sessions).catch((error) => {
+      logWarn("Failed to persist Agent session snapshot", { sessionId, error });
+    });
+    return;
+  }
+  clearHookRunningTimeout(sessionId);
+  useTerminalStore.setState({
+    sessions: state.sessions.map((item) => item.id === sessionId ? next : item),
+    tabStatuses: { ...state.tabStatuses, [sessionId]: {} },
+    tabNotifications: { ...state.tabNotifications, [sessionId]: "none" },
+    tabStatusDetails: { ...state.tabStatusDetails, [sessionId]: { status: "none", updatedAt: null } },
+    statsPanelRefreshSeq: state.statsPanelRefreshSeq + 1,
+  });
+  void queueSshSessionPersistence(useTerminalStore.getState().sessions).catch((error) => {
+    logWarn("Failed to persist Agent identity reset", { sessionId, error });
+  });
+}
+terminalProcessManager.subscribeAgentDetection(receiveAgentDetection);
+useTerminalStore.subscribe((state, previous) => {
+  if (state.sessions === previous.sessions) return;
+  const previousIds = new Set(previous.sessions.map((session) => session.id));
+  for (const session of state.sessions) {
+    if (previousIds.has(session.id)) continue;
+    const detection = terminalProcessManager.getAgentDetection(session.id);
+    if (detection) receiveAgentDetection(session.id, detection);
+  }
+});

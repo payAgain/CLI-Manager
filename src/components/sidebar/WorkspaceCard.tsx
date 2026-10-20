@@ -1,3 +1,5 @@
+import { CliToolIcon } from "../CliToolIcon";
+import { resolveCliToolIconKey } from "../../lib/cliTools";
 import type { MouseEvent } from "react";
 import { AlertTriangle, MoreHorizontal, Play, Terminal } from "../icons";
 import { useTerminalStore } from "../../stores/terminalStore";
@@ -52,7 +54,10 @@ export function WorkspaceCard({ project, worktree, name, branch, selected, prima
           data-active={session.id === activeId} data-notification={notifications[session.id] ?? "none"}
           onDoubleClick={(e) => e.stopPropagation()}
           onClick={(e) => { e.stopPropagation(); onSelect(e); setActive(session.id); }} title={session.title}>
-          <Terminal size={11} /><span>{session.title}</span>
+          {session.runtimeAgent && resolveCliToolIconKey(session.runtimeAgent.tool)
+            ? <CliToolIcon icon={resolveCliToolIconKey(session.runtimeAgent.tool)!} size={11} />
+            : <Terminal size={11} />}
+          <span>{session.runtimeAgent ? `${session.runtimeAgent.tool} · ${session.title}` : session.title}</span>
           {notifications[session.id] && notifications[session.id] !== "none" && <span className="ui-workspace-session-state" />}
         </button>)}
       </div>}

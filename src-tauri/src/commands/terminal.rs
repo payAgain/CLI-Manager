@@ -1,5 +1,7 @@
 use crate::daemon::client::{DaemonBridge, DaemonClient};
-use crate::daemon::protocol::{ClientFrame, SessionMeta, FEATURE_WS_BINARY_OUTPUT};
+use crate::daemon::protocol::{
+    ClientFrame, SessionMeta, FEATURE_AGENT_DISCOVERY, FEATURE_WS_BINARY_OUTPUT,
+};
 use crate::pty::manager::{PtyOrphanCleanupSummary, PtyProcessStatus};
 use crate::ssh_launch::SshLaunchPlan;
 use log::{debug, warn};
@@ -31,6 +33,9 @@ fn daemon_contract_is_current(version: &str, features: &[String]) -> bool {
         && features
             .iter()
             .any(|feature| feature == FEATURE_WS_BINARY_OUTPUT)
+        && features
+            .iter()
+            .any(|feature| feature == FEATURE_AGENT_DISCOVERY)
 }
 
 fn daemon_is_current(client: &DaemonClient) -> bool {
@@ -118,7 +123,7 @@ pub async fn pty_prepare_create(
         .await
         .ok_or_else(|| "PtyHost daemon unavailable".to_string())?;
     let mut daemon_restarted = false;
-    if ssh_launch.is_some() && !daemon_is_current(&daemon_client) {
+    if !daemon_is_current(&daemon_client) {
         let stale_version = daemon_client.info().version.clone();
         match upgrade_daemon_if_idle(&app_handle, &daemon_bridge, daemon_client).await? {
             Some((replacement, restarted)) => {
@@ -127,7 +132,7 @@ pub async fn pty_prepare_create(
             }
             None => {
                 warn!(
-                    "SSH launch blocked by active sessions on stale daemon: daemon_version={}, app_version={}",
+                    "PTY launch blocked by active sessions on stale daemon: daemon_version={}, app_version={}",
                     stale_version,
                     env!("CARGO_PKG_VERSION")
                 );
@@ -339,12 +344,19 @@ mod tests {
 
     #[test]
     fn daemon_contract_requires_matching_version_and_binary_transport() {
-        let features = vec![FEATURE_WS_BINARY_OUTPUT.to_string()];
+        let features = vec![
+            FEATURE_WS_BINARY_OUTPUT.to_string(),
+            super::FEATURE_AGENT_DISCOVERY.to_string(),
+        ];
         assert!(daemon_contract_is_current(
             env!("CARGO_PKG_VERSION"),
             &features
         ));
         assert!(!daemon_contract_is_current("0.0.0", &features));
+        assert!(!daemon_contract_is_current(
+            env!("CARGO_PKG_VERSION"),
+            &[FEATURE_WS_BINARY_OUTPUT.to_string()]
+        ));
         assert!(!daemon_contract_is_current(env!("CARGO_PKG_VERSION"), &[]));
     }
 }

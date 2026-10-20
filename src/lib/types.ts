@@ -1,3 +1,4 @@
+import type { RuntimeAgent } from "./terminalAgent";
 import type { HistorySourceId } from "./historySources";
 
 export interface Group {
@@ -404,6 +405,9 @@ export interface TerminalSession {
   startupCmd?: string;
   /** 创建终端时根据项目 CLI 工具固化的分类；缺省表示旧会话，需要从项目配置兼容推导。 */
   isAgentSession?: boolean;
+  /** Live daemon/Hook evidence, never a launch command or persisted configuration. */
+  runtimeAgent?: RuntimeAgent | null;
+  runtimeAgentObservedAtMs?: number;
   /** 创建 Agent 终端时固化的 CLI 工具，用于在项目配置变更后保持会话语义稳定。 */
   cliTool?: string;
   environmentType?: ProjectEnvironmentType;

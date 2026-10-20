@@ -5,6 +5,8 @@
 //! - 仅监听 127.0.0.1，首帧 token 鉴权，NDJSON 帧；
 //! - 无会话且无客户端 10 分钟自灭，物理防孤儿（Job Object / 进程组）。
 
+pub(crate) mod agent_recognition;
+mod agent_tracker;
 pub mod client;
 pub mod discovery;
 pub mod protocol;
