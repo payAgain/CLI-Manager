@@ -447,3 +447,32 @@
 .ui-workspace-topbar .ui-cpu-indicator { width: 25px; height: 26px; }
 
 .ui-sidebar-shell:has(.ui-sidebar-header[data-collapsed="true"]) .ui-sidebar-brandbar[data-macos="true"] { padding-left: 0; }
+
+/* Docked tools share the desktop hierarchy, including independent panel skins. */
+.ui-terminal-side-panel-tab {
+  position: relative;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--term-panel-dim, var(--text-muted));
+  cursor: pointer;
+}
+.ui-terminal-side-panel-tab:hover:not(:disabled) { color: var(--term-panel-fg); background: var(--term-panel-card-inner); }
+.ui-terminal-side-panel-tab[aria-pressed="true"] { color: var(--term-panel-fg); }
+.ui-terminal-side-panel-tab[aria-pressed="true"]::after {
+  position: absolute;
+  right: 6px;
+  bottom: 0;
+  left: 6px;
+  height: 1px;
+  background: currentColor;
+  content: "";
+}
+.ui-terminal-side-panel-tab:disabled { opacity: 0.45; cursor: default; }
+.ui-terminal-panel-action { cursor: pointer; }
+.ui-terminal-panel-actions .ui-terminal-panel-action,
+.ui-terminal-panel-actions .ui-icon-action { min-width: 22px; min-height: 24px; height: 24px; }
+.ui-terminal-panel-actions .ui-icon-action { width: 24px; border-radius: 4px; }
+.ui-terminal-panel-action:hover:not(:disabled) { background-color: var(--term-panel-card-inner); }
+.ui-stats-section { flex-shrink: 0; }
+.ui-stats-section > :first-child { min-height: 18px; }

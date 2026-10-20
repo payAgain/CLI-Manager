@@ -4055,12 +4055,7 @@
 }
 
 .ui-terminal-panel-header {
-  background:
-    linear-gradient(
-      180deg,
-      color-mix(in srgb, var(--terminal-theme-background, #0c0e10) 72%, var(--terminal-theme-foreground, #f8fafc) 12%) 0%,
-      color-mix(in srgb, var(--terminal-theme-background, #0c0e10) 88%, black 12%) 100%
-    );
+  background: var(--term-panel-bg, var(--surface-container-low));
 }
 
 .ui-workspan-tabbar {
@@ -4194,8 +4189,7 @@
     none;
 }
 
-.ui-terminal-well[data-terminal-theme-tone="light"] .ui-terminal-chrome,
-.ui-terminal-well[data-terminal-theme-tone="light"] .ui-terminal-panel-header {
+.ui-terminal-well[data-terminal-theme-tone="light"] .ui-terminal-chrome {
   background:
     linear-gradient(
       180deg,
@@ -7238,13 +7232,13 @@
 }
 
 .ui-file-tree-row:hover {
-  background-color: color-mix(in srgb, var(--term-panel-cyan, #5AC8E0) 13%, transparent);
+  background-color: var(--interactive-hover-bg);
 }
 
 .ui-file-tree-row[data-selected="true"] {
-  background-color: color-mix(in srgb, var(--term-panel-cyan, #5AC8E0) 26%, transparent);
+  background-color: color-mix(in srgb, var(--term-panel-fg, var(--on-surface)) 8%, transparent);
   color: var(--term-panel-fg, #ececec);
-  box-shadow: inset 2px 0 0 var(--term-panel-cyan, #5AC8E0);
+  box-shadow: none;
 }
 
 .ui-file-drag-preview {
@@ -7279,15 +7273,16 @@
 }
 
 .ui-file-explorer-sidebar .ui-icon-action {
-  border-color: color-mix(in srgb, var(--on-surface) 10%, transparent);
-  background-color: color-mix(in srgb, var(--on-surface) 7%, transparent);
-  color: color-mix(in srgb, var(--on-surface) 76%, var(--text-muted) 24%);
+  border-color: transparent;
+  background: transparent;
+  color: var(--text-muted);
+  box-shadow: none;
 }
 
 .ui-file-explorer-sidebar .ui-icon-action:hover:not(:disabled),
 .ui-file-explorer-sidebar .ui-icon-action:focus-visible {
-  border-color: color-mix(in srgb, var(--primary) 24%, transparent);
-  background-color: color-mix(in srgb, var(--primary) 12%, transparent);
+  border-color: transparent;
+  background-color: var(--interactive-hover-bg);
   color: var(--on-surface);
   box-shadow: none;
 }

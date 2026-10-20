@@ -53,7 +53,7 @@ const SIDE_PANEL_SKIN_OPTIONS: {
     value: "terminal",
     labelKey: "settings.sidebar.skin.terminal.label",
     descriptionKey: "settings.sidebar.skin.terminal.description",
-    swatches: ["#0a0a0a", "#ececec", "#5ac8e0"],
+    swatches: ["#1c1c1f", "#e8e8e9", "#93939d"],
   },
   {
     value: "classic-terminal",

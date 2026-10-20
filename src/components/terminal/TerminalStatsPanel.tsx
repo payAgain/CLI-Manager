@@ -1,7 +1,7 @@
 import { runtimeAgentTool } from "../../lib/terminalAgent";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
-import { Copy, FolderGit2, GitBranch, RefreshCw, FolderOpen, Save } from "lucide-react";
+import { BarChart3, Copy, FolderGit2, GitBranch, RefreshCw, FolderOpen, Save } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
 import { createPatch } from "diff";
@@ -19,7 +19,6 @@ import {
   Row,
   StatChip,
   SegmentedBar,
-  LiveDot,
   EmptyHint,
   calculateTokenStats,
   formatDuration,
@@ -303,7 +302,6 @@ function SessionInfoCard({ session, statsSession, projectName, projectPath, curr
   return (
     <StatCard
       icon={<FolderGit2 size={13} />}
-      iconColor={TERM.cyan}
       title={t("termStats.session")}
       headerRight={
         <SourcePill source={session.source} />
@@ -323,11 +321,11 @@ function SessionInfoCard({ session, statsSession, projectName, projectPath, curr
           icon={<GitBranch size={10} />}
           label={t("worktree.settings.title")}
           value={worktree.name}
-          color={TERM.magenta}
+          color={TERM.fg}
           title={`${worktree.branch}\n${worktree.path}`}
         />
       )}
-      <Row icon={<TerminalSquare size={10} strokeWidth={1.7} />} label={t("termStats.shell")} value={shell} color={TERM.cyan} title={shell} />
+      <Row icon={<TerminalSquare size={10} strokeWidth={1.7} />} label={t("termStats.shell")} value={shell} title={shell} />
       <div className="flex items-baseline justify-between gap-2 text-[11px] leading-5">
         <span className="flex shrink-0 items-center gap-1" style={{ color: TERM.dim }}>
           <Copy size={10} />
@@ -335,7 +333,7 @@ function SessionInfoCard({ session, statsSession, projectName, projectPath, curr
         </span>
         <span className="flex min-w-0 items-center gap-1">
           <span
-            className="truncate text-right cursor-pointer hover:underline"
+            className="min-w-0 truncate text-right cursor-pointer hover:underline"
             style={{ color: TERM.fg }}
             title={sessionIdTitle}
             onDoubleClick={handleCopySessionId}
@@ -347,8 +345,8 @@ function SessionInfoCard({ session, statsSession, projectName, projectPath, curr
               type="button"
               onClick={onSaveToSidebar}
               disabled={!canSaveToSidebar}
-              className="ui-focus-ring shrink-0 rounded p-0.5 disabled:cursor-not-allowed disabled:opacity-40"
-              style={{ color: TERM.cyan }}
+              className="ui-terminal-panel-action ui-focus-ring shrink-0 rounded p-0.5 disabled:cursor-not-allowed disabled:opacity-40"
+              style={{ color: TERM.dim }}
               title={t("terminal.tab.saveToSidebar")}
               aria-label={t("terminal.tab.saveToSidebar")}
             >
@@ -362,7 +360,7 @@ function SessionInfoCard({ session, statsSession, projectName, projectPath, curr
           <GitBranch size={10} />
           {t("termStats.branch")}
         </span>
-        <span className="truncate text-right" style={{ color: TERM.magenta }} title={branch}>
+        <span className="min-w-0 truncate text-right" style={{ color: TERM.fg }} title={branch}>
           {branch}
         </span>
       </div>
@@ -380,7 +378,7 @@ function SessionInfoCard({ session, statsSession, projectName, projectPath, curr
             { value: roleCounts.tool, color: ROLE_COLORS.tool, label: t("termStats.tool") },
           ]}
         />
-        <div className="mt-1 flex gap-3 text-[10px]" style={{ color: TERM.dim }}>
+        <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[10px]" style={{ color: TERM.dim }}>
           <span className="flex items-center gap-1">
             <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: ROLE_COLORS.user }} />
             {t("termStats.user")} {roleCounts.user}
@@ -696,8 +694,8 @@ export function TerminalStatsPanel({ activeSessionId, open, visible = true, embe
   };
 
   const containerClassName = embedded
-    ? "flex h-full min-h-0 flex-col overflow-hidden font-mono"
-    : "relative z-[1] flex w-[188px] shrink-0 flex-col overflow-hidden border-l border-border font-mono";
+    ? "flex h-full min-h-0 flex-col overflow-hidden font-sans"
+    : "relative z-[1] flex w-[188px] shrink-0 flex-col overflow-hidden border-l border-border font-sans";
   const Container = embedded ? "div" : "aside";
   const containerStyle = {
     backgroundColor: TERM.bg,
@@ -710,8 +708,7 @@ export function TerminalStatsPanel({ activeSessionId, open, visible = true, embe
       style={containerStyle}
     >
       <TerminalPanelHeader
-        icon={<LiveDot />}
-        accent={TERM.cyan}
+        icon={<BarChart3 size={13} />}
         title={t("termStats.live")}
         titleAccessory={sourceFilter ? <SourcePill source={sourceFilter} /> : undefined}
         actions={(
@@ -721,8 +718,8 @@ export function TerminalStatsPanel({ activeSessionId, open, visible = true, embe
             </span>
           <button
             onClick={handleRefresh}
-            className="ui-focus-ring rounded p-0.5"
-            style={{ color: TERM.cyan }}
+            className="ui-terminal-panel-action ui-focus-ring rounded p-0.5"
+            style={{ color: TERM.dim }}
             title={t("termStats.refresh")}
             aria-label={t("termStats.refresh")}
           >
@@ -732,7 +729,7 @@ export function TerminalStatsPanel({ activeSessionId, open, visible = true, embe
         )}
       />
 
-      <div className="ui-thin-scroll flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-2">
+      <div className="ui-thin-scroll flex min-h-0 flex-1 flex-col overflow-y-auto">
         {!displayProjectPath ? (
           <EmptyHint text={t("termStats.noProject")} />
         ) : !displaySession ? (

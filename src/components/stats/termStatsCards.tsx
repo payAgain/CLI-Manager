@@ -54,41 +54,43 @@ export function TokenUsageCard({ stats }: { stats: TokenStats }) {
   return (
     <StatCard
       icon={<Coins size={13} />}
-      iconColor={TERM_PANEL.yellow}
       title={t("termStats.tokenUsage")}
-      headerRight={<HeaderPill>{formatCompactCount(animatedTotal)}</HeaderPill>}
     >
-      <div className="flex items-center gap-3">
+      <div className="mb-3 flex items-center gap-3">
         <Donut
+          size={44}
+          thickness={4}
           segments={[
             { value: stats.inputTokens, color: TERM_PANEL.green },
             { value: stats.outputTokens, color: TERM_PANEL.yellow },
             { value: stats.cacheReadTokens, color: TERM_PANEL.blue },
             { value: stats.cacheCreationTokens, color: TERM_PANEL.magenta },
           ]}
-        >
-          <span className="text-[10px] font-bold" style={{ color: TERM_PANEL.fg }}>
+        />
+        <div className="min-w-0">
+          <div className="truncate text-[22px] font-medium leading-7 tabular-nums" style={{ color: TERM_PANEL.fg }}>
             {formatCompactCount(animatedTotal)}
-          </span>
-        </Donut>
-        <div className="grid min-w-0 flex-1 grid-cols-2 gap-1.5">
-          <StatChip dotColor={TERM_PANEL.green} label={t("termStats.input")} value={formatCompactCount(stats.inputTokens)} />
-          <StatChip dotColor={TERM_PANEL.yellow} label={t("termStats.output")} value={formatCompactCount(stats.outputTokens)} />
-          <StatChip
-            dotColor={TERM_PANEL.blue}
-            label={t("termStats.cacheHit")}
-            value={formatCompactCount(stats.cacheReadTokens)}
-            valueSuffix={`${cacheHitRate}%`}
-          />
-          <StatChip dotColor={TERM_PANEL.magenta} label={t("termStats.cacheWrite")} value={formatCompactCount(stats.cacheCreationTokens)} />
+          </div>
+          <div className="text-[10px]" style={{ color: TERM_PANEL.dim }}>{t("termStats.total")}</div>
         </div>
+      </div>
+      <div className="grid min-w-0 grid-cols-2 gap-1.5">
+        <StatChip dotColor={TERM_PANEL.green} label={t("termStats.input")} value={formatCompactCount(stats.inputTokens)} />
+        <StatChip dotColor={TERM_PANEL.yellow} label={t("termStats.output")} value={formatCompactCount(stats.outputTokens)} />
+        <StatChip
+          dotColor={TERM_PANEL.blue}
+          label={t("termStats.cacheHit")}
+          value={formatCompactCount(stats.cacheReadTokens)}
+          valueSuffix={`${cacheHitRate}%`}
+        />
+        <StatChip dotColor={TERM_PANEL.magenta} label={t("termStats.cacheWrite")} value={formatCompactCount(stats.cacheCreationTokens)} />
       </div>
       <div
         className="mt-2 flex items-baseline justify-between border-t pt-2 text-[11px]"
         style={{ borderColor: TERM_PANEL.border }}
       >
         <span style={{ color: TERM_PANEL.dim }}>{t("termStats.estimatedCost")}</span>
-        <span className="text-[14px] font-bold" style={{ color: TERM_PANEL.green }}>
+        <span className="text-[12px] font-medium tabular-nums" style={{ color: TERM_PANEL.fg }}>
           {formatCost(animatedCost)}
         </span>
       </div>
@@ -151,7 +153,6 @@ export function ModelContextCard({
   return (
     <StatCard
       icon={<Cpu size={13} />}
-      iconColor={TERM_PANEL.magenta}
       title={t("termStats.modelContext")}
       headerRight={
         usagePercent !== null ? (
@@ -165,7 +166,7 @@ export function ModelContextCard({
         <span className="shrink-0" style={{ color: TERM_PANEL.dim }}>{t("termStats.model")}</span>
         <span
           className="flex min-w-0 items-center gap-1 truncate text-right"
-          style={{ color: TERM_PANEL.magenta }}
+          style={{ color: TERM_PANEL.fg }}
           title={model || "—"}
         >
           {modelVendor && <VendorIcon vendor={modelVendor} size={12} />}
@@ -175,7 +176,7 @@ export function ModelContextCard({
       <Row
         label={t("termStats.reasoningEffort")}
         value={displayedReasoningEffort}
-        color={displayedReasoningEffort === "—" ? TERM_PANEL.dim : TERM_PANEL.magenta}
+        color={displayedReasoningEffort === "—" ? TERM_PANEL.dim : TERM_PANEL.fg}
       />
       <Row
         label={t("termStats.currentContext")}
@@ -253,13 +254,12 @@ export function TrendCard({ session }: { session: HistorySessionDetail | null })
   return (
     <StatCard
       icon={<Activity size={13} />}
-      iconColor={TERM_PANEL.cyan}
       title={t("termStats.tokenTrend")}
       headerRight={
         hasTrend ? (
-          <HeaderPill color={TERM_PANEL.cyan}>{t("termStats.trendPointCount", { count: chartPoints.length })}</HeaderPill>
+          <HeaderPill>{t("termStats.trendPointCount", { count: chartPoints.length })}</HeaderPill>
         ) : isEmpty ? (
-          <HeaderPill color={TERM_PANEL.cyan}>—</HeaderPill>
+          <HeaderPill>—</HeaderPill>
         ) : undefined
       }
     >
@@ -347,13 +347,12 @@ export function ToolsCard({ session }: { session: HistorySessionDetail | null })
   return (
     <StatCard
       icon={<Wrench size={13} />}
-      iconColor={TERM_PANEL.blue}
       title={t("termStats.tools")}
       headerRight={
         toolCalls > 0 ? (
-          <HeaderPill color={TERM_PANEL.blue}>{t("termStats.callCount", { count: formatCompactCount(toolCalls) })}</HeaderPill>
+          <HeaderPill>{t("termStats.callCount", { count: formatCompactCount(toolCalls) })}</HeaderPill>
         ) : isEmpty ? (
-          <HeaderPill color={TERM_PANEL.blue}>{t("termStats.zeroCalls")}</HeaderPill>
+          <HeaderPill>{t("termStats.zeroCalls")}</HeaderPill>
         ) : undefined
       }
     >
@@ -394,11 +393,10 @@ export function LatestChangesCard({
   return (
     <StatCard
       icon={<FileCode2 size={13} />}
-      iconColor={TERM_PANEL.cyan}
       title={t("termStats.latestChanges")}
       headerRight={
         summary ? (
-          <HeaderPill color={TERM_PANEL.cyan}>
+          <HeaderPill>
             {t("termStats.latestChangesFiles", { count: summary.fileCount })}
           </HeaderPill>
         ) : undefined
@@ -412,8 +410,8 @@ export function LatestChangesCard({
         <>
           <div className="grid grid-cols-2 gap-1.5">
             <div
-              className="flex min-w-0 flex-col gap-0.5 rounded-lg px-2 py-1.5"
-              style={{ backgroundColor: TERM_PANEL.cardInner, border: `1px solid ${TERM_PANEL.border}` }}
+              className="flex min-w-0 flex-col gap-0.5 rounded px-2 py-1.5"
+              style={{ backgroundColor: TERM_PANEL.cardInner }}
             >
               <span className="flex items-center gap-1.5 text-[10px]" style={{ color: TERM_PANEL.green }}>
                 <span className="inline-block h-1.5 w-1.5 shrink-0 rounded-full" style={{ backgroundColor: TERM_PANEL.green }} />
@@ -424,8 +422,8 @@ export function LatestChangesCard({
               </span>
             </div>
             <div
-              className="flex min-w-0 flex-col gap-0.5 rounded-lg px-2 py-1.5"
-              style={{ backgroundColor: TERM_PANEL.cardInner, border: `1px solid ${TERM_PANEL.border}` }}
+              className="flex min-w-0 flex-col gap-0.5 rounded px-2 py-1.5"
+              style={{ backgroundColor: TERM_PANEL.cardInner }}
             >
               <span className="flex items-center gap-1.5 text-[10px]" style={{ color: TERM_PANEL.red }}>
                 <span className="inline-block h-1.5 w-1.5 shrink-0 rounded-full" style={{ backgroundColor: TERM_PANEL.red }} />
@@ -440,8 +438,8 @@ export function LatestChangesCard({
             {summary.files.slice(0, 4).map((fileChange) => (
               <div
                 key={fileChange.file_path}
-                className="flex items-center justify-between gap-2 rounded-lg px-2 py-1.5"
-                style={{ backgroundColor: TERM_PANEL.cardInner, border: `1px solid ${TERM_PANEL.border}` }}
+                className="flex items-center justify-between gap-2 border-b py-1.5 last:border-b-0"
+                style={{ borderColor: TERM_PANEL.border }}
               >
                 <div className="min-w-0">
                   <div
@@ -460,8 +458,8 @@ export function LatestChangesCard({
                 <button
                   type="button"
                   onClick={() => onOpenDiff(fileChange)}
-                  className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md transition-colors"
-                  style={{ color: TERM_PANEL.cyan, backgroundColor: "color-mix(in srgb, var(--term-panel-cyan, #5AC8E0) 12%, transparent)" }}
+                  className="ui-terminal-panel-action ui-focus-ring inline-flex h-6 w-6 shrink-0 items-center justify-center rounded transition-colors"
+                  style={{ color: TERM_PANEL.dim }}
                   title={t("termStats.latestChangesViewDiff")}
                   aria-label={t("termStats.latestChangesViewDiff")}
                 >

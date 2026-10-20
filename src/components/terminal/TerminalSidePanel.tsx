@@ -1,6 +1,6 @@
 import { Suspense, lazy, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { Activity, BarChart3, Cpu, Folder, GitBranch } from "../icons";
-import { TERM_PANEL, getTerminalSidePanelSkinStyle, panelColorTint } from "../stats/termStatsUi";
+import { TERM_PANEL, getTerminalSidePanelSkinStyle } from "../stats/termStatsUi";
 import { SystemResourcesPanel } from "./SystemResourcesPanel";
 import { useI18n } from "../../lib/i18n";
 import {
@@ -211,7 +211,7 @@ export function ResizableTerminalPanelFrame({
   return (
     <aside
       ref={panelRef}
-      className="ui-terminal-side-panel-frame relative flex shrink-0 flex-col overflow-hidden border-l border-border font-mono"
+      className="ui-terminal-side-panel-frame relative flex shrink-0 flex-col overflow-hidden border-l border-border font-sans"
       data-dragging={dragging ? "true" : undefined}
       style={{
         // Parent/content updates can re-render several times per second while
@@ -259,13 +259,13 @@ export function TerminalSidePanel({
   const gitEnabled = visibleTabs.includes("git");
   const filesEnabled = visibleTabs.includes("files");
   const allTabs = [
-    { key: "stats" as const, label: t("terminal.panel.sideStats"), color: TERM_PANEL.cyan, icon: <BarChart3 size={12} strokeWidth={1.8} /> },
+    { key: "stats" as const, label: t("terminal.panel.sideStats"), icon: <BarChart3 size={12} strokeWidth={1.8} /> },
     ...(systemResourcesEnabled
-      ? [{ key: "systemResources" as const, label: t("terminal.panel.systemResources"), color: TERM_PANEL.green, icon: <Cpu size={12} strokeWidth={1.8} /> }]
+      ? [{ key: "systemResources" as const, label: t("terminal.panel.systemResources"), icon: <Cpu size={12} strokeWidth={1.8} /> }]
       : []),
-    { key: "replay" as const, label: t("terminal.panel.replay"), color: TERM_PANEL.magenta, icon: <Activity size={12} strokeWidth={1.8} /> },
-    { key: "git" as const, label: t("terminal.panel.gitChanges"), color: TERM_PANEL.yellow, icon: <GitBranch size={12} strokeWidth={1.8} /> },
-    { key: "files" as const, label: t("terminal.panel.files"), color: TERM_PANEL.blue, icon: <Folder size={12} strokeWidth={1.8} />, disabled: filesTabDisabled },
+    { key: "replay" as const, label: t("terminal.panel.replay"), icon: <Activity size={12} strokeWidth={1.8} /> },
+    { key: "git" as const, label: t("terminal.panel.gitChanges"), icon: <GitBranch size={12} strokeWidth={1.8} /> },
+    { key: "files" as const, label: t("terminal.panel.files"), icon: <Folder size={12} strokeWidth={1.8} />, disabled: filesTabDisabled },
   ];
   const tabs = allTabs.filter((tab) => visibleTabs.includes(tab.key));
   const tabLayoutKey = tabs.map((tab) => `${tab.key}:${tab.label}`).join("|");
@@ -332,7 +332,7 @@ export function TerminalSidePanel({
     >
       <div
         ref={tabListRef}
-        className="flex shrink-0 gap-1 border-b px-2 py-1.5"
+        className="ui-terminal-side-panel-tabs flex min-h-9 shrink-0 border-b px-2"
         style={{ backgroundColor: TERM_PANEL.bg, borderColor: TERM_PANEL.border }}
       >
         {tabs.map((tab) => {
@@ -344,17 +344,12 @@ export function TerminalSidePanel({
               type="button"
               onClick={() => onTabChange(tab.key)}
               disabled={tab.disabled}
-              className="ui-focus-ring flex min-w-0 flex-1 items-center justify-center gap-1 whitespace-nowrap rounded px-1.5 py-1 text-[11px] font-bold transition-colors"
-              style={{
-                color: selected ? tab.color : TERM_PANEL.dim,
-                backgroundColor: selected ? panelColorTint(tab.color, 10) : "transparent",
-                border: `1px solid ${selected ? panelColorTint(tab.color, 34) : "transparent"}`,
-                opacity: tab.disabled ? 0.45 : 1,
-              }}
+              className="ui-terminal-side-panel-tab ui-focus-ring flex min-w-0 flex-1 items-center justify-center gap-1 whitespace-nowrap px-1.5 text-[11px] font-medium transition-colors"
               aria-pressed={selected}
+              aria-label={tab.label}
               title={compactTabs ? tab.label : undefined}
             >
-              <span data-terminal-side-panel-tab-icon className="shrink-0" style={{ color: tab.color }}>{tab.icon}</span>
+              <span data-terminal-side-panel-tab-icon className="shrink-0">{tab.icon}</span>
               {!compactTabs && <span data-terminal-side-panel-tab-label className="min-w-0 truncate">{tab.label}</span>}
             </button>
           );

@@ -148,16 +148,16 @@ function GitBranchMenu({
       <div className="fixed inset-0 z-[19]" onClick={onClose} aria-hidden="true" />
       <div
         className="ui-thin-scroll absolute bottom-full left-0 z-20 mb-1 flex max-h-[360px] w-[280px] max-w-[calc(100vw-24px)] flex-col overflow-y-auto rounded border py-1 shadow-lg"
-        style={{ backgroundColor: TERM.bg, borderColor: TERM.dim }}
+        style={{ backgroundColor: TERM.bg, borderColor: TERM.border }}
         role="menu"
       >
-        <div className="flex flex-col gap-1 border-b px-2 pb-2 pt-1.5" style={{ borderColor: TERM.dim }}>
+        <div className="flex flex-col gap-1 border-b px-2 pb-2 pt-1.5" style={{ borderColor: TERM.border }}>
           <button
             type="button"
             onClick={onFetch}
             disabled={branchActionBusy}
             className="ui-focus-ring flex items-center justify-between gap-2 rounded px-2 py-1 text-left text-[11px] transition-opacity hover:opacity-80 disabled:opacity-40"
-            style={{ color: TERM.cyan, border: `1px solid ${panelColorTint(TERM.cyan, 28)}` }}
+            style={{ color: TERM.fg, border: `1px solid ${panelColorTint(TERM.fg, 28)}` }}
           >
             <span className="flex items-center gap-1.5">
               <RefreshCw size={11} className={fetching ? "animate-spin" : ""} />
@@ -165,7 +165,7 @@ function GitBranchMenu({
             </span>
           </button>
 
-          <div className="flex items-center gap-1 rounded px-2 py-1" style={{ border: `1px solid ${TERM.dim}` }}>
+          <div className="flex items-center gap-1 rounded px-2 py-1" style={{ border: `1px solid ${TERM.border}` }}>
             <Search size={12} className="shrink-0" style={{ color: TERM.dim }} />
             <input
               value={branchQuery}
@@ -183,7 +183,7 @@ function GitBranchMenu({
               onClick={() => onCreate(branchQueryValue)}
               disabled={branchActionBusy}
               className="ui-focus-ring flex items-center gap-1.5 rounded px-2 py-1 text-left text-[11px] transition-opacity hover:opacity-80 disabled:opacity-40"
-              style={{ color: TERM.green, border: `1px solid ${panelColorTint(TERM.green, 34)}` }}
+              style={{ color: TERM.fg, border: `1px solid ${TERM.border}` }}
               title={t("git.branch.create")}
               aria-label={t("git.branch.create")}
             >
@@ -215,8 +215,8 @@ function GitBranchMenu({
                     disabled={branchActionBusy || item.current}
                     className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[11px] transition-opacity hover:opacity-80 disabled:opacity-50"
                     style={{
-                      color: item.current ? TERM.cyan : TERM.fg,
-                      backgroundColor: item.current ? panelColorTint(TERM.cyan, 12) : "transparent",
+                      color: TERM.fg,
+                      backgroundColor: item.current ? panelColorTint(TERM.fg, 12) : "transparent",
                     }}
                   >
                     <span className="min-w-0 flex-1 truncate">{item.name}</span>
@@ -232,7 +232,7 @@ function GitBranchMenu({
               </>
             )}
 
-            <div className="mt-1 border-t px-2 py-1 text-[10px] font-bold uppercase tracking-wide" style={{ color: TERM.dim, borderColor: TERM.dim }}>
+            <div className="mt-1 border-t px-2 py-1 text-[10px] font-bold uppercase tracking-wide" style={{ color: TERM.dim, borderColor: TERM.border }}>
               {t("git.branch.remote")}
             </div>
             {remoteBranches.length === 0 ? (
@@ -766,8 +766,8 @@ export function GitChangesPanel({ open, projectPath, projectId, visible = true, 
   ];
 
   const panelClassName = embedded
-    ? "flex h-full min-h-0 flex-col overflow-hidden font-mono"
-    : "relative z-[1] flex w-[184px] shrink-0 flex-col overflow-hidden border-l border-border font-mono";
+    ? "flex h-full min-h-0 flex-col overflow-hidden font-sans"
+    : "relative z-[1] flex w-[184px] shrink-0 flex-col overflow-hidden border-l border-border font-sans";
   const Container = embedded ? "div" : "aside";
   return (
     <Container
@@ -776,7 +776,6 @@ export function GitChangesPanel({ open, projectPath, projectId, visible = true, 
     >
       <TerminalPanelHeader
         icon={<GitBranch size={13} strokeWidth={2} />}
-        accent={TERM.yellow}
         title={t("git.title")}
         actions={(
           <>
@@ -785,8 +784,8 @@ export function GitChangesPanel({ open, projectPath, projectId, visible = true, 
             <button
               type="button"
               onClick={() => setGroupByMenuOpen(!groupByMenuOpen)}
-              className="ui-focus-ring flex items-center gap-1 rounded px-1 py-0.5 text-[10px] transition-colors"
-              style={{ color: TERM.cyan, backgroundColor: panelColorTint(TERM.cyan, 7) }}
+              className="ui-terminal-panel-action ui-focus-ring flex items-center gap-1 rounded px-1 py-0.5 text-[10px] transition-colors"
+              style={{ color: TERM.dim }}
               title={t("git.groupBy")}
               aria-label={t("git.groupBy")}
             >
@@ -802,18 +801,18 @@ export function GitChangesPanel({ open, projectPath, projectId, visible = true, 
                 />
                 <div
                   className="absolute right-0 top-full z-20 mt-1 flex min-w-[120px] flex-col rounded border py-1 shadow-lg"
-                  style={{ backgroundColor: TERM.bg, borderColor: TERM.dim }}
+                  style={{ backgroundColor: TERM.bg, borderColor: TERM.border }}
                 >
                   <button
                     type="button"
                     onClick={() => handleGroupByChange("directory")}
                     className="flex items-center gap-2 px-3 py-1.5 text-left text-[11px] transition-colors"
                     style={{
-                      color: gitGroupBy === "directory" ? TERM.cyan : TERM.fg,
-                      backgroundColor: gitGroupBy === "directory" ? panelColorTint(TERM.cyan, 13) : "transparent",
+                      color: TERM.fg,
+                      backgroundColor: gitGroupBy === "directory" ? panelColorTint(TERM.fg, 13) : "transparent",
                     }}
                     onMouseEnter={(e) => {
-                      if (gitGroupBy !== "directory") e.currentTarget.style.backgroundColor = panelColorTint(TERM.cyan, 6);
+                      if (gitGroupBy !== "directory") e.currentTarget.style.backgroundColor = panelColorTint(TERM.fg, 6);
                     }}
                     onMouseLeave={(e) => {
                       if (gitGroupBy !== "directory") e.currentTarget.style.backgroundColor = "transparent";
@@ -828,11 +827,11 @@ export function GitChangesPanel({ open, projectPath, projectId, visible = true, 
                     onClick={() => handleGroupByChange("module")}
                     className="flex items-center gap-2 px-3 py-1.5 text-left text-[11px] transition-colors"
                     style={{
-                      color: gitGroupBy === "module" ? TERM.cyan : TERM.fg,
-                      backgroundColor: gitGroupBy === "module" ? panelColorTint(TERM.cyan, 13) : "transparent",
+                      color: TERM.fg,
+                      backgroundColor: gitGroupBy === "module" ? panelColorTint(TERM.fg, 13) : "transparent",
                     }}
                     onMouseEnter={(e) => {
-                      if (gitGroupBy !== "module") e.currentTarget.style.backgroundColor = panelColorTint(TERM.cyan, 6);
+                      if (gitGroupBy !== "module") e.currentTarget.style.backgroundColor = panelColorTint(TERM.fg, 6);
                     }}
                     onMouseLeave={(e) => {
                       if (gitGroupBy !== "module") e.currentTarget.style.backgroundColor = "transparent";
@@ -857,8 +856,8 @@ export function GitChangesPanel({ open, projectPath, projectId, visible = true, 
             <button
               type="button"
               onClick={allCollapsed ? expandAllDirs : collapseAllDirs}
-              className="ui-focus-ring rounded px-1 py-0.5 text-[10px] transition-colors"
-              style={{ color: TERM.cyan, backgroundColor: panelColorTint(TERM.cyan, 7) }}
+              className="ui-terminal-panel-action ui-focus-ring rounded px-1 py-0.5 text-[10px] transition-colors"
+              style={{ color: TERM.dim }}
               title={allCollapsed ? t("git.expandTree") : t("git.collapseTree")}
               aria-label={allCollapsed ? t("git.expandTree") : t("git.collapseTree")}
             >
@@ -870,7 +869,7 @@ export function GitChangesPanel({ open, projectPath, projectId, visible = true, 
               type="button"
               onClick={() => setConfirmAllOpen(true)}
               disabled={discarding}
-              className="ui-focus-ring rounded p-0.5 disabled:opacity-40"
+              className="ui-terminal-panel-action ui-focus-ring rounded p-0.5 disabled:opacity-40"
               style={{ color: TERM.red }}
               title={t("git.discardAllTracked")}
               aria-label={t("git.discardAllTracked")}
@@ -881,8 +880,8 @@ export function GitChangesPanel({ open, projectPath, projectId, visible = true, 
           <button
             type="button"
             onClick={handleRefresh}
-            className={`ui-focus-ring rounded p-0.5 ${loading ? "animate-spin" : ""}`}
-            style={{ color: TERM.cyan }}
+            className={`ui-terminal-panel-action ui-focus-ring rounded p-0.5 ${loading ? "animate-spin" : ""}`}
+            style={{ color: TERM.dim }}
             title={t("common.refresh")}
             aria-label={t("git.refresh")}
           >
@@ -894,12 +893,12 @@ export function GitChangesPanel({ open, projectPath, projectId, visible = true, 
 
       {/* 仓库切换：项目下检测到多个 Git 仓库时展示下拉（单仓库零 UI 变化） */}
       {repositories.length > 1 && (
-        <div className="relative shrink-0 border-b px-2 py-1.5" style={{ borderColor: TERM.dim }}>
+        <div className="relative shrink-0 border-b px-2 py-1.5" style={{ borderColor: TERM.border }}>
           <button
             type="button"
             onClick={() => setRepoMenuOpen(!repoMenuOpen)}
             className="ui-focus-ring flex w-full items-center gap-1 rounded px-1.5 py-0.5 text-[10px] transition-colors"
-            style={{ color: TERM.cyan, backgroundColor: panelColorTint(TERM.cyan, 7) }}
+            style={{ color: TERM.fg, backgroundColor: panelColorTint(TERM.fg, 7) }}
             title={t("git.repo.switch")}
             aria-label={t("git.repo.switch")}
             aria-haspopup="menu"
@@ -918,7 +917,7 @@ export function GitChangesPanel({ open, projectPath, projectId, visible = true, 
               />
               <div
                 className="ui-thin-scroll absolute left-2 right-2 top-full z-20 mt-1 flex max-h-[240px] flex-col overflow-y-auto rounded border py-1 shadow-lg"
-                style={{ backgroundColor: TERM.bg, borderColor: TERM.dim }}
+                style={{ backgroundColor: TERM.bg, borderColor: TERM.border }}
                 role="menu"
               >
                 {repositories.map((repo) => {
@@ -936,11 +935,11 @@ export function GitChangesPanel({ open, projectPath, projectId, visible = true, 
                       }}
                       className="flex items-center gap-2 px-3 py-1.5 text-left text-[11px] transition-colors"
                       style={{
-                        color: selected ? TERM.cyan : TERM.fg,
-                        backgroundColor: selected ? panelColorTint(TERM.cyan, 13) : "transparent",
+                        color: TERM.fg,
+                        backgroundColor: selected ? panelColorTint(TERM.fg, 13) : "transparent",
                       }}
                       onMouseEnter={(e) => {
-                        if (!selected) e.currentTarget.style.backgroundColor = panelColorTint(TERM.cyan, 6);
+                        if (!selected) e.currentTarget.style.backgroundColor = panelColorTint(TERM.fg, 6);
                       }}
                       onMouseLeave={(e) => {
                         if (!selected) e.currentTarget.style.backgroundColor = "transparent";
@@ -962,7 +961,7 @@ export function GitChangesPanel({ open, projectPath, projectId, visible = true, 
 
       {/* Filter */}
       {changes.length > 0 && (
-        <div ref={filterRowRef} className="flex w-full shrink-0 gap-1 border-b px-2 py-1.5" style={{ borderColor: TERM.dim }}>
+        <div ref={filterRowRef} className="flex w-full shrink-0 gap-1 border-b px-2 py-1.5" style={{ borderColor: TERM.border }}>
           {filterButtons.map((btn) => {
             const Icon = btn.icon;
             const active = statusFilter === btn.value;
@@ -978,9 +977,9 @@ export function GitChangesPanel({ open, projectPath, projectId, visible = true, 
                 aria-label={title}
                 aria-pressed={active}
                 style={{
-                  backgroundColor: active ? panelColorTint(btn.color, 19) : "transparent",
-                  color: active ? btn.color : TERM.dim,
-                  border: `1px solid ${active ? btn.color : "transparent"}`,
+                  backgroundColor: active ? TERM.cardInner : "transparent",
+                  color: active ? TERM.fg : TERM.dim,
+                  border: `1px solid ${active ? TERM.border : "transparent"}`,
                 }}
               >
                 <Icon size={11} strokeWidth={2} style={{ color: btn.color }} />
@@ -994,7 +993,7 @@ export function GitChangesPanel({ open, projectPath, projectId, visible = true, 
 
       {/* Summary */}
       {changes.length > 0 && (
-        <div className="shrink-0 border-b px-2 py-1.5 text-[10px]" style={{ borderColor: TERM.dim, color: TERM.dim }}>
+        <div className="shrink-0 border-b px-2 py-1.5 text-[10px]" style={{ borderColor: TERM.border, color: TERM.dim }}>
           <span style={{ color: TERM.fg }}>{t("git.summary.files", { count: allCount })}</span>
           {modifiedCount > 0 && (
             <>
@@ -1055,7 +1054,7 @@ export function GitChangesPanel({ open, projectPath, projectId, visible = true, 
             )}
             {/* 未跟踪文件单独成组（仿 JetBrains Unversioned Files），M/D 筛选下隐藏 */}
             {untrackedTree.length > 0 && statusFilter !== "M" && statusFilter !== "D" && (
-              <div className={tree.length > 0 ? "mt-2 border-t pt-2" : ""} style={{ borderColor: TERM.dim }}>
+              <div className={tree.length > 0 ? "mt-2 border-t pt-2" : ""} style={{ borderColor: TERM.border }}>
                 <div className="mb-1 px-1 text-[10px] font-bold uppercase tracking-wide" style={{ color: TERM.dim }}>
                   {t("git.section.untracked")}
                 </div>
@@ -1083,13 +1082,13 @@ export function GitChangesPanel({ open, projectPath, projectId, visible = true, 
         const canPush = !detached && !!branch && (ahead > 0 || !hasUpstream);
         const showPull = !detached && hasUpstream && behind > 0;
         return (
-          <div className="flex shrink-0 items-center justify-between gap-2 border-t px-2 py-1.5" style={{ borderColor: TERM.dim }}>
+          <div className="flex shrink-0 items-center justify-between gap-2 border-t px-2 py-1.5" style={{ borderColor: TERM.border }}>
             <span className="relative flex min-w-0 items-center gap-1.5 text-[11px]" style={{ color: TERM.fg }}>
               <button
                 type="button"
                 onClick={() => setBranchMenuOpen((value) => !value)}
                 className="ui-focus-ring flex min-w-0 items-center gap-1 rounded px-1 py-0.5 transition-colors"
-                style={{ color: TERM.fg, backgroundColor: branchMenuOpen ? panelColorTint(TERM.cyan, 10) : "transparent" }}
+                style={{ color: TERM.fg, backgroundColor: branchMenuOpen ? panelColorTint(TERM.fg, 10) : "transparent" }}
                 title={t("git.branch.switch")}
                 aria-label={t("git.branch.switch")}
                 aria-haspopup="menu"
@@ -1134,7 +1133,7 @@ export function GitChangesPanel({ open, projectPath, projectId, visible = true, 
                     onClick={() => void handlePull("merge")}
                     disabled={pulling}
                     className="ui-focus-ring flex items-center gap-1 rounded-l px-2 py-0.5 text-[11px] transition-opacity hover:opacity-80 disabled:opacity-40"
-                    style={{ color: TERM.cyan, border: `1px solid ${panelColorTint(TERM.cyan, 34)}`, borderRight: "none" }}
+                    style={{ color: TERM.fg, border: `1px solid ${TERM.border}`, borderRight: "none" }}
                     title={t("git.pull.title")}
                   >
                     <Download size={12} />
@@ -1145,7 +1144,7 @@ export function GitChangesPanel({ open, projectPath, projectId, visible = true, 
                     onClick={() => setPullMenuOpen((v) => !v)}
                     disabled={pulling}
                     className="ui-focus-ring flex items-center justify-center rounded-r px-1 transition-opacity hover:opacity-80 disabled:opacity-40"
-                    style={{ color: TERM.cyan, border: `1px solid ${panelColorTint(TERM.cyan, 34)}` }}
+                    style={{ color: TERM.fg, border: `1px solid ${TERM.border}` }}
                     title={t("git.pull.method")}
                     aria-haspopup="menu"
                     aria-expanded={pullMenuOpen}
@@ -1157,7 +1156,7 @@ export function GitChangesPanel({ open, projectPath, projectId, visible = true, 
                       <div className="fixed inset-0 z-[19]" onClick={() => setPullMenuOpen(false)} />
                       <div
                         className="absolute bottom-full right-0 z-20 mb-1 min-w-[148px] overflow-hidden rounded border shadow-lg"
-                        style={{ backgroundColor: TERM.bg, borderColor: TERM.dim }}
+                        style={{ backgroundColor: TERM.bg, borderColor: TERM.border }}
                         role="menu"
                       >
                         {([
@@ -1190,7 +1189,7 @@ export function GitChangesPanel({ open, projectPath, projectId, visible = true, 
                 onClick={() => void handlePush()}
                 disabled={pushing || !canPush}
                 className="ui-focus-ring flex items-center gap-1 rounded px-2 py-0.5 text-[11px] transition-opacity hover:opacity-80 disabled:opacity-40"
-                style={{ color: TERM.green, border: `1px solid ${panelColorTint(TERM.green, 34)}` }}
+                style={{ color: TERM.fg, border: `1px solid ${TERM.border}` }}
                 title={hasUpstream ? t("git.push.title") : t("git.push.setUpstreamTitle")}
               >
                 <Upload size={12} />
@@ -1224,7 +1223,7 @@ export function GitChangesPanel({ open, projectPath, projectId, visible = true, 
                 onClick={() => void handleRebaseContinue()}
                 disabled={pulling || hasConflicts}
                 className="ui-focus-ring flex items-center gap-1 rounded px-2 py-0.5 text-[11px] transition-opacity hover:opacity-80 disabled:opacity-40"
-                style={{ color: TERM.green, border: `1px solid ${panelColorTint(TERM.green, 34)}` }}
+                style={{ color: TERM.fg, border: `1px solid ${TERM.border}` }}
                 title={hasConflicts ? t("git.conflict.resolveFirst") : t("git.conflict.continueRebase")}
               >
                 <Check size={12} /> {t("git.conflict.continue")}
@@ -1261,7 +1260,7 @@ export function GitChangesPanel({ open, projectPath, projectId, visible = true, 
 
       {/* 提交栏：仅文件级 stage + commit（无 AI） */}
       {projectPath && changes.length > 0 && (
-        <div className="shrink-0 border-t px-2 py-2" style={{ borderColor: TERM.dim }}>
+        <div className="shrink-0 border-t px-2 py-2" style={{ borderColor: TERM.border }}>
           <textarea
             value={commitMsg}
             onChange={(e) => setCommitMsg(e.target.value)}
@@ -1275,7 +1274,7 @@ export function GitChangesPanel({ open, projectPath, projectId, visible = true, 
             rows={2}
             placeholder={committableCount > 0 ? t("git.commit.placeholder") : t("git.commit.placeholderNoFiles")}
             className="ui-thin-scroll w-full resize-none rounded px-2 py-1 text-[11px] outline-none"
-            style={{ backgroundColor: TERM.bg, color: TERM.fg, border: `1px solid ${TERM.dim}` }}
+            style={{ backgroundColor: TERM.bg, color: TERM.fg, border: `1px solid ${TERM.border}` }}
           />
           <div className="mt-1 flex items-center justify-between">
             <span className="text-[10px]" style={{ color: TERM.dim }}>
@@ -1289,7 +1288,7 @@ export function GitChangesPanel({ open, projectPath, projectId, visible = true, 
               onClick={() => void handleCommit()}
               disabled={committing || committableCount === 0 || commitMsg.trim().length === 0}
               className="ui-focus-ring flex items-center gap-1 rounded px-2 py-0.5 text-[11px] transition-opacity hover:opacity-80 disabled:opacity-40"
-              style={{ color: TERM.green, border: `1px solid ${panelColorTint(TERM.green, 34)}` }}
+              style={{ color: TERM.fg, border: `1px solid ${TERM.border}` }}
               title={t("git.commit.title")}
             >
               <GitCommitHorizontal size={12} />

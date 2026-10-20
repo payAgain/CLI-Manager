@@ -1,9 +1,8 @@
 import type { MouseEventHandler, ReactNode } from "react";
-import { TERM_PANEL, panelColorTint } from "../stats/termStatsUi";
+import { TERM_PANEL } from "../stats/termStatsUi";
 
 interface TerminalPanelHeaderProps {
   icon: ReactNode;
-  accent: string;
   title: ReactNode;
   subtitle?: ReactNode;
   subtitleTitle?: string;
@@ -14,7 +13,6 @@ interface TerminalPanelHeaderProps {
 
 export function TerminalPanelHeader({
   icon,
-  accent,
   title,
   subtitle,
   subtitleTitle,
@@ -24,35 +22,31 @@ export function TerminalPanelHeader({
 }: TerminalPanelHeaderProps) {
   return (
     <header
-      className="ui-terminal-panel-header flex h-9 shrink-0 items-center justify-between gap-2 border-b px-2 font-mono"
+      className="ui-terminal-panel-header flex min-h-10 shrink-0 items-center justify-between gap-2 border-b px-3 py-1.5 font-sans"
       style={{ backgroundColor: TERM_PANEL.bg, borderColor: TERM_PANEL.border }}
     >
       <div className="flex min-w-0 items-center gap-2" onDoubleClick={onTitleDoubleClick}>
         <span
-          className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md border"
-          style={{
-            color: accent,
-            borderColor: panelColorTint(accent, 30, TERM_PANEL.border),
-            backgroundColor: panelColorTint(accent, 9, TERM_PANEL.bg),
-          }}
+          className="flex shrink-0 items-center justify-center"
+          style={{ color: TERM_PANEL.dim }}
         >
           {icon}
         </span>
         <div className="min-w-0">
           <div className="flex min-w-0 items-center gap-1.5">
-            <span className="truncate text-[12px] font-bold leading-4" style={{ color: TERM_PANEL.fg }}>
+            <span className="truncate text-[12px] font-medium leading-4" style={{ color: TERM_PANEL.fg }} title={typeof title === "string" ? title : undefined}>
               {title}
             </span>
             {titleAccessory}
           </div>
           {subtitle ? (
-            <div className="truncate text-[9px] leading-3" style={{ color: TERM_PANEL.dim }} title={subtitleTitle}>
+            <div className="truncate text-[10px] leading-3" style={{ color: TERM_PANEL.dim }} title={subtitleTitle}>
               {subtitle}
             </div>
           ) : null}
         </div>
       </div>
-      {actions ? <div className="flex shrink-0 items-center gap-1.5">{actions}</div> : null}
+      {actions ? <div className="ui-terminal-panel-actions flex shrink-0 items-center gap-0.5">{actions}</div> : null}
     </header>
   );
 }

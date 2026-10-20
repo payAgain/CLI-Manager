@@ -6,7 +6,7 @@ import { CliToolIcon } from "../CliToolIcon";
 import { getCurrentLanguage, getLanguageLocale, translateCurrent } from "../../lib/i18n";
 import type { TerminalSidePanelSkin } from "../../stores/settingsStore";
 
-// 终端侧边面板语义配色。具体值由终端主题或侧边栏皮肤写入 CSS 变量。
+// 面板语义配色。默认跟随应用界面；自定义皮肤可覆盖，终端 ANSI 配色独立保留。
 export const TERM = {
   bg: "var(--term-panel-bg, #0A0A0A)",
   card: "var(--term-panel-card, #121212)",
@@ -114,15 +114,25 @@ const SIDE_PANEL_SKIN_STYLES: Record<Exclude<TerminalSidePanelSkin, "terminal">,
 };
 
 export function getTerminalSidePanelSkinStyle(skin: TerminalSidePanelSkin): CSSProperties {
-  if (skin === "terminal") return {};
+  // 保留旧设置键。使用不被文件面板和浮层重映射的应用 token，避免 CSS 变量循环引用。
+  if (skin === "terminal") return {
+    "--term-panel-bg": "var(--bg-secondary)",
+    "--term-panel-card": "var(--bg-primary)",
+    "--term-panel-card-inner": "color-mix(in srgb, var(--foreground) 5%, transparent)",
+    "--term-panel-border": "var(--input)",
+    "--term-panel-fg": "var(--foreground)",
+    "--term-panel-dim": "var(--muted-foreground)",
+    "--term-panel-accent": "var(--accent)",
+    "--term-panel-green": "var(--success)",
+    "--term-panel-yellow": "var(--warning)",
+    "--term-panel-red": "var(--danger)",
+    "--term-panel-magenta": "color-mix(in srgb, var(--accent) 55%, var(--danger))",
+    "--term-panel-cyan": "color-mix(in srgb, var(--accent) 55%, var(--success))",
+    "--term-panel-blue": "var(--accent)",
+    "--term-panel-track": "color-mix(in srgb, var(--foreground) 8%, transparent)",
+  } as CSSProperties;
   return SIDE_PANEL_SKIN_STYLES[skin] as CSSProperties;
 }
-
-// 来源徽章配色：claude 黄 / codex 青
-export const SOURCE_COLORS: Record<string, string> = {
-  claude: TERM_PANEL.yellow,
-  codex: TERM_PANEL.cyan,
-};
 
 export function formatCount(value: number): string {
   return new Intl.NumberFormat(getLanguageLocale(getCurrentLanguage())).format(Math.max(0, Math.round(value)));
@@ -255,31 +265,29 @@ export function useCountUp(target: number, duration = 700): number {
 
 export function StatCard({
   icon,
-  iconColor = TERM_PANEL.green,
   title,
   headerRight,
   children,
 }: {
   icon: React.ReactNode;
-  iconColor?: string;
   title: string;
   headerRight?: React.ReactNode;
   children: React.ReactNode;
 }) {
   return (
     <section
-      className="rounded-xl border p-3 transition-colors duration-300"
-      style={{ backgroundColor: TERM.card, borderColor: TERM.border }}
+      className="ui-stats-section min-w-0 border-b px-3 py-3 last:border-b-0"
+      style={{ borderColor: TERM.border }}
     >
       <div className="mb-2 flex items-center justify-between gap-2">
         <div className="flex min-w-0 items-center gap-2">
           <span
-            className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md"
-            style={{ backgroundColor: panelColorTint(iconColor, 10), color: iconColor }}
+            className="flex shrink-0 items-center justify-center"
+            style={{ color: TERM.dim }}
           >
             {icon}
           </span>
-          <span className="truncate text-[12px] font-bold" style={{ color: TERM.fg }}>
+          <span className="truncate text-[12px] font-medium" style={{ color: TERM.fg }}>
             {title}
           </span>
         </div>
@@ -290,22 +298,22 @@ export function StatCard({
   );
 }
 
-export function HeaderPill({ children, color = TERM.green }: { children: React.ReactNode; color?: string }) {
+export function HeaderPill({ children, color = TERM.dim }: { children: React.ReactNode; color?: string }) {
   return (
     <span
-      className="shrink-0 rounded-md border px-2 py-0.5 text-[10px] font-semibold"
-      style={{ borderColor: panelColorTint(color, 34), color, backgroundColor: panelColorTint(color, 8) }}
+      className="shrink-0 text-[10px] font-medium tabular-nums"
+      style={{ color }}
     >
       {children}
     </span>
   );
 }
 
-// 来源徽章（claude / codex）：在原配色胶囊内前置品牌图标
+// 来源以图标和名称区分，不使用装饰性品牌底色。
 export function SourcePill({ source }: { source: string }) {
   const icon = resolveHistorySourceIconKey(source);
   return (
-    <HeaderPill color={SOURCE_COLORS[source] ?? TERM.cyan}>
+    <HeaderPill>
       <span className="inline-flex items-center gap-1">
         {icon && <CliToolIcon icon={icon} size={11} className="text-current" />}
         {source}
@@ -330,13 +338,13 @@ export function Row({
   onDoubleClick?: () => void;
 }) {
   return (
-    <div className="flex items-baseline justify-between gap-2 text-[11px] leading-5">
+    <div className="flex min-w-0 items-baseline justify-between gap-2 text-[11px] leading-5">
       <span className="flex shrink-0 items-center gap-1" style={{ color: TERM.dim }}>
         {icon}
         {label}
       </span>
       <span
-        className={`truncate text-right ${onDoubleClick ? "cursor-pointer hover:underline" : ""}`}
+        className={`min-w-0 truncate text-right tabular-nums ${onDoubleClick ? "cursor-pointer hover:underline" : ""}`}
         style={{ color }}
         title={title ?? value}
         onDoubleClick={onDoubleClick}
@@ -364,14 +372,14 @@ export function StatChip({
 
   return (
     <div
-      className="flex min-w-0 flex-col gap-0.5 rounded-lg px-2 py-1.5"
-      style={{ backgroundColor: TERM.cardInner, border: `1px solid ${TERM.border}` }}
+      className="flex min-w-0 flex-col gap-1 rounded px-2 py-1.5"
+      style={{ backgroundColor: TERM.cardInner }}
     >
       <span className="flex items-center gap-1.5 text-[10px]" style={{ color: TERM.dim }}>
         <span className="inline-block h-1.5 w-1.5 shrink-0 rounded-full" style={{ backgroundColor: dotColor }} />
         <span className="truncate">{label}</span>
       </span>
-      <span className="truncate text-[12px] font-bold" style={{ color: valueColor ?? TERM.fg }} title={displayValue}>
+      <span className="truncate text-[13px] font-medium tabular-nums" style={{ color: valueColor ?? TERM.fg }} title={displayValue}>
         {value}
         {valueSuffix ? (
           <span className="ml-0.5 text-[9px] font-medium" style={{ color: TERM.dim }}>
@@ -730,12 +738,8 @@ export function LiveDot({ color = TERM_PANEL.green }: { color?: string }) {
 
 export function EmptyHint({ text }: { text: string }) {
   return (
-    <div className="flex h-full items-center justify-center p-4 text-[12px]" style={{ color: TERM_PANEL.dim }}>
-      <span style={{ color: TERM_PANEL.green }}>❯&nbsp;</span>
+    <div className="flex h-full min-h-16 items-center justify-center p-4 text-center text-[12px] leading-5" style={{ color: TERM_PANEL.dim }}>
       {text}
-      <span className="animate-pulse" style={{ color: TERM_PANEL.fg }}>
-        ▊
-      </span>
     </div>
   );
 }

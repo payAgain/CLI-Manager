@@ -948,7 +948,7 @@ export function SessionReplayPanel({ activeSessionId, open, visible = true }: Se
 
   return (
     <div
-      className="flex h-full min-h-0 flex-col overflow-hidden font-mono"
+      className="flex h-full min-h-0 flex-col overflow-hidden font-sans"
       style={{
         backgroundColor: TERM_PANEL.bg,
         "--ui-scrollbar-thumb": TERM_PANEL.border,
@@ -957,7 +957,6 @@ export function SessionReplayPanel({ activeSessionId, open, visible = true }: Se
     >
       <TerminalPanelHeader
         icon={<Sparkles size={14} />}
-        accent={TERM_PANEL.cyan}
         title={t("aiReplay.title")}
         subtitle={selectedSessionTitle}
         subtitleTitle={selectedSessionTitle}

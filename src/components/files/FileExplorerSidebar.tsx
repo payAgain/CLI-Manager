@@ -1752,15 +1752,15 @@ export function FileExplorerSidebar({ mode = "sidebar", onClosePanel, onBackToPr
         "--surface-container-lowest": TERM.cardInner,
         "--surface-container-high": TERM.cardInner,
         "--surface-container-highest": TERM.cardInner,
-        "--surface": TERM.card,
+        "--surface": TERM.bg,
         "--on-surface": TERM.fg,
         "--on-surface-variant": TERM.dim,
         "--text-primary": TERM.fg,
         "--text-secondary": TERM.dim,
         "--text-muted": TERM.dim,
         "--border": TERM.border,
-        "--primary": TERM.cyan,
-        "--interactive-hover-bg": "color-mix(in srgb, var(--term-panel-cyan, #5AC8E0) 12%, transparent)",
+        "--primary": TERM.fg,
+        "--interactive-hover-bg": TERM.cardInner,
         "--ui-scrollbar-thumb": TERM.border,
         "--ui-scrollbar-track": TERM.bg,
         backgroundColor: TERM.bg,
@@ -1793,7 +1793,6 @@ export function FileExplorerSidebar({ mode = "sidebar", onClosePanel, onBackToPr
         <>
           <TerminalPanelHeader
             icon={<Folder size={14} />}
-            accent={TERM.blue}
             title={project.name}
             subtitle={displayPathName}
             onTitleDoubleClick={readOnly ? undefined : openProjectRootFolder}

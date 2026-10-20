@@ -55,9 +55,8 @@ const PANEL_SCROLLBAR_STYLE = {
 } as CSSProperties;
 
 const CARD_STYLE = {
-  background: `linear-gradient(145deg, ${panelColorTint(TERM_PANEL.fg, 4, TERM_PANEL.card)} 0%, ${TERM_PANEL.card} 58%, ${panelColorTint(PANEL_ACCENT, 2, TERM_PANEL.bg)} 100%)`,
+  background: TERM_PANEL.card,
   borderColor: TERM_PANEL.border,
-  boxShadow: `inset 0 1px 0 ${panelColorTint(TERM_PANEL.fg, 4)}, 0 12px 26px ${panelColorTint("#000", 20)}`,
 } satisfies CSSProperties;
 
 function clampRatio(value: number): number {
@@ -890,8 +889,8 @@ export function SystemResourcesPanel({ open, visible = true, embedded = false }:
   if (!panelActive) return null;
 
   const containerClassName = embedded
-    ? "flex h-full min-h-0 flex-col overflow-hidden font-mono"
-    : "relative z-[1] flex w-[280px] shrink-0 flex-col overflow-hidden border-l border-border font-mono";
+    ? "flex h-full min-h-0 flex-col overflow-hidden font-sans"
+    : "relative z-[1] flex w-[280px] shrink-0 flex-col overflow-hidden border-l border-border font-sans";
 
   const Container = embedded ? "div" : "aside";
 
@@ -927,7 +926,6 @@ export function SystemResourcesPanel({ open, visible = true, embedded = false }:
     >
       <TerminalPanelHeader
         icon={<Server size={15} />}
-        accent={MODULE_TITLE_COLOR}
         title={t("systemResources.title")}
         titleAccessory={(
           <span
@@ -943,8 +941,8 @@ export function SystemResourcesPanel({ open, visible = true, embedded = false }:
           <button
             type="button"
             onClick={() => void refresh(true)}
-            className={`ui-focus-ring rounded-md border p-1 ${loading ? "animate-spin" : ""}`}
-            style={{ color: PANEL_SOFT_FG, borderColor: TERM_PANEL.border, backgroundColor: TERM_PANEL.cardInner }}
+            className={`ui-terminal-panel-action ui-focus-ring rounded p-1 ${loading ? "animate-spin" : ""}`}
+            style={{ color: TERM_PANEL.dim }}
             title={t("systemResources.refresh")}
             aria-label={t("systemResources.refresh")}
           >
@@ -956,10 +954,6 @@ export function SystemResourcesPanel({ open, visible = true, embedded = false }:
 
       <div
         className="ui-thin-scroll flex min-h-0 flex-1 flex-col gap-2.5 overflow-y-auto p-2"
-        style={{
-          backgroundImage: `linear-gradient(90deg, ${panelColorTint(TERM_PANEL.fg, 3)} 1px, transparent 1px), linear-gradient(${panelColorTint(TERM_PANEL.fg, 3)} 1px, transparent 1px)`,
-          backgroundSize: "22px 22px, 22px 22px",
-        }}
       >
 
       {loading && !snapshot ? (
