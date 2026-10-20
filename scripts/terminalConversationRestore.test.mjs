@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { dirname, resolve } from "node:path";
+import { dirname, isAbsolute, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runInNewContext } from "node:vm";
 import ts from "typescript";
@@ -21,7 +21,7 @@ function modules(overrides = {}) {
   const cache = new Map();
   function load(path) {
     if (Object.hasOwn(overrides, path)) return overrides[path];
-    if (!path.startsWith("/")) return require(path);
+    if (!isAbsolute(path)) return require(path);
     if (cache.has(path)) return cache.get(path);
     const exports = {};
     cache.set(path, exports);

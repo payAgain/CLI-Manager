@@ -238,12 +238,13 @@ function createDisplay(
     removeEventListener() {},
   };
   const terminalRef = { current: terminal };
+  const isVisibleRef = { current: isVisible };
   const display = useTerminalDisplay({
     sessionId,
     containerRef: { current: container },
     terminalRef,
     fitAddonRef: { current: { proposeDimensions: () => proposedDimensions } },
-    isVisibleRef: { current: isVisible },
+    isVisibleRef,
     isComposingRef: { current: false },
     lowMemoryMode: false,
     disableHardwareAcceleration: true,
@@ -255,8 +256,48 @@ function createDisplay(
     onPtyOutputListenError: (error) => { throw error; },
   });
   const detachViewport = display.attachViewport(terminal);
-  return { display, terminal, terminalRef, events, detachViewport };
+  return { display, terminal, terminalRef, isVisibleRef, container, events, detachViewport };
 }
+
+test("project restoration keeps its full repaint when ResizeObserver also requests a fit", () => {
+  const { display, terminal, detachViewport } = createDisplay();
+  terminal.cols = 120;
+  terminal.rows = 30;
+  display.scheduleFit(true, true);
+  display.scheduleFit();
+  flushAnimationFrames();
+  assert.deepEqual(visibilityStub.refreshCalls, [[0, 29]]);
+  detachViewport();
+});
+
+test("a queued immediate fit cannot resize a pane after switching away from its project", () => {
+  const h = createDisplay();
+  h.display.scheduleFit(true, true);
+  h.isVisibleRef.current = false;
+  flushAnimationFrames();
+  assert.deepEqual(h.events, []);
+  assert.deepEqual(visibilityStub.refreshCalls, []);
+  h.isVisibleRef.current = true;
+  h.display.scheduleFit(true, true);
+  flushAnimationFrames();
+  assert.deepEqual(h.events.filter(event => event.startsWith("resize:")), ["resize:120x30"]);
+  assert.deepEqual(visibilityStub.refreshCalls, [[0, 29]]);
+  h.detachViewport();
+});
+
+test("a zero-size project layout retains its repaint request until dimensions become available", () => {
+  const h = createDisplay();
+  h.terminal.cols = 120;
+  h.terminal.rows = 30;
+  h.container.offsetWidth = 0;
+  h.display.scheduleFit(true, true);
+  flushAnimationFrames();
+  h.container.offsetWidth = 1200;
+  h.display.scheduleFit();
+  flushAnimationFrames();
+  assert.deepEqual(visibilityStub.refreshCalls, [[0, 29]]);
+  h.detachViewport();
+});
 
 test("immediate fit does not force a viewport refresh when dimensions are unchanged", () => {
   const { display, terminal, detachViewport } = createDisplay();

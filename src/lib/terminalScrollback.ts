@@ -8,6 +8,8 @@ const PRIVATE_INPUT_MODES = new Set([
 /** Preserve display state and text while removing the previous process's input protocols. */
 export function prepareTerminalScrollback(snapshot: string): string {
   return snapshot
+    // The old PTY's unknown encoding must not quarantine a newly created one.
+    .replace(/(?:\x1b\]|\x9d)777;CLIManagerMouseEncoding=unknown(?:\x07|\x1b\\|\x9c)/g, "")
     .replace(/(\x1b\[|\x9b)\?([\d;]+)([hl])/g, (_sequence, csi: string, params: string, final: string) => {
       const displayModes = params.split(";").filter(param => !PRIVATE_INPUT_MODES.has(Number(param)));
       return displayModes.length ? `${csi}?${displayModes.join(";")}${final}` : "";

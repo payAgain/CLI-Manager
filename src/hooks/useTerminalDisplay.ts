@@ -7,7 +7,7 @@ import { refreshTerminalViewport } from "../lib/terminalVisibility";
 import { isLightTerminalTheme } from "../lib/terminalThemes";
 import { logError, logWarn } from "../lib/logger";
 import { markTerminalSnapshotDirty } from "../lib/sessionSnapshotPersistence";
-import { writeTerminalReplay } from "../lib/terminalReplayWriter";
+import { resetTerminalMouseProtocol, writeTerminalReplay } from "../lib/terminalReplayWriter";
 import { TerminalResizeDebouncer } from "../terminal/browser/TerminalResizeDebouncer";
 import { TerminalResizeRenderBarrier } from "../terminal/browser/TerminalResizeRenderBarrier";
 import {
@@ -146,6 +146,7 @@ export interface UseTerminalDisplayResult {
   attachViewport: (terminal: Terminal) => () => void;
   resetOutputState: () => void;
   cancelScheduledFit: () => void;
+  suspendViewport: () => void;
   resetViewportRefreshState: () => void;
 }
 
@@ -156,7 +157,6 @@ export function useTerminalDisplay({
   fitAddonRef,
   isVisibleRef,
   isComposingRef,
-  lowMemoryMode,
   disableHardwareAcceleration,
   linuxGraphicsDisableWebgl,
   isTransparentRef,
@@ -171,6 +171,7 @@ export function useTerminalDisplay({
   const webglDisposeTimerRef = useRef<number | null>(null);
   const webglContextLostRef = useRef(false);
   const fitRafRef = useRef<number | null>(null);
+  const pendingFitRef = useRef({ immediateResize: false, forceViewportRefresh: false });
   const needsViewportRefreshRef = useRef(false);
   const ptyPendingChunksRef = useRef<PendingTerminalWrite[]>([]);
   const ptyWriteScheduleTokenRef = useRef(Symbol(sessionId));
@@ -256,7 +257,7 @@ export function useTerminalDisplay({
     if (!canUseWebglRenderer(theme)) {
       return disposeWebglRenderer();
     }
-    if (lowMemoryMode && !isVisibleRef.current) return false;
+    if (!isVisibleRef.current) return false;
     if (webglAddonRef.current) return false;
     try {
       const addon = createWebglAddon();
@@ -367,6 +368,7 @@ export function useTerminalDisplay({
       if (first.reset) {
         outputDiagnosticsRef?.current?.reset();
         terminal.reset();
+        resetTerminalMouseProtocol(terminal);
         commitPending();
         schedulePendingWrite();
         return;
@@ -554,11 +556,13 @@ export function useTerminalDisplay({
   };
 
   const resizeTerminal = (terminal: Terminal, cols: number, rows: number) => {
+    const container = containerRef.current;
+    if (!isVisibleRef.current || !container || container.offsetWidth <= 0 || container.offsetHeight <= 0) return;
     if (terminal.cols === cols && terminal.rows === rows) return;
     cancelPendingViewportRestore();
-    const container = containerRef.current;
     const shouldGuardHorizontalShrink = (
       cols < terminal.cols
+      && !needsViewportRefreshRef.current
       && isVisibleRef.current
       && container !== null
     );
@@ -620,11 +624,12 @@ export function useTerminalDisplay({
   };
 
   const fitWhenStable = (immediateResize = false, forceViewportRefresh = immediateResize) => {
+    if (forceViewportRefresh) needsViewportRefreshRef.current = true;
     const container = containerRef.current;
     const fitAddon = fitAddonRef.current;
     const terminal = terminalRef.current;
     if (!container || !fitAddon || !terminal) return;
-    if (!immediateResize && (!isVisibleRef.current || isComposingRef.current)) return;
+    if (!isVisibleRef.current || isComposingRef.current) return;
     if (container.offsetWidth <= 0 || container.offsetHeight <= 0) return;
 
     const dims = fitAddon.proposeDimensions();
@@ -645,7 +650,14 @@ export function useTerminalDisplay({
 
   const cancelFitRequest = () => {
     cancelFitFrame();
+    pendingFitRef.current = { immediateResize: false, forceViewportRefresh: false };
     resizeDebouncerRef.current?.cancel();
+  };
+
+  const suspendViewport = () => {
+    cancelFitRequest();
+    resizeRenderBarrierRef.current?.cancel();
+    needsViewportRefreshRef.current = true;
   };
 
   const cancelScheduledFit = () => {
@@ -655,12 +667,16 @@ export function useTerminalDisplay({
   };
 
   const scheduleFit = (immediateResize = false, forceViewportRefresh = immediateResize) => {
-    // Keep the debouncer's leading/trailing horizontal cadence alive across
-    // consecutive ResizeObserver frames; only replace the pending fit frame.
-    cancelFitFrame();
+    // ResizeObserver and visibility restoration can request layout in the same
+    // frame. A routine fit must never downgrade the required full repaint.
+    pendingFitRef.current.immediateResize ||= immediateResize;
+    pendingFitRef.current.forceViewportRefresh ||= forceViewportRefresh;
+    if (fitRafRef.current !== null) return;
     fitRafRef.current = requestAnimationFrame(() => {
       fitRafRef.current = null;
-      fitWhenStable(immediateResize, forceViewportRefresh);
+      const pending = pendingFitRef.current;
+      pendingFitRef.current = { immediateResize: false, forceViewportRefresh: false };
+      fitWhenStable(pending.immediateResize, pending.forceViewportRefresh);
     });
   };
 
@@ -697,6 +713,7 @@ export function useTerminalDisplay({
     attachViewport,
     resetOutputState,
     cancelScheduledFit,
+    suspendViewport,
     resetViewportRefreshState,
   };
 }

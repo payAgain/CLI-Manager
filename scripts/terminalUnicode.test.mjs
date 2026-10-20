@@ -9,6 +9,16 @@ const { Terminal } = require("@xterm/xterm");
 const { SerializeAddon } = require("@xterm/addon-serialize");
 const source = readFileSync(new URL("../src/lib/terminalUnicode.ts", import.meta.url), "utf8");
 
+// Match the desktop WebView's atob decoder. This beta addon's Node-only Buffer
+// decoder passes a pooled backing buffer to DataView without its byteOffset,
+// corrupting the Unicode trie in tests even though the browser data is correct.
+const browserUnicodeAddon = { exports: {} };
+new Function("module", "exports", "Buffer", readFileSync(require.resolve("@xterm/addon-unicode-graphemes"), "utf8"))(
+  browserUnicodeAddon, browserUnicodeAddon.exports, undefined,
+);
+const requireBrowserUnicode = (id) => id === "@xterm/addon-unicode-graphemes"
+  ? browserUnicodeAddon.exports : require(id);
+
 // 替换构建期环境变量，运行实际模块与真实 xterm/addon，不模拟字符宽度服务。
 function loadUnicodeModule(buildMode) {
   const compiled = ts.transpileModule(
@@ -16,7 +26,7 @@ function loadUnicodeModule(buildMode) {
     { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } },
   ).outputText;
   const exports = {};
-  new Function("require", "exports", compiled)(require, exports);
+  new Function("require", "exports", compiled)(requireBrowserUnicode, exports);
   return exports;
 }
 

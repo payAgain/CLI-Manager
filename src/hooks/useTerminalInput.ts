@@ -27,6 +27,7 @@ import {
   updateTerminalFileDragPointFromEvent,
 } from "../lib/terminalFileDrag";
 import { resolveManualDirectCodexEnterData } from "../lib/codexManualInput";
+import { canForwardTerminalBinaryInput } from "../lib/terminalReplayWriter";
 import { getTerminalCellWidth, resolveCursorIndexFromCellOffset } from "../lib/terminalCellWidth";
 import { trimTerminalPasteBoundaryLineBreaks } from "../lib/terminalKeyboard";
 import {
@@ -695,6 +696,7 @@ export function useTerminalInput({
       forwardTerminalInput(data, "onData");
     });
     const onBinaryDisposable = terminal.onBinary((data) => {
+      if (!canForwardTerminalBinaryInput(terminal, data)) return;
       terminalProcessManager
         .writeBinary(sessionId, data)
         .catch((err) => reportPtyWriteError("onBinary", err));

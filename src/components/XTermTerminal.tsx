@@ -46,14 +46,13 @@ import { useTerminalContextMenu } from "../hooks/useTerminalContextMenu";
 import { useTerminalOsc } from "../hooks/useTerminalOsc";
 import { useTerminalDisplay } from "../hooks/useTerminalDisplay";
 import { useTerminalInput } from "../hooks/useTerminalInput";
-import { writeTerminalReplay } from "../lib/terminalReplayWriter";
+import { trackTerminalMouseProtocol, writeTerminalReplay } from "../lib/terminalReplayWriter";
 import { copyTextToClipboard } from "../lib/systemClipboard";
 import { hasCodexTuiViewport } from "../lib/terminalTuiDisplay";
 import { createTerminalTuiColorSyncController } from "../lib/terminalTuiColorSync";
 import { hexToRgba, normalizeHexColor } from "../lib/terminalColor";
 import { wrapTerminalPasteTextForCtrlShiftV } from "../lib/terminalKeyboard";
 import {
-  didRenderFullTerminalViewport,
   refreshTerminalViewport,
 } from "../lib/terminalVisibility";
 import {
@@ -96,7 +95,6 @@ const SEARCH_HIGHLIGHT_LIMIT = 1000;
 const IMAGE_ADDON_PIXEL_LIMIT = 4 * 1024 * 1024;
 const IMAGE_ADDON_SEQUENCE_LIMIT = 8 * 1024 * 1024;
 const IMAGE_ADDON_STORAGE_LIMIT_MB = 32;
-const VISIBILITY_RESTORE_REVEAL_TIMEOUT_MS = 500;
 const CODEX_OUTPUT_SIGNATURE_PATTERN = /(?:openai\s+codex|\/model\s+to\s+change)/i;
 const ANSI_CSI_SEQUENCE_PATTERN = /\x1b\[[0-?]*[ -/]*[@-~]/g;
 let terminalImageAddonFallbackLogged = false;
@@ -395,10 +393,6 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
   const isActiveRef = useRef(isActive);
   // The orchestrator mirrors the visibility prop; display/viewport code reads it only.
   const isVisibleRef = useRef(isVisible);
-  const visibilityRestorePendingRef = useRef(false);
-  const visibilityRestoreRevealTimerRef = useRef<number | null>(null);
-  const visibilityRestoreRevealRafRef = useRef<number | null>(null);
-  const visibilityRestoreFallbackRafRef = useRef<number | null>(null);
   const codexCursorShowTimerRef = useRef<number | null>(null);
   const codexSessionDetectedRef = useRef(false);
   const displayNormalizeOutputRef = useRef<(text: string) => string>((text) => text);
@@ -448,7 +442,6 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
     && Boolean(terminalSession?.cliSessionId?.trim());
 
   const [assetUrl, setAssetUrl] = useState<string | null>(null);
-  const [visibilityRestorePending, setVisibilityRestorePending] = useState(false);
   const [linuxGraphicsConstrained, setLinuxGraphicsConstrained] = useState(false);
   const [linuxGraphicsDisableWebgl, setLinuxGraphicsDisableWebgl] = useState(false);
   const [markdownPreviewOpen, setMarkdownPreviewOpen] = useState(false);
@@ -664,6 +657,7 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
     attachViewport,
     resetOutputState,
     cancelScheduledFit,
+    suspendViewport,
     resetViewportRefreshState,
   } = useTerminalDisplay({
     sessionId,
@@ -795,71 +789,6 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
     applyCodexCursorVisibility(terminal);
   }, [hideCodexRuntimeCursor, sessionId]);
 
-  const clearVisibilityRestoreRevealSchedule = () => {
-    if (visibilityRestoreRevealTimerRef.current !== null) {
-      window.clearTimeout(visibilityRestoreRevealTimerRef.current);
-      visibilityRestoreRevealTimerRef.current = null;
-    }
-    if (visibilityRestoreRevealRafRef.current !== null) {
-      window.cancelAnimationFrame(visibilityRestoreRevealRafRef.current);
-      visibilityRestoreRevealRafRef.current = null;
-    }
-    if (visibilityRestoreFallbackRafRef.current !== null) {
-      window.cancelAnimationFrame(visibilityRestoreFallbackRafRef.current);
-      visibilityRestoreFallbackRafRef.current = null;
-    }
-  };
-
-  const finishVisibilityRestoreReveal = () => {
-    clearVisibilityRestoreRevealSchedule();
-    if (!visibilityRestorePendingRef.current) return;
-    visibilityRestorePendingRef.current = false;
-    setVisibilityRestorePending(false);
-  };
-
-  const scheduleVisibilityRestoreFallbackRefresh = () => {
-    visibilityRestoreFallbackRafRef.current = window.requestAnimationFrame(() => {
-      visibilityRestoreFallbackRafRef.current = window.requestAnimationFrame(() => {
-        visibilityRestoreFallbackRafRef.current = null;
-        if (!visibilityRestorePendingRef.current || !isVisibleRef.current) return;
-        markViewportRefreshNeeded();
-        scheduleFit(true, true);
-      });
-    });
-  };
-
-  const beginVisibilityRestoreReveal = (deferViewportRefresh = false) => {
-    clearVisibilityRestoreRevealSchedule();
-    if (!visibilityRestorePendingRef.current) {
-      visibilityRestorePendingRef.current = true;
-      setVisibilityRestorePending(true);
-    }
-    if (deferViewportRefresh) {
-      scheduleVisibilityRestoreFallbackRefresh();
-    }
-    visibilityRestoreRevealTimerRef.current = window.setTimeout(() => {
-      visibilityRestoreRevealTimerRef.current = null;
-      finishVisibilityRestoreReveal();
-    }, VISIBILITY_RESTORE_REVEAL_TIMEOUT_MS);
-  };
-
-  const handleVisibilityRestoreRender = (terminal: Terminal, range: { start: number; end: number }) => {
-    if (
-      !visibilityRestorePendingRef.current
-      || terminalRef.current !== terminal
-      || !isVisibleRef.current
-      || !didRenderFullTerminalViewport(range, terminal.rows)
-      || visibilityRestoreRevealRafRef.current !== null
-    ) {
-      return;
-    }
-    clearVisibilityRestoreRevealSchedule();
-    visibilityRestoreRevealRafRef.current = window.requestAnimationFrame(() => {
-      visibilityRestoreRevealRafRef.current = null;
-      finishVisibilityRestoreReveal();
-    });
-  };
-
   // Hot-update terminal options without recreating the terminal.
   // `isTransparent` is in the dep array so toggling the background image
   // immediately recomputes the theme (otherwise the WebGL clear color stays
@@ -905,12 +834,12 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
 
   // Hidden terminals stay attached and continue parsing output. Visibility only
   // controls renderer resources and when pending layout work is flushed.
-  useEffect(() => {
+  useLayoutEffect(() => {
     const wasVisible = isVisibleRef.current;
     isVisibleRef.current = isVisible;
 
     if (!isVisible) {
-      finishVisibilityRestoreReveal();
+      suspendViewport();
       scheduleHiddenWebglDispose(lowMemoryMode || linuxGraphicsConstrained);
       return;
     }
@@ -926,12 +855,9 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
 
     if (!fitAddonRef.current || !containerRef.current) return;
     if (becameVisible || rendererRestored) {
-      beginVisibilityRestoreReveal(becameVisible && !rendererRestored);
-    }
-    if (rendererRestored) {
       markViewportRefreshNeeded();
     }
-    scheduleFit(true, rendererRestored);
+    scheduleFit(true, becameVisible || rendererRestored);
     if (terminalRef.current) {
       tuiColorSync.normalize(terminalRef.current);
       tuiColorSync.schedule(terminalRef.current);
@@ -975,8 +901,7 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
 
   // Focus follows the single globally active tab. Keyboard, cursor and IME stay
   // bound to this; a visible-but-unfocused split pane renders but never steals
-  // focus. Visibility restoration temporarily hides the xterm container, so
-  // wait for that mask to clear before focusing the helper textarea.
+  // focus. The layout effect commits pane visibility before this focus frame.
   useEffect(() => {
     isActiveRef.current = isActive;
     const terminal = terminalRef.current;
@@ -985,19 +910,17 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
       terminal.blur();
       return;
     }
-    if (visibilityRestorePending) return;
     const focusRaf = window.requestAnimationFrame(() => {
       if (
         terminalRef.current === terminal
         && isActiveRef.current
         && isVisibleRef.current
-        && !visibilityRestorePendingRef.current
       ) {
         focusTerminalWithCodexCursorPolicy(terminal);
       }
     });
     return () => window.cancelAnimationFrame(focusRaf);
-  }, [isActive, isVisible, visibilityRestorePending]);
+  }, [isActive, isVisible]);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -1211,6 +1134,9 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
     terminal.loadAddon(fitAddon);
     terminal.loadAddon(searchAddon);
     terminal.loadAddon(serializeAddon);
+    const mouseProtocol = trackTerminalMouseProtocol(terminal);
+    baseDisposables.push(mouseProtocol);
+    const serializeSnapshot = () => mouseProtocol.serializeSnapshot(serializeAddon);
     installTerminalUnicode(terminal);
     terminal.loadAddon(webLinksAddon);
     terminal.open(containerRef.current);
@@ -1234,7 +1160,7 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
     baseDisposables.push(linkHoverIcon);
     // 注册定时节流落盘的快照来源：让崩溃/强杀也能恢复到最近一次落盘的画面。
     const serializeAfterWriteBarrier = (signal: AbortSignal) => serializeTerminalAfterWrite(
-      terminal, () => serializeAddon.serialize(), signal,
+      terminal, serializeSnapshot, signal,
     );
     const unregisterSnapshotSource = registerTerminalSnapshotSource(
       sessionId,
@@ -1306,7 +1232,7 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
         if (terminalRef.current !== terminal) return;
         snapshotBeforeUnmountRef.current = () => {
           try {
-            useTerminalStore.getState().updateSessionTerminalSnapshot(sessionId, serializeAddon.serialize());
+            useTerminalStore.getState().updateSessionTerminalSnapshot(sessionId, serializeSnapshot());
           } catch (err) {
             logError("Failed to snapshot terminal buffer before dispose", { sessionId, err });
           }
@@ -1616,8 +1542,7 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
     });
     const detachViewport = attachViewport(terminal);
     displayDisposables.push({ dispose: detachViewport });
-    displayDisposables.push(terminal.onRender((range) => {
-      handleVisibilityRestoreRender(terminal, range);
+    displayDisposables.push(terminal.onRender(() => {
       if (isVisibleRef.current) tuiColorSync.schedule(terminal);
     }));
     displayDisposables.push(terminal.onScroll(() => {
@@ -1661,8 +1586,6 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
       tuiColorSync.dispose();
       resetOutputState();
       clearHiddenWebglDisposeTimer();
-      clearVisibilityRestoreRevealSchedule();
-      visibilityRestorePendingRef.current = false;
       resetViewportRefreshState();
       unregisterSnapshotSource();
       disposeTerminalSubsystem(baseDisposables);
@@ -1800,10 +1723,6 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
         "--terminal-bg-overlay-color": backgroundOverlayColor,
       } as CSSProperties)
     : ({ "--terminal-font-family": effectiveFontFamily, backgroundColor } as CSSProperties);
-  const visibilityRestoreStarting = isVisible && !isVisibleRef.current;
-  const terminalContainerStyle: CSSProperties | undefined = visibilityRestorePending || visibilityRestoreStarting
-    ? { visibility: "hidden" }
-    : undefined;
 
   return (
     <div
@@ -1922,7 +1841,7 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
           className="absolute inset-y-0 left-0 min-w-0 overflow-hidden"
           style={{ width: markdownPreviewOpen ? `${100 - markdownPreviewPanelPercent}%` : "100%" }}
         >
-          <div ref={containerRef} className="relative h-full w-full overflow-hidden pl-2" style={terminalContainerStyle} />
+          <div ref={containerRef} className="relative h-full w-full overflow-hidden pl-2" />
         </div>
         {markdownPreviewOpen && (
           <div

@@ -16,7 +16,7 @@ function load(path) {
   return exports;
 }
 const { prepareTerminalScrollback } = load("../src/lib/terminalScrollback.ts");
-const { writeTerminalReplay } = load("../src/lib/terminalReplayWriter.ts");
+const { writeTerminalReplay, trackTerminalMouseProtocol, canForwardTerminalBinaryInput } = load("../src/lib/terminalReplayWriter.ts");
 const write = (terminal, text) => new Promise(resolve => terminal.write(text, resolve));
 const replay = (terminal, text) => new Promise(resolve => writeTerminalReplay(terminal, text, resolve));
 // The input-mode suffix found in the affected saved terminal, without user content.
@@ -58,6 +58,22 @@ test("the newly started shell or Agent can negotiate its own live input modes", 
   await write(value, "\x1b[?1003h\x1b[?1006h\x1b[?1004h");
   assert.equal(value.modes.mouseTrackingMode, "any");
   assert.equal(value.modes.sendFocusMode, true);
+});
+
+test("a fresh PTY does not inherit an old checkpoint's unknown mouse encoding", async t => {
+  for (const marker of [
+    "\x1b]777;CLIManagerMouseEncoding=unknown\x07",
+    "\x1b]777;CLIManagerMouseEncoding=unknown\x1b\\",
+  ]) {
+    const value = terminal(t);
+    const protocol = trackTerminalMouseProtocol(value);
+    t.after(() => protocol.dispose());
+    await replay(value, prepareTerminalScrollback(`history${oldModes}${marker}`));
+    assert.equal(value.modes.mouseTrackingMode, "none");
+    await write(value, "\x1b[?1003h");
+    assert.equal(canForwardTerminalBinaryInput(value, "\x1b[MC,("), true);
+    assert.equal(value.buffer.active.getLine(0).translateToString(true), "history");
+  }
 });
 
 test("live daemon snapshots continue to retain the running TUI's modes", async t => {
