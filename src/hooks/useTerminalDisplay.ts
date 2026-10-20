@@ -7,6 +7,7 @@ import { refreshTerminalViewport } from "../lib/terminalVisibility";
 import { isLightTerminalTheme } from "../lib/terminalThemes";
 import { logError, logWarn } from "../lib/logger";
 import { markTerminalSnapshotDirty } from "../lib/sessionSnapshotPersistence";
+import { writeTerminalReplay } from "../lib/terminalReplayWriter";
 import { TerminalResizeDebouncer } from "../terminal/browser/TerminalResizeDebouncer";
 import { TerminalResizeRenderBarrier } from "../terminal/browser/TerminalResizeRenderBarrier";
 import {
@@ -75,7 +76,7 @@ const cancelGlobalTerminalWrite = (token: symbol) => {
   }
 };
 
-type NormalizeTerminalOutput = (text: string) => string;
+type NormalizeTerminalOutput = (text: string, recordHistory?: boolean) => string;
 type TransformTerminalOutput = (text: string) => string;
 type AfterTerminalWrite = (terminal: Terminal) => void;
 
@@ -377,19 +378,24 @@ export function useTerminalDisplay({
       }
       ptyWriteInProgressRef.current = true;
       const transformed = transformOutputRef.current(combined);
-      terminal.write(transformed, () => {
+      const onCommitted = () => {
         ptyWriteInProgressRef.current = false;
         if (cancelled || terminalRef.current !== terminal) return;
         outputDiagnosticsRef?.current?.onWriteCommitted(terminal, transformed);
         handleTerminalWriteCommitted(terminal);
         commitPending();
         schedulePendingWrite();
-      });
+      };
+      if (first.replay) {
+        writeTerminalReplay(terminal, transformed, onCommitted);
+      } else {
+        terminal.write(transformed, onCommitted);
+      }
     };
     const queuePayload = (delivery: TerminalOutputDelivery, markSnapshotDirty: boolean) => {
       const payload = delivery.frame;
       const rawText = textDecoder.decode(payload.data, { stream: true });
-      const text = normalizeOutputRef.current(rawText);
+      const text = normalizeOutputRef.current(rawText, payload.kind === "output");
       outputDiagnosticsRef?.current?.onFrame(payload, rawText, text);
       if (!text && payload.kind !== "replay" && payload.kind !== "reset") {
         delivery.commit(rawText.length);
@@ -448,7 +454,7 @@ export function useTerminalDisplay({
           }
           await new Promise<void>((resolve) => {
             const transformed = transformOutputRef.current(text);
-            terminal.write(transformed, () => {
+            writeTerminalReplay(terminal, transformed, () => {
               if (terminalRef.current === terminal) {
                 outputDiagnosticsRef?.current?.onWriteCommitted(terminal, transformed);
                 handleTerminalWriteCommitted(terminal);

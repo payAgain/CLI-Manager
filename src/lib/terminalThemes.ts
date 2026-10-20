@@ -1,4 +1,5 @@
 import type { ITheme } from "@xterm/xterm";
+import type { TranslationKey } from "./i18n";
 
 export type TerminalThemeGroupId = "cool" | "warm" | "nature" | "pink-purple" | "high-contrast" | "light-office";
 
@@ -11,6 +12,7 @@ export interface TerminalThemeGroup {
 export interface TerminalThemePreset {
   id: string;
   name: string;
+  labelKey?: TranslationKey;
   theme: ITheme;
   group: TerminalThemeGroupId;
   family?: string;
@@ -115,6 +117,58 @@ export type DarkTerminalPalette =
   | "terminal-green"
   | "dracula-purple"
   | "carbon-black";
+
+const cliManagerDark: ITheme = {
+  background: "#242424",
+  foreground: "#e8e7e3",
+  cursor: "#e8e7e3",
+  cursorAccent: "#242424",
+  selectionBackground: "#414141",
+  selectionInactiveBackground: "#333331",
+  selectionForeground: "#f3f1ec",
+  black: "#1b1b1b",
+  red: "#db8278",
+  green: "#9bb59e",
+  yellow: "#c2ad78",
+  blue: "#a1b9d3",
+  magenta: "#b5a5c7",
+  cyan: "#93babe",
+  white: "#d9d7d1",
+  brightBlack: "#aaa79f",
+  brightRed: "#e89a91",
+  brightGreen: "#b4cbb4",
+  brightYellow: "#dbc897",
+  brightBlue: "#bad0e6",
+  brightMagenta: "#d0bddf",
+  brightCyan: "#afd0d0",
+  brightWhite: "#f3f1ec",
+};
+
+const cliManagerLight: ITheme = {
+  background: "#faf9f6",
+  foreground: "#302d28",
+  cursor: "#302d28",
+  cursorAccent: "#faf9f6",
+  selectionBackground: "#ded9ce",
+  selectionInactiveBackground: "#eae6de",
+  selectionForeground: "#302d28",
+  black: "#302d28",
+  red: "#b4453e",
+  green: "#4c7556",
+  yellow: "#856424",
+  blue: "#3f6485",
+  magenta: "#785786",
+  cyan: "#356f75",
+  white: "#625e57",
+  brightBlack: "#766f66",
+  brightRed: "#a43d36",
+  brightGreen: "#3f6949",
+  brightYellow: "#78591e",
+  brightBlue: "#345b7c",
+  brightMagenta: "#6b4d7b",
+  brightCyan: "#2d656c",
+  brightWhite: "#49453f",
+};
 
 const tokyoNightDark: ITheme = {
   background: "#1a1b26",
@@ -1402,6 +1456,8 @@ const windowsTerminalVintage: ITheme = {
 };
 
 export const TERMINAL_THEME_PRESETS: TerminalThemePreset[] = [
+  { id: "cliManagerDark", name: "CLI-Manager Charcoal", labelKey: "settings.theme.terminal.charcoal", theme: cliManagerDark, group: "high-contrast", family: "cli-manager", tone: "dark" },
+  { id: "cliManagerLight", name: "CLI-Manager Warm Paper", labelKey: "settings.theme.terminal.warmPaper", theme: cliManagerLight, group: "light-office", family: "cli-manager", tone: "light" },
   { id: "windowsTerminalCampbell", name: "Windows Terminal Campbell", theme: windowsTerminalCampbell, group: "high-contrast", family: "windows-terminal", tone: "dark" },
   { id: "windowsTerminalCampbellPowershell", name: "Windows Terminal Campbell PowerShell", theme: windowsTerminalCampbellPowershell, group: "cool", family: "windows-terminal", tone: "dark" },
   { id: "windowsTerminalVintage", name: "Windows Terminal Vintage", theme: windowsTerminalVintage, group: "high-contrast", family: "windows-terminal", tone: "dark" },
@@ -1473,10 +1529,10 @@ function resolveAutoLightThemeId(lightPalette: LightTerminalPalette = "warm-pape
   if (lightPalette === "apple-mist") return "githubLight";
   if (lightPalette === "apple-warm") return "warmPaperLight";
   if (lightPalette === "apple-mono") return "githubLight";
-  return "warmPaperLight";
+  return "cliManagerLight";
 }
 
-function resolveAutoDarkThemeId(darkPalette: DarkTerminalPalette = "night-indigo"): string {
+function resolveAutoDarkThemeId(darkPalette: DarkTerminalPalette = "carbon-black"): string {
   if (darkPalette === "night-indigo") return "codexDark";
   if (darkPalette === "forest-night") return "forestNightDark";
   if (darkPalette === "graphite-red") return "graphiteRedDark";
@@ -1485,22 +1541,22 @@ function resolveAutoDarkThemeId(darkPalette: DarkTerminalPalette = "night-indigo
   if (darkPalette === "catppuccin-mocha") return "catppuccinMocha";
   if (darkPalette === "terminal-green") return "forestNightDark";
   if (darkPalette === "dracula-purple") return "dracula";
-  if (darkPalette === "carbon-black") return "carbonfox";
-  return "codexDark";
+  if (darkPalette === "carbon-black") return "cliManagerDark";
+  return "cliManagerDark";
 }
 
 function resolveAutoLightTheme(lightPalette: LightTerminalPalette = "warm-paper"): ITheme {
-  return themeMap.get(resolveAutoLightThemeId(lightPalette)) ?? warmPaperLight;
+  return themeMap.get(resolveAutoLightThemeId(lightPalette)) ?? cliManagerLight;
 }
 
-function resolveAutoDarkTheme(darkPalette: DarkTerminalPalette = "night-indigo"): ITheme {
-  return themeMap.get(resolveAutoDarkThemeId(darkPalette)) ?? codexDark;
+function resolveAutoDarkTheme(darkPalette: DarkTerminalPalette = "carbon-black"): ITheme {
+  return themeMap.get(resolveAutoDarkThemeId(darkPalette)) ?? cliManagerDark;
 }
 
 export function resolveAutoTerminalThemeId(
   resolvedTheme: "dark" | "light",
   lightPalette: LightTerminalPalette = "warm-paper",
-  darkPalette: DarkTerminalPalette = "night-indigo"
+  darkPalette: DarkTerminalPalette = "carbon-black"
 ): string {
   return resolvedTheme === "dark" ? resolveAutoDarkThemeId(darkPalette) : resolveAutoLightThemeId(lightPalette);
 }
@@ -1509,7 +1565,7 @@ export function resolveTerminalThemeId(
   themeName: string,
   resolvedTheme: "dark" | "light",
   lightPalette: LightTerminalPalette = "warm-paper",
-  darkPalette: DarkTerminalPalette = "night-indigo"
+  darkPalette: DarkTerminalPalette = "carbon-black"
 ): string {
   if (themeName === "auto") {
     return resolveAutoTerminalThemeId(resolvedTheme, lightPalette, darkPalette);
@@ -1526,7 +1582,7 @@ export function getTerminalTheme(
   themeName: string,
   resolvedTheme: "dark" | "light",
   lightPalette: LightTerminalPalette = "warm-paper",
-  darkPalette: DarkTerminalPalette = "night-indigo"
+  darkPalette: DarkTerminalPalette = "carbon-black"
 ): ITheme {
   return themeMap.get(resolveTerminalThemeId(themeName, resolvedTheme, lightPalette, darkPalette)) ??
     (resolvedTheme === "dark" ? resolveAutoDarkTheme(darkPalette) : resolveAutoLightTheme(lightPalette));
@@ -1536,7 +1592,7 @@ export function getTerminalBackground(
   themeName: string,
   resolvedTheme: "dark" | "light",
   lightPalette: LightTerminalPalette = "warm-paper",
-  darkPalette: DarkTerminalPalette = "night-indigo"
+  darkPalette: DarkTerminalPalette = "carbon-black"
 ): string {
   return getTerminalTheme(themeName, resolvedTheme, lightPalette, darkPalette).background!;
 }

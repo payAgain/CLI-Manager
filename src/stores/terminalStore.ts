@@ -1,3 +1,4 @@
+import { useCommandHistoryStore } from "./commandHistoryStore";
 import { acceptsAgentHook, applyAgentDetection, applyHookAgentIdentity, type AgentDetection } from "../lib/terminalAgent";
 import { create } from "zustand";
 import { invoke } from "@tauri-apps/api/core";
@@ -17,8 +18,10 @@ import {
 import { debugConsoleWarn } from "../lib/debugConsole";
 import { sourceTool, type SyncedHistoryGroup } from "../lib/externalSessionGrouping";
 import { logError, logInfo, logWarn, recordCrashActivity } from "../lib/logger";
-import { appendResumeCliArgs, isDirectCodexStartupCommand, normalizeDirectCodexStartupCommand, resolveProjectStartupCommand, withCodexLightTuiTheme } from "../lib/projectStartupCommand";
+import { isDirectCodexStartupCommand, normalizeDirectCodexStartupCommand, resolveProjectStartupCommand, withCodexLightTuiTheme } from "../lib/projectStartupCommand";
 import { getTerminalTheme } from "../lib/terminalThemes";
+import { prepareTerminalScrollback } from "../lib/terminalScrollback";
+import { resolveTerminalConversationRestore } from "../lib/terminalConversationRestore";
 import { normalizeHexColor } from "../lib/terminalColor";
 import { useSettingsStore } from "./settingsStore";
 import { useSessionStore } from "./sessionStore";
@@ -328,14 +331,8 @@ interface TerminalStore {
 
 // 防止 StrictMode 双重调用
 let restoreInProgress = false;
-let sshSessionPersistenceQueue = Promise.resolve();
-
 function queueSshSessionPersistence(sessions: TerminalSession[]): Promise<void> {
-  const snapshot = sessions.map((session) => ({ ...session }));
-  sshSessionPersistenceQueue = sshSessionPersistenceQueue
-    .catch(() => {})
-    .then(() => useSessionStore.getState().saveSessions(snapshot));
-  return sshSessionPersistenceQueue;
+  return useSessionStore.getState().saveSessions(sessions);
 }
 
 function basenameFromPath(path: string | null | undefined): string | null {
@@ -1119,30 +1116,6 @@ export function detectCliResumeKind(
   return null;
 }
 
-// 构造 CLI 会话的 resume 启动命令。为什么不贴 scrollback 而改走 resume：codex/claude/grok 启动用绝对光标
-// 定位整屏重绘，会盖掉我们贴回的历史文本（见 research/tui-startup-clear-sequences.md），因此改由 CLI
-// 自己 resume 重画上次对话。有 cliSessionId 走带 id 的 resume；无 id 兜底续最近一次（用户已拍板）。
-function buildCliResumeStartupCommand(
-  kind: "claude" | "codex" | "grok",
-  cliSessionId: string | undefined,
-  project: Project | undefined
-): string {
-  const id = cliSessionId?.trim();
-  const hasValidId = !!id && !/\s/.test(id) && !/[\r\n]/.test(id);
-  if (kind === "codex") {
-    const base = hasValidId ? `codex resume --no-alt-screen ${id}` : "codex resume --no-alt-screen --last";
-    return appendResumeCliArgs(base, "codex", project ?? null);
-  }
-  if (kind === "grok") {
-    // Align with Claude: no --no-alt-screen by default. No id → cwd-scoped continue.
-    const base = hasValidId ? `grok --resume ${id}` : "grok --continue";
-    return appendResumeCliArgs(base, "grok", project ?? null);
-  }
-  const base = hasValidId ? `claude --resume ${id}` : "claude --continue";
-  return appendResumeCliArgs(base, "claude", project ?? null);
-}
-
-
 function buildDirectCodexLaunchCommand(command: string): string {
   const normalized = normalizeDirectCodexStartupCommand(command) ?? command.trim();
   return `\x0c${normalized}`;
@@ -1161,6 +1134,8 @@ export interface DetachedPtyLaunchOptions {
   projectId?: string;
   worktreeId?: string;
   sshHostId?: string;
+  remotePath?: string;
+  cliTool?: string;
   cwd?: string | null;
   startupCmd?: string | null;
   envVars?: Record<string, string> | null;
@@ -1198,7 +1173,7 @@ function applyPtyStatusToSessions(
   return sessions.map((session) => (
     session.id === sessionId ? {
       ...applySshExitState(session, payload),
-      ...(payload.status !== "running" ? { runtimeAgent: null, cliSessionId: undefined, cliReasoningEffort: undefined } : {}),
+      ...(payload.status !== "running" ? { runtimeAgent: null, pendingConversationResume: undefined, cliSessionId: undefined, cliReasoningEffort: undefined } : {}),
     } : session
   ));
 }
@@ -1306,6 +1281,7 @@ function buildPtyEnvVars(
   shell?: string | null
 ): Record<string, string> | null {
   const next = { ...(envVars ?? {}) };
+  next.CLI_MANAGER_COMMAND_HISTORY = useSettingsStore.getState().commandHistoryEnabled ? "1" : "0";
   if (isShellRuntimeMonitoringEnabled() && supportsShellRuntimeInjection(shell)) {
     next[SHELL_RUNTIME_MONITORING_ENV] = "1";
   } else {
@@ -1337,17 +1313,16 @@ async function resolvePtyLaunch(options: DetachedPtyLaunchOptions, os: OsPlatfor
     ? useProjectStore.getState().projects.find((item) => item.id === options.projectId)
     : undefined;
 
-  const requestedSshHostId = project?.environment_type === "ssh"
-    ? project.ssh_host_id?.trim()
-    : options.sshHostId?.trim();
+  const requestedSshHostId = options.sshHostId?.trim()
+    || (project?.environment_type === "ssh" ? project.ssh_host_id?.trim() : undefined);
   if (project?.environment_type === "ssh" && !requestedSshHostId) {
     throw new Error("ssh_project_configuration_invalid");
   }
   if (requestedSshHostId) {
     const sshHostId = requestedSshHostId;
-    const remotePath = project?.environment_type === "ssh"
+    const remotePath = options.remotePath?.trim() || (project?.environment_type === "ssh"
       ? project.remote_path.trim()
-      : options.cwd?.trim() || "/";
+      : options.cwd?.trim() || "/");
     if (!sshHostId || !remotePath) throw new Error("ssh_project_configuration_invalid");
 
     const sshStore = useSshHostStore.getState();
@@ -1361,9 +1336,8 @@ async function resolvePtyLaunch(options: DetachedPtyLaunchOptions, os: OsPlatfor
     const resolvedEnvironmentOverrides = options.envVars === undefined && project?.environment_type === "ssh"
       ? parseProjectEnvVars(project) ?? {}
       : options.envVars ?? {};
-    const toolSource = project?.environment_type === "ssh"
-      ? resolveSshToolSource(project.cli_tool)
-      : null;
+    const toolSource = resolveSshToolSource(options.cliTool
+      ?? (project?.environment_type === "ssh" ? project.cli_tool : ""));
     let agentInstallation: ReturnType<typeof useSshAgentIntegrationStore.getState>["installations"][number] | undefined;
     let hookBridgeEnabled = false;
     if (toolSource) {
@@ -1376,9 +1350,12 @@ async function resolvePtyLaunch(options: DetachedPtyLaunchOptions, os: OsPlatfor
       const hostConfiguredRoot = integrationState.preferences.find(
         (preference) => preference.host_id === host.id && preference.source === toolSource,
       )?.configured_root.trim();
-      const effectiveConfigRoot = project?.cli_config_root.trim() || hostConfiguredRoot || "";
+      const projectConfigRoot = project?.environment_type === "ssh"
+        && resolveSshToolSource(project.cli_tool) === toolSource ? project.cli_config_root.trim() : "";
+      const environmentKey = toolSource === "claude" ? "CLAUDE_CONFIG_DIR" : "CODEX_HOME";
+      const effectiveConfigRoot = resolvedEnvironmentOverrides[environmentKey]
+        || projectConfigRoot || hostConfiguredRoot || "";
       if (effectiveConfigRoot) {
-        const environmentKey = toolSource === "claude" ? "CLAUDE_CONFIG_DIR" : "CODEX_HOME";
         resolvedEnvironmentOverrides[environmentKey] = effectiveConfigRoot;
       }
       const hookIntegration = integrationState.integrations.find((candidate) => (
@@ -2620,7 +2597,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
 
       // daemon 会话仍存活时先恢复 UI 元数据。实际 attach 等 XTerm 输出监听就绪后执行。
       const daemonSession = daemonSessionsById.get(ps.id);
-      if (daemonSession) {
+      if (daemonSession?.alive) {
         try {
             const taskStatus = resolveDaemonAttachTaskStatus(daemonSession);
             const taskUpdatedAt = resolveDaemonAttachUpdatedAt(daemonSession);
@@ -2703,17 +2680,19 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
 
       // 重建 PTY
       const restoreProject = ps.projectId ? projectMap.get(ps.projectId) : undefined;
-      const cliKind = detectCliResumeKind(ps.startupCmd, restoreProject);
-      const restoredStartupCmd = cliKind
-        ? buildCliResumeStartupCommand(cliKind, ps.cliSessionId, restoreProject)
-        : normalizeDirectCodexStartupCommand(ps.startupCmd);
+      const conversation = resolveTerminalConversationRestore(ps, restoreProject);
+      const restoredStartupCmd = conversation.startupCmd;
       let launch: ResolvedPtyLaunch;
       try {
         launch = await resolvePtyLaunch({
           projectId: ps.projectId,
           worktreeId: ps.worktreeId,
+          sshHostId: ps.sshHostId,
+          remotePath: ps.remotePath,
+          cliTool: conversation.cliTool ?? "",
           cwd: ps.cwd,
-          startupCmd: restoredStartupCmd,
+          // An explicit empty command also suppresses SSH's project-launch fallback.
+          startupCmd: restoredStartupCmd ?? "",
           envVars: ps.envVars,
           shell: ps.shell,
         }, os);
@@ -2741,7 +2720,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
       let initialTerminalOutput: string | undefined;
       let deferStartupUntilInitialOutput = false;
 
-      if (cliKind) {
+      if (conversation.isAgentSession) {
         // CLI 会话：不贴 initialTerminalOutput（TUI 绝对定位重绘会盖掉它，见
         // research/tui-startup-clear-sequences.md），改用 resume 让 CLI 自己重画上次对话并可继续。
         launchStartupCmd = launch.startupCmd;
@@ -2750,7 +2729,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
         launchStartupCmd = launch.startupCmd;
         initialTerminalOutput = restoredStartupCmd && launch.startupHandledByLaunch
           ? undefined
-          : ps.initialTerminalOutput;
+          : ps.initialTerminalOutput ? prepareTerminalScrollback(ps.initialTerminalOutput) : undefined;
         // 有历史画面时：先静态贴回 initialTerminalOutput，再由 XTermTerminal 在贴回完成后重放 startupCmd，
         // 避免"setTimeout 写入"与"贴回大段文本"竞态导致启动命令淹没在历史输出里。
         deferStartupUntilInitialOutput = !!ps.initialTerminalOutput && !!launchStartupCmd;
@@ -2767,14 +2746,22 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
         shell: resolvedShell,
         envVars: ps.envVars,
         startupCmd: launch.startupHandledByLaunch ? restoredStartupCmd : launchStartupCmd,
-        ...getRestoredAgentTerminalMetadata(ps, ps.projectId),
+        isAgentSession: conversation.isAgentSession,
+        cliTool: conversation.cliTool,
         environmentType: launch.environmentType ?? ps.environmentType,
         sshHostId: launch.sshHostId ?? ps.sshHostId,
         remotePath: launch.remotePath ?? ps.remotePath,
         connectionState: (launch.environmentType ?? ps.environmentType) === "ssh" ? "connecting" : undefined,
         disconnectReason: undefined,
         // 保留 cliSessionId：hook 上报会用它绑定实时统计；下次落盘也需要它继续 resume。
-        cliSessionId: ps.cliSessionId,
+        cliSessionId: conversation.cliSessionId,
+        ...(conversation.cliTool && conversation.cliSessionId ? {
+          pendingConversationResume: {
+            tool: conversation.cliTool,
+            sessionId: conversation.cliSessionId,
+            expiresAtMs: Date.now() + 15_000,
+          },
+        } : {}),
         remoteHistoryConsumerId: ps.remoteHistoryConsumerId,
         remoteHistorySourceInstanceId: ps.remoteHistorySourceInstanceId,
         initialTerminalOutput,
@@ -2805,6 +2792,12 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
       restoredSessions.push(restoredSession);
       restoredStatuses[newSessionId] = "running";
       restoredListeners[newSessionId] = unlisten;
+
+      if (conversation.issue) {
+        toast.info(translateCurrent("terminal.restore.conversationUnavailable", { title: ps.title }), {
+          description: translateCurrent(`terminal.restore.${conversation.issue}`),
+        });
+      }
 
       // 执行启动命令：CLI resume 命令 / 无历史画面的普通命令走这里直接写入；
       // 有历史画面时（仅 shell 分支）改由 XTermTerminal 在贴回完成后重放（deferStartupUntilInitialOutput），
@@ -3653,3 +3646,16 @@ useTerminalStore.subscribe((state, previous) => {
     if (detection) receiveAgentDetection(session.id, detection);
   }
 });
+
+/** The PTY identity, never the currently focused tab, owns command history. */
+export function recordTerminalCommandHistory(sessionId: string, command: string, eventId: string): void {
+  if (!useSettingsStore.getState().commandHistoryEnabled) return;
+  const state = useTerminalStore.getState();
+  const primaryId = resolvePrimaryTabId(sessionId, state.splits);
+  const session = state.sessions.find((item) => item.id === sessionId)
+    ?? state.sessions.find((item) => item.id === primaryId);
+  if (!session || session.environmentType === "ssh" || session.environmentType === "wsl" || normalizeShellKey(session.shell) === "wsl") return;
+  void useCommandHistoryStore.getState().addCommand(session.projectId ?? null, command, eventId).catch((error) => {
+    logError("Failed to record shell command history", { sessionId, error });
+  });
+}

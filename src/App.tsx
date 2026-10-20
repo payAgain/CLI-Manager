@@ -8,7 +8,6 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Sidebar } from "./components/sidebar";
 import { TerminalTabs } from "./components/TerminalTabs";
 import { CommandPalette } from "./components/CommandPalette";
-import type { LucideIcon } from "lucide-react";
 import type { SettingsTab } from "./components/SettingsModal";
 const loadSettingsModal = () => import("./components/SettingsModal").then((module) => ({ default: module.SettingsModal }));
 const SettingsModal = lazy(loadSettingsModal);
@@ -20,7 +19,6 @@ import { ConfirmDialog } from "./components/ConfirmDialog";
 import { ExitProgressOverlay, type ExitPhase } from "./components/ExitProgressOverlay";
 import { AppFailureState } from "./components/AppFailureState";
 import { ExternalSessionSyncDialog } from "./components/ExternalSessionSyncDialog";
-import { CircleAlert, CircleCheck, Info, ShieldAlert, X } from "./components/icons";
 import {
   useSettingsStore,
   type ExitWithRunningTasksBehavior,
@@ -46,6 +44,7 @@ import { cleanupTerminalProcessesForExit } from "./lib/terminalExitCleanup";
 import { shouldIncludeDaemonExitTask } from "./lib/terminalExitTask";
 import { requestSidebarToggle } from "./lib/sidebarCommands";
 import { startRuntimeDiagnostics } from "./lib/runtimeDiagnostics";
+import { deliverBackgroundHookNotification, isNotificationTerminalVisible, suppressHookNotification } from "./lib/hookNotificationPolicy";
 import { getTerminalTheme, isLightTerminalTheme } from "./lib/terminalThemes";
 import { resolveProjectForSession } from "./lib/terminalProject";
 import { terminalProcessManager } from "./terminal/core/TerminalProcessManager";
@@ -98,10 +97,8 @@ const TERMINAL_PANEL_SEMANTIC_COLORS = {
 } as const;
 const STARTUP_STAGE_TIMEOUT_MS = 15_000;
 const IN_TAURI = isTauri();
-const CLAUDE_HOOK_TOAST_PREFIX = "claude-hook-notification";
 const SYSTEM_NOTIFICATION_ACTION_EVENT = "system-notification-action";
 const MAX_SYSTEM_NOTIFICATION_DETAIL_LENGTH = 72;
-let claudeHookToastSequence = 0;
 type StartupStage = "settings" | "stores" | "projects";
 
 function isLikelyMacOs() {
@@ -127,31 +124,9 @@ interface SystemNotificationActionPayload {
   tabId: string;
 }
 
-type ClaudeHookToastVariant = "attention" | "approval" | "finished" | "failed";
-
-interface ClaudeHookToastStyle {
-  variant: ClaudeHookToastVariant;
-  icon: LucideIcon;
-  eyebrow: string;
-  actionLabel: string;
-}
-
-interface ClaudeHookToastItem {
-  id: string;
-  title: string;
-  message?: string;
-  tabTitle: string;
-  style: ClaudeHookToastStyle;
-}
-
 function canUseUiTextColor(textColor: string, backgroundColor: string): boolean {
   const ratio = getContrastRatioFromHex(textColor, backgroundColor);
   return ratio !== null && ratio >= MIN_APPLY_CONTRAST_RATIO;
-}
-
-function createClaudeHookToastId(tabId: string): string {
-  claudeHookToastSequence += 1;
-  return `${CLAUDE_HOOK_TOAST_PREFIX}-${tabId}-${claudeHookToastSequence}`;
 }
 
 function isQuestionRequestNotification(payload: CliHookPayload): boolean {
@@ -162,25 +137,9 @@ function isQuestionRequestNotification(payload: CliHookPayload): boolean {
   );
 }
 
-function getClaudeHookToastStyle(payload: CliHookPayload): ClaudeHookToastStyle {
-  if (isQuestionRequestNotification(payload)) {
-    return {
-      variant: "attention",
-      icon: Info,
-      eyebrow: translateCurrent("notifications.hookToast.question"),
-      actionLabel: translateCurrent("notifications.hookToast.answer"),
-    };
-  }
-  if (payload.event === "Stop") {
-    return { variant: "finished", icon: CircleCheck, eyebrow: translateCurrent("notifications.hookToast.finished"), actionLabel: translateCurrent("notifications.hookToast.view") };
-  }
-  if (payload.event === "StopFailure") {
-    return { variant: "failed", icon: CircleAlert, eyebrow: translateCurrent("notifications.hookToast.failed"), actionLabel: translateCurrent("notifications.hookToast.view") };
-  }
-  if (payload.event === "PermissionRequest") {
-    return { variant: "approval", icon: ShieldAlert, eyebrow: translateCurrent("notifications.hookToast.approval"), actionLabel: translateCurrent("notifications.hookToast.handle") };
-  }
-  return { variant: "attention", icon: Info, eyebrow: translateCurrent("notifications.hookToast.attention"), actionLabel: translateCurrent("notifications.hookToast.view") };
+function getHookNotificationActionLabel(payload: CliHookPayload): string {
+  if (isQuestionRequestNotification(payload)) return translateCurrent("notifications.hookToast.answer");
+  return translateCurrent(payload.event === "PermissionRequest" ? "notifications.hookToast.handle" : "notifications.hookToast.view");
 }
 
 function getCliHookSourceName(payload: CliHookPayload): string {
@@ -188,18 +147,6 @@ function getCliHookSourceName(payload: CliHookPayload): string {
   if (payload.source === "pi") return "Pi Agent";
   if (payload.source === "grok") return "Grok Build";
   return "Claude Code";
-}
-
-function getClaudeHookToastTitle(payload: CliHookPayload, tabTitle: string): string {
-  const sourceName = getCliHookSourceName(payload);
-  if (isQuestionRequestNotification(payload)) {
-    return translateCurrent("notifications.hookToast.title.question", { sourceName });
-  }
-  if (payload.title) return payload.title;
-  if (payload.event === "Stop") return translateCurrent("notifications.hookToast.title.finished", { tabTitle });
-  if (payload.event === "StopFailure") return translateCurrent("notifications.hookToast.title.failed", { tabTitle });
-  if (payload.event === "PermissionRequest") return translateCurrent("notifications.hookToast.title.approval", { sourceName });
-  return translateCurrent("notifications.hookToast.title.attention", { sourceName });
 }
 
 function getHookProjectName(payload: CliHookPayload, tabTitle?: string | null): string {
@@ -309,107 +256,59 @@ async function sendTaskbarAttention(payload: CliHookPayload): Promise<void> {
   }
 }
 
-type HookNotificationTargetActivator = (tabId: string) => void | Promise<void>;
-
 async function sendSystemNotification(payload: CliHookPayload, tabId: string | null, tabTitle?: string | null): Promise<void> {
   try {
     const settings = useSettingsStore.getState();
     if (!isSystemNotificationEvent(payload.event)) return;
     if (!tabId) return;
-    // 后台任务模式下通知必发：绕过总开关/事件开关/聚焦抑制，
-    // 否则用户无从得知任务已完成或卡在等待确认（Issue #123 Phase 1）。
+    // 后台任务模式保留总开关/事件开关的豁免；前台可见性仍统一检查。
     if (!backgroundTaskModeActive) {
       if (!settings.systemNotificationsEnabled) return;
       if (!settings.systemNotificationEvents[payload.event]) return;
-      if (settings.suppressSystemNotificationsWhenFocused && (await isMainWindowFocused())) return;
     }
 
     const projectName = getHookProjectName(payload, tabTitle);
     const title = "CLI-Manager";
     const body = getSystemNotificationBody(payload, projectName);
-    const actionLabel = getClaudeHookToastStyle(payload).actionLabel;
+    const actionLabel = getHookNotificationActionLabel(payload);
 
-    const { isPermissionGranted, requestPermission } = await import(
-      "@tauri-apps/plugin-notification"
-    );
-
-    let permissionGranted = await isPermissionGranted();
-    if (!permissionGranted) {
-      const permission = await requestPermission();
-      permissionGranted = permission === "granted";
-    }
-    if (!permissionGranted) {
-      debugConsoleWarn("[System Notification] Permission not granted");
-      return;
-    }
-
-    try {
-      await invoke("send_interactive_system_notification", { title, body, tabId, actionLabel });
-      return;
-    } catch (notificationErr) {
-      const isWsl = await invoke<boolean>("is_wsl").catch(() => false);
-      if (!isWsl) throw notificationErr;
-      await invoke("send_notification_via_windows", { title, body });
-    }
+    await deliverBackgroundHookNotification({
+      suppressed: async () => {
+        const appWindow = getCurrentWindow();
+        const [focused, visible, minimized] = await Promise.all([
+          appWindow.isFocused().catch(() => document.hasFocus()),
+          appWindow.isVisible().catch(() => document.visibilityState === "visible"),
+          appWindow.isMinimized().catch(() => false),
+        ]);
+        return suppressHookNotification({
+          focused: focused || document.hasFocus(),
+          visible,
+          minimized,
+          documentVisible: document.visibilityState === "visible",
+          targetVisible: isNotificationTerminalVisible(tabId, document),
+          suppressWhileAppFocused: useSettingsStore.getState().suppressSystemNotificationsWhenFocused,
+        });
+      },
+      permitted: async () => {
+        const { isPermissionGranted, requestPermission } = await import("@tauri-apps/plugin-notification");
+        return await isPermissionGranted() || await requestPermission() === "granted";
+      },
+      send: async () => {
+        // Preferences can change while the OS permission dialog is open.
+        const current = useSettingsStore.getState();
+        if (!backgroundTaskModeActive && (!current.systemNotificationsEnabled || !current.systemNotificationEvents[payload.event as HookEventType])) return;
+        try {
+          await invoke("send_interactive_system_notification", { title, body, tabId, actionLabel });
+        } catch (notificationErr) {
+          const isWsl = await invoke<boolean>("is_wsl").catch(() => false);
+          if (!isWsl) throw notificationErr;
+          await invoke("send_notification_via_windows", { title, body });
+        }
+      },
+    });
   } catch (err) {
     debugConsoleWarn("[System Notification] Failed to send:", err);
   }
-}
-
-function showClaudeHookToast(payload: CliHookPayload, tabId: string, onActivateTarget: HookNotificationTargetActivator): void {
-  const settings = useSettingsStore.getState();
-  if (!settings.hookPopupNotificationsEnabled) return;
-
-  const terminalStore = useTerminalStore.getState();
-  const tabTitle = terminalStore.sessions.find((session) => session.id === tabId)?.title ?? getCliHookSourceName(payload);
-  const item: ClaudeHookToastItem = {
-    id: createClaudeHookToastId(tabId),
-    title: getClaudeHookToastTitle(payload, tabTitle),
-    message: payload.message ?? undefined,
-    tabTitle,
-    style: getClaudeHookToastStyle(payload),
-  };
-  const Icon = item.style.icon;
-
-  toast.custom(
-    () => (
-      <div className="claude-hook-toast" data-variant={item.style.variant} data-tab-id={tabId}>
-        <div className="claude-hook-toast__icon" aria-hidden="true">
-          <Icon size={16} strokeWidth={2.4} />
-        </div>
-        <div className="claude-hook-toast__content">
-          <div className="claude-hook-toast__title">{item.style.eyebrow}</div>
-          <div className="claude-hook-toast__source" title={item.tabTitle}>
-            {item.title} · {translateCurrent("notifications.hookToast.from", { tabTitle: item.tabTitle })}
-          </div>
-          {item.message ? <div className="claude-hook-toast__description">{item.message}</div> : null}
-        </div>
-        <button
-          type="button"
-          className="claude-hook-toast__action"
-          onClick={() => {
-            void onActivateTarget(tabId);
-            toast.dismiss(item.id);
-          }}
-        >
-          {item.style.actionLabel}
-        </button>
-        <button
-          type="button"
-          className="claude-hook-toast__close"
-          aria-label={translateCurrent("notifications.hookToast.close")}
-          onClick={() => toast.dismiss(item.id)}
-        >
-          <X size={20} strokeWidth={2.2} />
-        </button>
-      </div>
-    ),
-    {
-      id: item.id,
-      duration: settings.hookPopupAutoCloseEnabled ? settings.hookPopupAutoCloseSeconds * 1000 : Infinity,
-      position: "bottom-right",
-    }
-  );
 }
 
 function runDeferredStartupTasks(): void {
@@ -666,23 +565,13 @@ function App() {
       // 任务栏提醒独立于 Tab 绑定和系统 Toast；外部 Hook 也可以提醒。
       void sendTaskbarAttention(event.payload);
       // External hooks (no PTY tab env) still carry a synthetic tabId like external:grok:<session>.
-      // Prefer bound session when present; otherwise fall back so toast/system notifications still fire.
+      // Prefer the bound session; external hooks can still use OS notifications.
       const tabId = boundTabId ?? event.payload.tabId?.trim() ?? null;
       const terminalStore = useTerminalStore.getState();
       const tabTitle = boundTabId
         ? terminalStore.sessions.find((session) => session.id === boundTabId)?.title ?? null
         : null;
-      // SessionStart/UserPromptSubmit 只更新状态；普通工具生命周期事件不打扰用户。
-      if (
-        tabId &&
-        event.payload.event !== "UserPromptSubmit" &&
-        event.payload.event !== "SessionStart" &&
-        event.payload.event !== "ToolStart" &&
-        event.payload.event !== "ToolStop"
-      ) {
-        showClaudeHookToast(event.payload, tabId, handleActivateHookNotificationTarget);
-      }
-      // 系统通知：并行发送（不影响应用内通知）
+      // Hook task alerts use the OS notification channel; foreground panes stay quiet.
       void sendSystemNotification(event.payload, tabId, tabTitle);
     });
     const unlistenSystemNotification = listen<SystemNotificationActionPayload>(SYSTEM_NOTIFICATION_ACTION_EVENT, (event) => {
@@ -1136,6 +1025,7 @@ function App() {
       if (!discardSessions) {
         await flushTerminalSnapshotsNow();
       }
+      await useSessionStore.getState().freezeForExit(useTerminalStore.getState().sessions);
       // Phase 2：daemon 模式"转入后台"时 closePty=false——PTY 留在守护进程里继续跑，
       // 快照仍落盘作为 daemon 也挂掉时的最终兜底。
       const terminalCleanup = await cleanupTerminalProcessesForExit(
@@ -1187,6 +1077,7 @@ function App() {
     } finally {
       logInfo("exit: cleanup finished", { source, closePty, discardSessions, canExit });
       if (canExit && await exitApp(source)) return;
+      useSessionStore.getState().resumePersistence();
       flushSync(() => {
         setExitPhase(null);
         setExitNotice(null);

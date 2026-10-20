@@ -8,10 +8,11 @@ import {
   parseSpecialColorQuery,
   parseStandardIntegrationCwd,
 } from "../lib/terminalOscParse";
-import { useTerminalStore, type ShellRuntimeEventName } from "../stores/terminalStore";
+import { COMMAND_HISTORY_OSC_PREFIX, createTerminalCommandHistoryReader } from "../lib/terminalCommandHistory";
+import { recordTerminalCommandHistory, useTerminalStore, type ShellRuntimeEventName } from "../stores/terminalStore";
 import type { OsPlatform } from "../lib/shell";
 
-const OSC_CARRY_BUFFER_MAX = 8192;
+const OSC_CARRY_BUFFER_MAX = 24 * 1024;
 const SSH_CONNECTED_MARKER = "\x1b]777;cli-manager-ssh=connected\x07";
 const SSH_AUTH_PROMPT_PATTERN = /password|passphrase|verification code|one-time|authenticity of host|continue connecting|permission denied/i;
 
@@ -21,7 +22,7 @@ interface UseTerminalOscOptions {
 }
 
 export interface UseTerminalOscResult {
-  normalizeTerminalOutput: (text: string) => string;
+  normalizeTerminalOutput: (text: string, recordHistory?: boolean) => string;
   updateSessionCwdIfChanged: (cwd: string | null) => void;
 }
 
@@ -30,6 +31,10 @@ export function useTerminalOsc({
   osPlatformRef,
 }: UseTerminalOscOptions): UseTerminalOscResult {
   const runtimeOscBufferRef = useRef("");
+  const commandHistoryReaderRef = useRef<ReturnType<typeof createTerminalCommandHistoryReader> | null>(null);
+  if (!commandHistoryReaderRef.current) {
+    commandHistoryReaderRef.current = createTerminalCommandHistoryReader(sessionId, (command, eventId) => recordTerminalCommandHistory(sessionId, command, eventId));
+  }
   const specialOscBufferRef = useRef("");
   const sshMarkerBufferRef = useRef("");
 
@@ -129,7 +134,10 @@ export function useTerminalOsc({
 
       const body = combined.slice(start + matched.prefix.length, terminator.index);
       const sequenceEnd = terminator.index + terminator.length;
-      if (matched.prefix === LEGACY_RUNTIME_OSC_PREFIX) {
+      if (matched.prefix === COMMAND_HISTORY_OSC_PREFIX) {
+        // Command history observes the raw stream before display buffering.
+        // Its private markers never reach xterm or serialized display snapshots.
+      } else if (matched.prefix === LEGACY_RUNTIME_OSC_PREFIX) {
         handleLegacyRuntimeOsc(body);
       } else {
         handleStandardIntegrationOsc(body);
@@ -232,9 +240,10 @@ export function useTerminalOsc({
     return combined;
   };
 
-  const normalizeTerminalOutput = (text: string) => processShellIntegrationOsc(
-    processSpecialOscQueries(processSshConnectionMarker(text)),
-  );
+  const normalizeTerminalOutput = (text: string, recordHistory = false) => {
+    commandHistoryReaderRef.current?.(text, recordHistory);
+    return processShellIntegrationOsc(processSpecialOscQueries(processSshConnectionMarker(text)));
+  };
 
   return {
     normalizeTerminalOutput,

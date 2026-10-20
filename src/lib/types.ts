@@ -403,12 +403,14 @@ export interface TerminalSession {
   shell?: string | null;
   envVars?: Record<string, string>;
   startupCmd?: string;
-  /** 创建终端时根据项目 CLI 工具固化的分类；缺省表示旧会话，需要从项目配置兼容推导。 */
+  /** 启动分类；落盘时更新为当前实际 Agent 身份。缺省兼容旧会话。 */
   isAgentSession?: boolean;
   /** Live daemon/Hook evidence, never a launch command or persisted configuration. */
   runtimeAgent?: RuntimeAgent | null;
   runtimeAgentObservedAtMs?: number;
-  /** 创建 Agent 终端时固化的 CLI 工具，用于在项目配置变更后保持会话语义稳定。 */
+  /** 重建时等待 resume 进程出现的临时身份，不落盘；避免启动前的 Shell 采样清掉准确 ID。 */
+  pendingConversationResume?: { tool: string; sessionId: string; expiresAtMs: number };
+  /** 启动工具；落盘时更新为当前实际 Agent，避免手动切换后恢复到旧工具。 */
   cliTool?: string;
   environmentType?: ProjectEnvironmentType;
   sshHostId?: string;

@@ -5,6 +5,7 @@ import { useTemplateStore } from "../../../stores/templateStore";
 import { useProjectStore } from "../../../stores/projectStore";
 import { useTerminalStore } from "../../../stores/terminalStore";
 import type { CommandTemplate } from "../../../lib/types";
+import { RecentCommandTemplates } from "../../RecentCommandTemplates";
 import { useI18n, type TranslationKey } from "../../../lib/i18n";
 
 type Scope = "global" | "project" | "session";
@@ -53,6 +54,7 @@ export function TemplateSettingsPage({ searchValue }: TemplateSettingsPageProps)
   const activeSession = sessions.find((session) => session.id === activeSessionId) ?? null;
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [mode, setMode] = useState<"create" | "edit">("create");
+  const [showHistory, setShowHistory] = useState(false);
   const [saving, setSaving] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [form, setForm] = useState<TemplateEditorForm>({
@@ -217,7 +219,7 @@ export function TemplateSettingsPage({ searchValue }: TemplateSettingsPageProps)
     || (mode === "create" && form.scope === "session" && !activeSessionId);
 
   return (
-    <div className="grid grid-cols-[280px_minmax(0,1fr)] gap-4">
+    <div className="grid grid-cols-1 gap-4 lg:grid-cols-[240px_minmax(0,1fr)]">
       <section className="ui-surface-card min-w-0 rounded-2xl border border-border p-3">
         <Stack gap="sm">
           <Group justify="space-between" align="center" gap="sm">
@@ -372,10 +374,21 @@ export function TemplateSettingsPage({ searchValue }: TemplateSettingsPageProps)
         </Box>
 
         <Stack gap="sm" p="md">
+          <Button size="xs" variant="default" onClick={() => setShowHistory((value) => !value)} aria-expanded={showHistory}>
+            {t("commandTemplate.recent.fromHistory")}
+          </Button>
+          {showHistory && <RecentCommandTemplates projectId={activeSession?.projectId ?? null} query={searchValue} onSelect={(command) => {
+            setMode("create");
+            setSelectedId(null);
+            setConfirmingDelete(false);
+            setForm({ name: command.slice(0, 80), command, description: "", scope: activeSession?.projectId ? "project" : "global", projectId: activeSession?.projectId ?? null });
+            setShowHistory(false);
+          }} />}
+
           <TextInput
               label={t("settings.templates.name")}
               value={form.name}
-              onChange={(event) => setForm((prev) => ({ ...prev, name: event.currentTarget.value }))}
+              onChange={(event) => { const value = event.currentTarget.value; setForm((prev) => ({ ...prev, name: value })); }}
               placeholder={t("settings.templates.namePlaceholder")}
               size="xs"
               aria-label={t("settings.templates.name")}
@@ -384,7 +397,7 @@ export function TemplateSettingsPage({ searchValue }: TemplateSettingsPageProps)
           <TextInput
               label={t("settings.templates.command")}
               value={form.command}
-              onChange={(event) => setForm((prev) => ({ ...prev, command: event.currentTarget.value }))}
+              onChange={(event) => { const value = event.currentTarget.value; setForm((prev) => ({ ...prev, command: value })); }}
               placeholder={t("settings.templates.commandPlaceholder")}
               size="xs"
               aria-label={t("settings.templates.command")}
@@ -393,7 +406,7 @@ export function TemplateSettingsPage({ searchValue }: TemplateSettingsPageProps)
           <TextInput
               label={t("settings.templates.description")}
               value={form.description}
-              onChange={(event) => setForm((prev) => ({ ...prev, description: event.currentTarget.value }))}
+              onChange={(event) => { const value = event.currentTarget.value; setForm((prev) => ({ ...prev, description: value })); }}
               placeholder={t("settings.templates.optional")}
               size="xs"
               aria-label={t("settings.templates.description")}

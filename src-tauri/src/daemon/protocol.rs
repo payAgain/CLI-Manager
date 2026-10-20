@@ -28,6 +28,7 @@ pub const FEATURE_PROCESS_TRAITS: &str = "process_traits_v1";
 pub const FEATURE_SESSION_PROCESS_ID: &str = "session_process_id_v1";
 pub const FEATURE_TERMINAL_COLORS: &str = "terminal_colors_v1";
 pub const FEATURE_SSH_AGENT_RPC: &str = "ssh_agent_rpc_v1";
+pub const FEATURE_COMMAND_HISTORY: &str = "shell_command_history_v1";
 pub const FEATURE_AGENT_DISCOVERY: &str = "agent_discovery_v1";
 
 pub fn supported_features() -> Vec<String> {
@@ -41,6 +42,7 @@ pub fn supported_features() -> Vec<String> {
         FEATURE_TERMINAL_COLORS,
         FEATURE_SSH_AGENT_RPC,
         FEATURE_AGENT_DISCOVERY,
+        FEATURE_COMMAND_HISTORY,
     ]
     .into_iter()
     .map(str::to_string)

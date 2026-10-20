@@ -4,7 +4,10 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { createRequire } from "node:module";
 import ts from "typescript";
+
+const { Terminal: RealTerminal } = createRequire(import.meta.url)("@xterm/xterm");
 
 const tempDir = mkdtempSync(join(tmpdir(), "cli-manager-terminal-replay-"));
 process.on("exit", () => rmSync(tempDir, { recursive: true, force: true }));
@@ -118,12 +121,17 @@ const transpiled = ts.transpileModule(source, {
   .replace('from "../lib/terminalThemes"', 'from "./themes.mjs"')
   .replace('from "../lib/logger"', 'from "./logger.mjs"')
   .replace('from "../lib/sessionSnapshotPersistence"', 'from "./snapshot.mjs"')
+  .replace('from "../lib/terminalReplayWriter"', `from ${JSON.stringify(pathToFileURL(join(tempDir, "terminalReplayWriter.mjs")).href)}`)
   .replace('from "../terminal/browser/TerminalResizeDebouncer"', 'from "./resize.mjs"')
   .replace('from "../terminal/browser/TerminalResizeRenderBarrier"', 'from "./resizeBarrier.mjs"')
   .replace('from "../terminal/core/TerminalProcessManager"', 'from "./manager.mjs"')
   .replace('from "../stores/settingsStore"', 'from "./settings.mjs"')
   .replace('from "../stores/terminalStore"', 'from "./terminalStore.mjs"');
 const modulePath = join(tempDir, "useTerminalDisplay.mjs");
+writeFileSync(join(tempDir, "terminalReplayWriter.mjs"), ts.transpileModule(
+  readFileSync(new URL("../src/lib/terminalReplayWriter.ts", import.meta.url), "utf8"),
+  { compilerOptions: { module: ts.ModuleKind.ES2022, target: ts.ScriptTarget.ES2022 } },
+).outputText);
 writeFileSync(modulePath, transpiled, "utf8");
 
 const { useTerminalDisplay } = await import(pathToFileURL(modulePath).href);
@@ -134,6 +142,7 @@ const visibilityStub = await import(pathToFileURL(join(tempDir, "visibility.mjs"
 class FakeTerminal {
   constructor(events) {
     this.events = events;
+    this.options = { disableStdin: false };
     this.cols = 80;
     this.rows = 24;
     this.buffer = {
@@ -153,10 +162,11 @@ class FakeTerminal {
     this.writeCallbacks.push(callback);
   }
 
-  finishNextWrite() {
+  async finishNextWrite() {
     const callback = this.writeCallbacks.shift();
     assert.ok(callback, "expected a pending xterm write callback");
     callback();
+    await Promise.resolve();
   }
 
   resize(cols, rows) {
@@ -216,11 +226,11 @@ class FakeTerminal {
 
 function createDisplay(
   proposedDimensions = { cols: 120, rows: 30 },
-  { sessionId = "session-1", isVisible = true } = {},
+  { sessionId = "session-1", isVisible = true, terminalFactory = events => new FakeTerminal(events) } = {},
 ) {
   visibilityStub.resetVisibility();
   const events = [];
-  const terminal = new FakeTerminal(events);
+  const terminal = terminalFactory(events);
   const container = {
     offsetWidth: 1200,
     offsetHeight: 600,
@@ -447,7 +457,7 @@ test("initial replay fits the current container before releasing buffered live o
   await Promise.resolve();
   assert.deepEqual(events, ["resize:90x20", "write:replay"]);
 
-  terminal.finishNextWrite();
+  await terminal.finishNextWrite();
   assert.equal(await replayPromise, true);
   assert.deepEqual(events, [
     "resize:90x20",
@@ -466,10 +476,53 @@ test("initial replay fits the current container before releasing buffered live o
     "write:live",
     "scroll-bottom:0",
   ]);
-  terminal.finishNextWrite();
+  await terminal.finishNextWrite();
   assert.deepEqual(commits, [{ sequence: 3, charCount: 4 }]);
   output.dispose();
   detachViewport();
+});
+
+test("actual initial daemon replay cannot send historical query responses into the attached PTY", async t => {
+  managerStub.resetManager();
+  const terminal = new RealTerminal({ allowProposedApi: true });
+  t.after(() => terminal.dispose());
+  const h = createDisplay(undefined, { terminalFactory: () => terminal });
+  const input = [];
+  terminal.onData(data => input.push(data));
+  const output = h.display.attachPtyOutput({ waitForReplay: true });
+  t.after(() => { output.dispose(); h.detachViewport(); });
+  await output.ready;
+  await output.completeReplay([frame(1, "history\x1b[c\x1b[6n", 90, 20, true)]);
+  assert.deepEqual(input, []);
+  managerStub.emitOutput(delivery(frame(3, "\x1b[c", 90, 20), []));
+  flushAnimationFrames();
+  await new Promise(resolve => terminal.write("", resolve));
+  assert.deepEqual(input, ["\x1b[?1;2c"]);
+});
+
+test("actual reconnect reset and streamed replay suppress split queries, then restore live replies", { timeout: 4000 }, async t => {
+  managerStub.resetManager();
+  const terminal = new RealTerminal({ allowProposedApi: true });
+  t.after(() => terminal.dispose());
+  const h = createDisplay(undefined, { terminalFactory: () => terminal, isVisible: false });
+  const input = [];
+  terminal.onData(data => input.push(data));
+  const output = h.display.attachPtyOutput();
+  t.after(() => { output.dispose(); h.detachViewport(); });
+  await output.ready;
+  managerStub.emitOutput(delivery({ ...frame(0, "", 80, 24), kind: "reset" }, []));
+  managerStub.emitOutput(delivery(frame(1, "history\x1b[", 90, 20), []));
+  managerStub.emitOutput(delivery(frame(2, "c\x1b[6n", 90, 20, true), []));
+  for (let i = 0; i < 3; i++) {
+    flushAnimationFrames();
+    await new Promise(resolve => terminal.write("", resolve));
+  }
+  assert.deepEqual(input, []);
+  assert.equal(terminal.options.disableStdin, false);
+  managerStub.emitOutput(delivery(frame(3, "\x1b[c", 90, 20), []));
+  flushAnimationFrames();
+  await new Promise(resolve => terminal.write("", resolve));
+  assert.deepEqual(input, ["\x1b[?1;2c"]);
 });
 
 test("reconnect replay restores historical sizes serially and fits before live output", async () => {
@@ -485,10 +538,10 @@ test("reconnect replay restores historical sizes serially and fits before live o
 
   flushAnimationFrames();
   assert.deepEqual(events, ["resize:90x20", "write:one"]);
-  terminal.finishNextWrite();
+  await terminal.finishNextWrite();
   flushAnimationFrames();
   assert.deepEqual(events, ["resize:90x20", "write:one", "resize:100x25", "write:two"]);
-  terminal.finishNextWrite();
+  await terminal.finishNextWrite();
   assert.deepEqual(events, [
     "resize:90x20",
     "write:one",
@@ -501,7 +554,7 @@ test("reconnect replay restores historical sizes serially and fits before live o
 
   flushAnimationFrames();
   assert.deepEqual(events.slice(-2), ["write:live", "scroll-bottom:0"]);
-  terminal.finishNextWrite();
+  await terminal.finishNextWrite();
   assert.deepEqual(commits, [
     { sequence: 1, charCount: 3 },
     { sequence: 2, charCount: 3 },
@@ -531,7 +584,7 @@ test("resize-only reconnect replay is applied locally before current-size fit", 
   ]);
   assert.deepEqual(managerStub.resizeCalls, [{ sessionId: "session-1", cols: 120, rows: 30 }]);
   assert.deepEqual(commits, [{ sequence: 2, charCount: 0 }]);
-  terminal.finishNextWrite();
+  await terminal.finishNextWrite();
   assert.deepEqual(commits, [
     { sequence: 2, charCount: 0 },
     { sequence: 3, charCount: 4 },
@@ -555,13 +608,13 @@ test("continuous live output yields between bounded xterm writes", async () => {
 
   assert.deepEqual(events, [`write:${firstText}`]);
   assert.deepEqual(commits, []);
-  terminal.finishNextWrite();
+  await terminal.finishNextWrite();
   assert.deepEqual(commits, [
     { sequence: 3, charCount: firstText.length },
   ]);
   flushNextAnimationFrame();
   assert.deepEqual(events, [`write:${firstText}`, `write:${secondText}`]);
-  terminal.finishNextWrite();
+  await terminal.finishNextWrite();
   assert.deepEqual(commits, [
     { sequence: 3, charCount: firstText.length },
     { sequence: 4, charCount: secondText.length },
@@ -588,11 +641,11 @@ test("multiple terminals start only one xterm write per animation frame", async 
   assert.equal(writeCount, 1);
   const pending = first.terminal.writeCallbacks.length > 0 ? first : second;
   const waiting = pending === first ? second : first;
-  pending.terminal.finishNextWrite();
+  await pending.terminal.finishNextWrite();
   flushNextAnimationFrame();
   assert.equal(waiting.terminal.writeCallbacks.length, 1);
 
-  waiting.terminal.finishNextWrite();
+  await waiting.terminal.finishNextWrite();
   firstOutput.dispose();
   secondOutput.dispose();
   first.detachViewport();
@@ -620,14 +673,14 @@ test("hidden terminal is not starved by continuous visible output", async () => 
   for (let index = 0; index < 3; index += 1) {
     flushNextAnimationFrame();
     assert.equal(hidden.events.length, 0);
-    visible.terminal.finishNextWrite();
+    await visible.terminal.finishNextWrite();
   }
   flushNextAnimationFrame();
   assert.deepEqual(
     hidden.events.filter((event) => event.startsWith("write:")),
     ["write:background"],
   );
-  hidden.terminal.finishNextWrite();
+  await hidden.terminal.finishNextWrite();
   assert.deepEqual(hiddenCommits, [{ sequence: 1, charCount: 10 }]);
 
   visibleOutput.dispose();

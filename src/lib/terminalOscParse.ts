@@ -5,11 +5,12 @@
 // and formatters live here so they can be tested in isolation.
 
 import { decodeOscPathValue } from "./terminalOscPath";
+import { COMMAND_HISTORY_OSC_PREFIX } from "./terminalCommandHistory";
 import { normalizeHexColor } from "./terminalColor";
 
 export const LEGACY_RUNTIME_OSC_PREFIX = "\x1b]777;cli-manager;";
 export const CWD_OSC_PREFIX = "\x1b]7;";
-export const INTEGRATION_OSC_PREFIXES = ["\x1b]133;", "\x1b]633;", CWD_OSC_PREFIX, LEGACY_RUNTIME_OSC_PREFIX];
+export const INTEGRATION_OSC_PREFIXES = ["\x1b]133;", "\x1b]633;", CWD_OSC_PREFIX, LEGACY_RUNTIME_OSC_PREFIX, COMMAND_HISTORY_OSC_PREFIX];
 export const OSC_PREFIX = "\x1b]";
 
 export type SpecialColorQueryId = 10 | 11;

@@ -570,8 +570,8 @@ export function ThemeSettingsPage() {
         ? TERMINAL_THEME_PRESETS.filter((preset) => preset.id === autoThemeId)
         : TERMINAL_THEME_PRESETS.filter((preset) => preset.tone === themeLibraryMode);
     if (!keyword) return scoped;
-    return scoped.filter((preset) => preset.name.toLowerCase().includes(keyword));
-  }, [autoThemeId, query, themeLibraryMode]);
+    return scoped.filter((preset) => `${preset.name} ${preset.labelKey ? t(preset.labelKey) : ""}`.toLowerCase().includes(keyword));
+  }, [autoThemeId, query, themeLibraryMode, t]);
 
   const groupedThemes = useMemo(
     () =>
@@ -586,10 +586,10 @@ export function ThemeSettingsPage() {
     const effective = getTerminalTheme(effectiveThemeName, resolvedTheme, lightThemePalette, darkThemePalette);
     return {
       label:
-        selectedPreset?.name ?? text("独立终端主题", "Independent terminal theme"),
+        (selectedPreset?.labelKey ? t(selectedPreset.labelKey) : selectedPreset?.name) ?? text("独立终端主题", "Independent terminal theme"),
       theme: effective,
     };
-  }, [darkThemePalette, effectiveThemeName, language, lightThemePalette, resolvedTheme, selectedPreset]);
+  }, [darkThemePalette, effectiveThemeName, language, lightThemePalette, resolvedTheme, selectedPreset, t]);
 
   const defaultTerminalTextColor = selectedTheme.theme.foreground ?? "#d8dee9";
   const previewTerminalTextColor = terminalTextColor || defaultTerminalTextColor;
@@ -1556,7 +1556,7 @@ export function ThemeSettingsPage() {
                               c={active ? "var(--on-surface)" : "var(--on-surface-variant)"}
                               style={{ whiteSpace: "normal", overflowWrap: "anywhere", lineHeight: 1.25 }}
                             >
-                              {preset.name}
+                              {preset.labelKey ? t(preset.labelKey) : preset.name}
                             </Text>
                             <Text
                               size="xs"

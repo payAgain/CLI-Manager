@@ -11,7 +11,8 @@ import { FitAddon } from "@xterm/addon-fit";
 import { ImageAddon } from "@xterm/addon-image";
 import { SearchAddon } from "@xterm/addon-search";
 import { SerializeAddon } from "@xterm/addon-serialize";
-import { Unicode11Addon } from "@xterm/addon-unicode11";
+import { installTerminalUnicode } from "../lib/terminalUnicode";
+import { shouldSwallowImeCompositionKeydown } from "../lib/terminalImeKeyGuard";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -45,6 +46,7 @@ import { useTerminalContextMenu } from "../hooks/useTerminalContextMenu";
 import { useTerminalOsc } from "../hooks/useTerminalOsc";
 import { useTerminalDisplay } from "../hooks/useTerminalDisplay";
 import { useTerminalInput } from "../hooks/useTerminalInput";
+import { writeTerminalReplay } from "../lib/terminalReplayWriter";
 import { copyTextToClipboard } from "../lib/systemClipboard";
 import { hasCodexTuiViewport } from "../lib/terminalTuiDisplay";
 import { createTerminalTuiColorSyncController } from "../lib/terminalTuiColorSync";
@@ -104,7 +106,7 @@ let terminalImageAddonFallbackLogged = false;
 const WEBGL_ATLAS_REFRESH_MIN_HIDDEN_MS = 10_000;
 import { toast } from "sonner";
 import { logError, logInfo, logWarn } from "../lib/logger";
-import { registerTerminalSnapshotSource } from "../lib/sessionSnapshotPersistence";
+import { registerTerminalSnapshotSource, serializeTerminalAfterWrite } from "../lib/sessionSnapshotPersistence";
 
 const CODEX_IME_DEBUG_WINDOW_MS = 250;
 const CODEX_IME_DUPLICATE_WINDOW_MS = 120;
@@ -1112,9 +1114,11 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
       if (windowsPty.backend === "conpty") {
         baseDisposables.push(terminal.parser.registerCsiHandler({ final: "c" }, (params) => {
           if (params.length === 0 || (params.length === 1 && params[0] === 0)) {
-            terminalProcessManager
-              .write(sessionId, "\x1b[?61;4c")
-              .catch((err) => reportPtyWriteError("conpty_da1", err));
+            if (!terminal.options.disableStdin) {
+              terminalProcessManager
+                .write(sessionId, "\x1b[?61;4c")
+                .catch((err) => reportPtyWriteError("conpty_da1", err));
+            }
             return true;
           }
           return false;
@@ -1128,7 +1132,6 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
     const fitAddon = new FitAddon();
     const searchAddon = new SearchAddon({ highlightLimit: SEARCH_HIGHLIGHT_LIMIT });
     const serializeAddon = new SerializeAddon();
-    const unicode11Addon = new Unicode11Addon();
     const webLinksAddon = new WebLinksAddon(
       (event, uri) => {
         if (shouldActivateTerminalLink(event)) openHttpUrl(sessionId, uri);
@@ -1208,8 +1211,7 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
     terminal.loadAddon(fitAddon);
     terminal.loadAddon(searchAddon);
     terminal.loadAddon(serializeAddon);
-    terminal.loadAddon(unicode11Addon);
-    terminal.unicode.activeVersion = "11";
+    installTerminalUnicode(terminal);
     terminal.loadAddon(webLinksAddon);
     terminal.open(containerRef.current);
     const updateCtrlKeyState = (event: KeyboardEvent) => {
@@ -1231,9 +1233,9 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
     linkHoverIcon = createTerminalLinkHoverIcon(terminal, containerRef.current, fontSize);
     baseDisposables.push(linkHoverIcon);
     // 注册定时节流落盘的快照来源：让崩溃/强杀也能恢复到最近一次落盘的画面。
-    const serializeAfterWriteBarrier = () => new Promise<string>((resolve) => {
-      terminal.write("", () => resolve(serializeAddon.serialize()));
-    });
+    const serializeAfterWriteBarrier = (signal: AbortSignal) => serializeTerminalAfterWrite(
+      terminal, () => serializeAddon.serialize(), signal,
+    );
     const unregisterSnapshotSource = registerTerminalSnapshotSource(
       sessionId,
       serializeAfterWriteBarrier,
@@ -1331,7 +1333,7 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
         }
         const restoredOutput = displayTransformOutputRef.current(initialTerminalOutput);
         const restoredCursor = shouldHideCodexCursor(terminal) ? "\x1b[?25l" : "\x1b[?25h";
-        terminal.write(`${restoredOutput}\x1b[?6l\x1b[r\x1b[0m${restoredCursor}\x1b[999B\r\n`, () => {
+        writeTerminalReplay(terminal, `${restoredOutput}\x1b[?6l\x1b[r\x1b[0m${restoredCursor}\x1b[999B\r\n`, () => {
           if (terminalRef.current !== terminal) return;
           terminal.scrollToBottom();
           refreshTerminalViewport(terminal);
@@ -1379,6 +1381,9 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
     contextMenuTarget.addEventListener("contextmenu", onContextMenu);
 
     terminal.attachCustomKeyEventHandler((e) => {
+      // 在 xterm 提前提交组词原文之前拦截输入法补发的无身份按键。
+      if (shouldSwallowImeCompositionKeydown(e, isComposingRef.current)) return false;
+
       const isMacSelectAll = (
         osPlatformRef.current === "macos" ||
         (osPlatformRef.current === "unknown" && navigator.platform.toLowerCase().includes("mac"))
@@ -1805,6 +1810,8 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
       ref={wrapperRef}
       className="ui-terminal-bg-layer relative h-full w-full overflow-hidden"
       style={wrapperStyle}
+      data-terminal-session-id={sessionId}
+      data-terminal-visible={isVisible ? "true" : "false"}
       data-bg-enabled={showBackgroundImage ? "true" : undefined}
       data-bg-fit={showBackgroundImage ? background.fit : undefined}
       data-bg-position={showBackgroundImage ? background.position : undefined}
@@ -1934,6 +1941,7 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
           <TerminalMarkdownPreview
             sessionId={sessionId}
             open={markdownPreviewOpen}
+            isVisible={isVisible}
             onClose={() => setMarkdownPreviewOpen(false)}
             terminalTheme={terminalTheme}
           />

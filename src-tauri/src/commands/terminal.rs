@@ -1,6 +1,7 @@
 use crate::daemon::client::{DaemonBridge, DaemonClient};
 use crate::daemon::protocol::{
-    ClientFrame, SessionMeta, FEATURE_AGENT_DISCOVERY, FEATURE_WS_BINARY_OUTPUT,
+    ClientFrame, SessionMeta, FEATURE_AGENT_DISCOVERY, FEATURE_COMMAND_HISTORY,
+    FEATURE_WS_BINARY_OUTPUT,
 };
 use crate::pty::manager::{PtyOrphanCleanupSummary, PtyProcessStatus};
 use crate::ssh_launch::SshLaunchPlan;
@@ -36,6 +37,9 @@ fn daemon_contract_is_current(version: &str, features: &[String]) -> bool {
         && features
             .iter()
             .any(|feature| feature == FEATURE_AGENT_DISCOVERY)
+        && features
+            .iter()
+            .any(|feature| feature == FEATURE_COMMAND_HISTORY)
 }
 
 fn daemon_is_current(client: &DaemonClient) -> bool {
@@ -347,6 +351,7 @@ mod tests {
         let features = vec![
             FEATURE_WS_BINARY_OUTPUT.to_string(),
             super::FEATURE_AGENT_DISCOVERY.to_string(),
+            super::FEATURE_COMMAND_HISTORY.to_string(),
         ];
         assert!(daemon_contract_is_current(
             env!("CARGO_PKG_VERSION"),
@@ -358,5 +363,9 @@ mod tests {
             &[FEATURE_WS_BINARY_OUTPUT.to_string()]
         ));
         assert!(!daemon_contract_is_current(env!("CARGO_PKG_VERSION"), &[]));
+        assert!(!daemon_contract_is_current(
+            env!("CARGO_PKG_VERSION"),
+            &[FEATURE_WS_BINARY_OUTPUT.to_string(), super::FEATURE_AGENT_DISCOVERY.to_string()]
+        ));
     }
 }

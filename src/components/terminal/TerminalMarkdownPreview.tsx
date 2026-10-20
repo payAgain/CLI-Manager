@@ -216,11 +216,12 @@ function MarkdownPreviewAnswerSelect({
 interface TerminalMarkdownPreviewProps {
   sessionId: string;
   open: boolean;
+  isVisible: boolean;
   onClose: () => void;
   terminalTheme: ITheme;
 }
 
-export function TerminalMarkdownPreview({ sessionId, open, onClose, terminalTheme }: TerminalMarkdownPreviewProps) {
+export function TerminalMarkdownPreview({ sessionId, open, isVisible, onClose, terminalTheme }: TerminalMarkdownPreviewProps) {
   const { language, t } = useI18n();
   const terminalCodeTheme = isLightTerminalTheme(terminalTheme) ? "light" : "dark";
   const terminalPreviewStyle = useMemo(() => buildTerminalMarkdownPreviewStyle(terminalTheme), [terminalTheme]);
@@ -254,10 +255,17 @@ export function TerminalMarkdownPreview({ sessionId, open, onClose, terminalThem
   const [markdownFontScale, setMarkdownFontScale] = useState(1);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<PreviewError | null>(null);
+  const [windowActive, setWindowActive] = useState(() => document.visibilityState !== "hidden" && document.hasFocus());
+  const previewActive = open && isVisible && windowActive;
   const remoteContextRef = useRef<SshAgentHistoryContext | null>(null);
   const requestSeqRef = useRef(0);
   const loadedTriggerRef = useRef<string | null>(null);
   const previewLoadTrigger = `${cliSessionId ?? ""}:${source ?? ""}:${lookupProjectPath}:${hookStatus}:${hookUpdatedAt ?? ""}`;
+  const previewSessionKey = JSON.stringify([
+    sessionId, cliSessionId, source, lookupProjectPath, isSshProject,
+    project?.id, project?.ssh_host_id, project?.remote_path, project?.cli_tool,
+    project?.cli_config_root, session?.worktreeId, session?.remoteTranscriptRef,
+  ]);
   const selectedMessage = useMemo(
     () => previewMessages.find((message) => message.messageIndex === selectedMessageIndex) ?? null,
     [previewMessages, selectedMessageIndex],
@@ -281,14 +289,54 @@ export function TerminalMarkdownPreview({ sessionId, open, onClose, terminalThem
     }).catch(() => undefined);
   }, []);
 
-  useEffect(() => () => {
+  // 失焦或隐藏/托盘时保留正在阅读的内容，暂停全文读取；各分屏和 Workspan 独立控制可见性。
+  useEffect(() => {
+    if (!open || !isVisible) return;
+    const update = () => setWindowActive(document.visibilityState !== "hidden" && document.hasFocus());
+    update();
+    document.addEventListener("visibilitychange", update);
+    window.addEventListener("focus", update);
+    window.addEventListener("blur", update);
+    return () => {
+      document.removeEventListener("visibilitychange", update);
+      window.removeEventListener("focus", update);
+      window.removeEventListener("blur", update);
+    };
+  }, [open, isVisible]);
+
+  const invalidateRequest = useCallback(() => {
+    requestSeqRef.current += 1;
     closeRemoteContext(remoteContextRef.current);
     remoteContextRef.current = null;
   }, [closeRemoteContext]);
 
+  useEffect(() => {
+    loadedTriggerRef.current = null;
+    setPreviewMessages([]);
+    setSelectedMessageIndex(null);
+    setLoading(false);
+    setError(null);
+    return invalidateRequest;
+  }, [invalidateRequest, previewSessionKey]);
+
+  useEffect(() => {
+    if (!previewActive) {
+      loadedTriggerRef.current = null;
+      setLoading(false);
+    }
+    if (!open) {
+      setPreviewMessages([]);
+      setError(null);
+    }
+    // 只清理正文，保留同一会话的回答选择；重新打开时加载最新内容。
+    return invalidateRequest;
+  }, [invalidateRequest, open, previewActive]);
+
   const loadLatest = useCallback(async (trigger: string) => {
     const requestSeq = ++requestSeqRef.current;
-    if (!source) return;
+    const requestIsCurrent = () => requestSeq === requestSeqRef.current
+      && document.visibilityState !== "hidden" && document.hasFocus();
+    if (!previewActive || !source || !requestIsCurrent()) return;
     if (!cliSessionId) {
       setError("noSession");
       return;
@@ -300,12 +348,19 @@ export function TerminalMarkdownPreview({ sessionId, open, onClose, terminalThem
       let detail: HistorySessionDetail | null = null;
       for (let attempt = 0; attempt < LOCAL_RETRY_DELAYS_MS.length; attempt += 1) {
         if (LOCAL_RETRY_DELAYS_MS[attempt] > 0) await wait(LOCAL_RETRY_DELAYS_MS[attempt]);
-        if (requestSeq !== requestSeqRef.current) return;
+        if (!requestIsCurrent()) return;
 
         if (isSshProject && project) {
           if (remoteContextRef.current?.launch.projectId !== project.id) {
             closeRemoteContext(remoteContextRef.current);
-            remoteContextRef.current = await buildSshAgentHistoryContext(project);
+            const built = await buildSshAgentHistoryContext(project);
+            // 每次预览持有独立 consumer，迟到清理不能关闭同项目的另一分屏/历史列表。
+            const context = { ...built, consumerId: `${built.consumerId}:preview:${sessionId}:${crypto.randomUUID()}` };
+            if (!requestIsCurrent()) {
+              closeRemoteContext(context);
+              return;
+            }
+            remoteContextRef.current = context;
           }
           const remote = await fetchRemoteLatestProjectSessionDetail(
             remoteContextRef.current,
@@ -313,6 +368,10 @@ export function TerminalMarkdownPreview({ sessionId, open, onClose, terminalThem
             cliSessionId,
             session?.remoteTranscriptRef,
           );
+          if (!requestIsCurrent()) {
+            if (remoteContextRef.current?.consumerId !== remote.context.consumerId) closeRemoteContext(remote.context);
+            return;
+          }
           remoteContextRef.current = remote.context;
           detail = remote.result === "unchanged" ? null : remote.result;
         } else if (lookupProjectPath) {
@@ -334,7 +393,7 @@ export function TerminalMarkdownPreview({ sessionId, open, onClose, terminalThem
         if (detail) break;
       }
 
-      if (requestSeq !== requestSeqRef.current) return;
+      if (!requestIsCurrent()) return;
       if (detail) {
         loadedTriggerRef.current = trigger;
         const nextMessages = selectAssistantMarkdownMessages(detail);
@@ -348,19 +407,17 @@ export function TerminalMarkdownPreview({ sessionId, open, onClose, terminalThem
         setError("loadFailed");
       }
     } catch {
-      if (requestSeq === requestSeqRef.current) setError("loadFailed");
+      if (requestIsCurrent()) setError("loadFailed");
     } finally {
-      if (requestSeq === requestSeqRef.current) setLoading(false);
+      if (requestIsCurrent()) setLoading(false);
     }
-  }, [cliSessionId, closeRemoteContext, isSshProject, lookupProjectPath, project, session?.remoteTranscriptRef, source]);
+  }, [cliSessionId, closeRemoteContext, isSshProject, lookupProjectPath, previewActive, project, sessionId, session?.remoteTranscriptRef, source]);
 
   useEffect(() => {
-    if (!source) return;
-    const completed = hookStatus === "done" || hookStatus === "failed";
-    if (!open && !completed) return;
+    if (!source || !previewActive) return;
     if (loadedTriggerRef.current === previewLoadTrigger) return;
     void loadLatest(previewLoadTrigger);
-  }, [hookStatus, loadLatest, open, previewLoadTrigger, source]);
+  }, [hookStatus, loadLatest, previewActive, previewLoadTrigger, source]);
 
   if (!open) return null;
 

@@ -19,6 +19,8 @@ export function decodeOscPathValue(value) { return value; }
 writeFileSync(join(tempDir, "terminalColor.mjs"), `
 export function normalizeHexColor(value, fallback) { return value || fallback; }
 `);
+const commandHistorySource = readFileSync(new URL("../src/lib/terminalCommandHistory.ts", import.meta.url), "utf8");
+writeFileSync(join(tempDir, "terminalCommandHistory.mjs"), ts.transpileModule(commandHistorySource, { compilerOptions: { module: ts.ModuleKind.ES2022, target: ts.ScriptTarget.ES2022 } }).outputText);
 const parseSource = readFileSync(new URL("../src/lib/terminalOscParse.ts", import.meta.url), "utf8");
 const transpiledParse = ts.transpileModule(parseSource, {
   compilerOptions: {
@@ -27,10 +29,13 @@ const transpiledParse = ts.transpileModule(parseSource, {
   },
   fileName: "terminalOscParse.ts",
 }).outputText
+  .replace('from "./terminalCommandHistory"', 'from "./terminalCommandHistory.mjs"')
   .replace('from "./terminalOscPath"', 'from "./terminalOscPath.mjs"')
   .replace('from "./terminalColor"', 'from "./terminalColor.mjs"');
 writeFileSync(join(tempDir, "terminalOscParse.mjs"), transpiledParse, "utf8");
 writeFileSync(join(tempDir, "terminalStore.mjs"), `
+export const recordedCommands = [];
+export function recordTerminalCommandHistory(...args) { recordedCommands.push(args); }
 export const useTerminalStore = {
   getState() {
     return {
@@ -50,6 +55,7 @@ const transpiled = ts.transpileModule(source, {
   fileName: "useTerminalOsc.ts",
 }).outputText
   .replace('from "react"', 'from "./react.mjs"')
+  .replace('from "../lib/terminalCommandHistory"', 'from "./terminalCommandHistory.mjs"')
   .replace('from "../lib/terminalOscPath"', 'from "./terminalOscPath.mjs"')
   .replace('from "../lib/terminalOscParse"', 'from "./terminalOscParse.mjs"')
   .replace('from "../stores/terminalStore"', 'from "./terminalStore.mjs"');
@@ -125,4 +131,30 @@ test("frontend OSC pipeline does not own color-query replies", () => {
   assert.doesNotMatch(oscSource, /terminalProcessManager\.write/u);
   assert.doesNotMatch(oscSource, /replyToColorQueries/u);
   assert.doesNotMatch(displaySource, /replyToColorQueries/u);
+});
+
+const { recordedCommands } = await import(pathToFileURL(join(tempDir, "terminalStore.mjs")).href);
+const historyMarker = "\x1b]777;cli-manager-history;history-session;123-1;" + Buffer.from('git commit -m "中文"').toString("base64") + "\x07";
+test("confirmed command survives every live frame split and is removed from the visible stream", () => {
+  for (let split = 0; split <= historyMarker.length; split++) {
+    recordedCommands.length = 0;
+    const osc = useTerminalOsc({ sessionId: "history-session", osPlatformRef: { current: "macos" } });
+    assert.equal(osc.normalizeTerminalOutput(historyMarker.slice(0, split), true) + osc.normalizeTerminalOutput(historyMarker.slice(split), true), "");
+    assert.deepEqual(recordedCommands, [["history-session", 'git commit -m "中文"', "history-session:123-1"]]);
+  }
+});
+test("replay, reset, cross-session and replay/live partial markers never create history", () => {
+  for (const live of [false, true]) {
+    recordedCommands.length = 0;
+    const osc = useTerminalOsc({ sessionId: "different-session", osPlatformRef: { current: "macos" } });
+    osc.normalizeTerminalOutput(historyMarker, live);
+    assert.deepEqual(recordedCommands, []);
+  }
+  for (const [first, second] of [[false, false], [false, true], [true, false]]) {
+    recordedCommands.length = 0;
+    const osc = useTerminalOsc({ sessionId: "history-session", osPlatformRef: { current: "macos" } });
+    osc.normalizeTerminalOutput(historyMarker.slice(0, 30), first);
+    osc.normalizeTerminalOutput(historyMarker.slice(30), second);
+    assert.deepEqual(recordedCommands, []);
+  }
 });

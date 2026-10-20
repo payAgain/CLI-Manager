@@ -1,26 +1,21 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  Badge,
   Button,
-  Card,
   Group,
-  SimpleGrid,
   Select,
   Stack,
   Switch,
-  Text,
+  Tabs,
   TextInput,
-  ThemeIcon,
 } from "@mantine/core";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { Database, FolderOpen, RefreshCw } from "lucide-react";
+import { ChevronRight, Database, FolderOpen, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 import {
   HISTORY_SOURCE_DESCRIPTORS,
   createHistorySourceInstanceId,
   inferHistorySourceEnvironment,
-  type HistoryCapabilityState,
   type HistorySourceDescriptor,
   type HistorySourceId,
 } from "../../../lib/historySources";
@@ -28,12 +23,6 @@ import { getLanguageLocale, pickByLanguage, useI18n } from "../../../lib/i18n";
 import { useHistorySourceSettingsStore } from "../../../stores/historySourceSettingsStore";
 import { VendorIcon, inferVendor } from "../../VendorIcon";
 import { useAppConfirm } from "../../ui/useAppConfirm";
-
-function capabilityColor(state: HistoryCapabilityState): string {
-  if (state === "supported") return "green";
-  if (state === "planned") return "yellow";
-  return "gray";
-}
 
 function sourcePath(descriptor: HistorySourceDescriptor, locations: Record<string, string> | undefined): string {
   const slot = descriptor.locations[0];
@@ -139,6 +128,8 @@ export function HistorySourceSettingsPage() {
   const text = (zh: string, en: string) => pickByLanguage(language, zh, en);
   const { loaded, settings, load, setSourceSettings, clearSource } = useHistorySourceSettingsStore();
   const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const savedPathsRef = useRef<Record<string, string>>({});
+  const [expandedSourceId, setExpandedSourceId] = useState<HistorySourceId | null>(null);
   const [detectingSourceId, setDetectingSourceId] = useState<HistorySourceId | null>(null);
   const [backupStatus, setBackupStatus] = useState<HistoryBackupRootStatus | null>(null);
   const [backupBusy, setBackupBusy] = useState(false);
@@ -154,11 +145,16 @@ export function HistorySourceSettingsPage() {
   }, [loaded, load]);
 
   useEffect(() => {
-    const nextDrafts: Record<string, string> = {};
+    const savedPaths: Record<string, string> = {};
     for (const descriptor of HISTORY_SOURCE_DESCRIPTORS) {
-      nextDrafts[descriptor.id] = sourcePath(descriptor, settings[descriptor.id]?.activeInstance?.locations);
+      savedPaths[descriptor.id] = sourcePath(descriptor, settings[descriptor.id]?.activeInstance?.locations);
     }
-    setDrafts(nextDrafts);
+    const previousPaths = savedPathsRef.current;
+    savedPathsRef.current = savedPaths;
+    setDrafts((current) => Object.fromEntries(HISTORY_SOURCE_DESCRIPTORS.map(({ id }) => [
+      id,
+      previousPaths[id] !== savedPaths[id] ? savedPaths[id] : current[id] ?? savedPaths[id],
+    ])));
   }, [settings]);
 
   const loadBackupStatus = async () => {
@@ -408,6 +404,8 @@ export function HistorySourceSettingsPage() {
   const handleToggle = async (descriptor: HistorySourceDescriptor, enabled: boolean) => {
     const current = settings[descriptor.id];
     if (enabled && !current?.activeInstance) {
+      setExpandedSourceId(descriptor.id);
+      if (!drafts[descriptor.id]?.trim()) return;
       await handleSave(descriptor);
       return;
     }
@@ -423,248 +421,180 @@ export function HistorySourceSettingsPage() {
   };
 
   return (
-    <Stack gap="md">
-      <Card className="border border-border bg-surface-container-low" p="md" radius="lg">
-        <Group align="flex-start" justify="space-between" gap="sm">
-          <Stack gap={4}>
-            <Text fw={600} c="var(--on-surface)">
-              {text("历史会话", "History Sessions")}
-            </Text>
-            <Text size="sm" c="var(--on-surface-variant)">
-              {text(
-                "每个 CLI 使用一个历史会话位置。Claude/Codex 与 Hook 设置共用同一目录，任一处修改都会同步。",
-                "Each CLI uses one history session location. Claude and Codex share their directories with Hook settings, and changes sync both ways."
-              )}
-            </Text>
-          </Stack>
-          <Badge color="cliPrimary" variant="light">
-            {text(`已启用 ${activeCount} 个`, `${activeCount} enabled`)}
-          </Badge>
-        </Group>
-      </Card>
-
-      <Card className="border border-border bg-surface-container-low" p="md" radius="lg">
-        <Group align="flex-start" justify="space-between" gap="sm">
-          <Stack gap={4}>
-            <Text fw={600} c="var(--on-surface)">
-              {t("historySources.backup.title")}
-            </Text>
-            <Text size="sm" c="var(--on-surface-variant)">
-              {t("historySources.backup.description")}
-            </Text>
-            <Text size="xs" c="var(--on-surface-variant)" className="break-all">
-              {backupStatus?.root ?? t("historySources.backup.loading")}
-            </Text>
-            {backupStatus ? (
-              <Group gap={6}>
-                <Badge color="blue" variant="light">
-                  {backupStatus.environmentKey}
-                </Badge>
-                <Badge color="gray" variant="light">
-                  {formatBytes(backupStatus.totalBytes)} / {formatBytes(backupStatus.maxBytes)}
-                </Badge>
-                <Badge color="gray" variant="light">
-                  {backupStatus.retentionDays}d
-                </Badge>
-                {backupStatus.protectedEntries > 0 ? (
-                  <Badge color="yellow" variant="light">
-                    {t("historySources.backup.protected", { count: backupStatus.protectedEntries })}
-                  </Badge>
-                ) : null}
-              </Group>
-            ) : null}
-          </Stack>
-          <Group gap="xs">
-            <Button
-              size="xs"
-              variant="default"
-              color="gray"
-              disabled={!backupStatus?.root}
-              onClick={() => void handleOpenBackupRoot()}
-            >
-              {t("historySources.backup.open")}
-            </Button>
-            <Button size="xs" variant="default" color="gray" loading={backupBusy} onClick={() => void handleBackupCleanup()}>
-              {t("historySources.backup.cleanup")}
-            </Button>
-          </Group>
-        </Group>
-        <Stack gap="sm" mt="md" className="rounded-lg border border-border bg-bg-secondary/40 p-3">
-          <Stack gap={2}>
-            <Text size="sm" fw={600} c="var(--on-surface)">
-              {t("historySources.backup.restoreTitle")}
-            </Text>
-            <Text size="xs" c="var(--on-surface-variant)">
-              {t("historySources.backup.restoreDescription")}
-            </Text>
-          </Stack>
-          <Select
-            size="xs"
-            searchable
-            label={t("historySources.backup.restoreCandidate")}
-            placeholder={t("historySources.backup.restoreCandidatePlaceholder")}
-            nothingFoundMessage={t("historySources.backup.restoreCandidateEmpty")}
-            data={restoreCandidateOptions}
-            value={restoreOriginalPath || null}
-            onChange={handleRestoreCandidateChange}
-            disabled={restoreCandidatesLoading || restoreCandidateOptions.length === 0}
-          />
-          {selectedRestoreCandidate ? (
-            <Stack gap={3} className="rounded-md border border-border bg-bg-primary/60 px-3 py-2">
-              <Group gap={6}>
-                <Badge color="blue" variant="light">
-                  {HISTORY_SOURCE_DESCRIPTORS.find((descriptor) => descriptor.id === selectedRestoreCandidate.source)
-                    ? t(HISTORY_SOURCE_DESCRIPTORS.find((descriptor) => descriptor.id === selectedRestoreCandidate.source)!.labelKey)
-                    : selectedRestoreCandidate.source}
-                </Badge>
-                <Badge color="gray" variant="light">{restoreMutationLabel(selectedRestoreCandidate.mutationKind)}</Badge>
-                <Text size="xs" c="var(--on-surface-variant)">
-                  {t("historySources.backup.backupAt", { time: formatBackupTime(selectedRestoreCandidate.createdAt, language) })}
-                </Text>
-              </Group>
-              <Text size="xs" c="var(--on-surface-variant)" className="break-all">
-                {t("historySources.backup.originalLocation", { path: selectedRestoreCandidate.originalPath })}
-              </Text>
-            </Stack>
-          ) : (
-            <Text size="xs" c="var(--on-surface-variant)">
-              {t("historySources.backup.restoreCandidateEmpty")}
-            </Text>
-          )}
-          <Group gap="xs">
-            <Button
-              size="xs"
-              variant="default"
-              color="gray"
-              loading={restoreBusy}
-              disabled={!selectedRestoreCandidate}
-              onClick={() => void handleBuildRestorePlan()}
-            >
-              {t("historySources.backup.restorePlan")}
-            </Button>
-            <Button
-              size="xs"
-              variant="default"
-              color="gray"
-              disabled={!restorePlan?.backupPath}
-              onClick={() => void handleExportRestoreManifest()}
-            >
-              {t("historySources.backup.exportManifest")}
-            </Button>
-            <Button size="xs" color="red" loading={restoreBusy} disabled={!restorePlan?.canRestore} onClick={() => void handleExecuteRestore()}>
-              {t("historySources.backup.restore")}
-            </Button>
-          </Group>
-          {restorePlan ? (
-            <Stack gap={4}>
-              <Text size="xs" c={restorePlan.canRestore ? "green" : "red"} className="break-all">
-                {restorePlan.canRestore
-                  ? t("historySources.backup.restorePlanReady")
-                  : t("historySources.backup.restorePlanBlocked")}
-                {restorePlan.conflict ? `: ${restoreConflictText(restorePlan.conflict)}` : ""}
-              </Text>
-            </Stack>
-          ) : null}
-        </Stack>
-      </Card>
-
-      <SimpleGrid cols={{ base: 1, lg: 2 }} spacing="md">
-        {HISTORY_SOURCE_DESCRIPTORS.map((descriptor) => {
-          const current = settings[descriptor.id];
-          const slot = descriptor.locations[0];
-          const draft = drafts[descriptor.id] ?? "";
-          const vendor = inferVendor(descriptor.id);
-          return (
-            <Card key={descriptor.id} className="border border-border bg-surface-container-low" p="md" radius="lg">
-              <Stack gap="sm">
-                <Group justify="space-between" align="flex-start" gap="sm">
-                  <Group gap="sm" wrap="nowrap">
-                    <ThemeIcon variant="light" color="gray" size="lg">
-                      <VendorIcon vendor={vendor} fallback={slot?.kind === "database" ? Database : FolderOpen} />
-                    </ThemeIcon>
-                    <Stack gap={2}>
-                      <Text fw={600} c="var(--on-surface)">
-                        {t(descriptor.labelKey)}
-                      </Text>
-                      <Text size="xs" c="var(--on-surface-variant)">
-                        {descriptor.id}
-                      </Text>
-                    </Stack>
-                  </Group>
-                  <Switch
-                    checked={Boolean(current?.enabled)}
-                    onChange={(event) => void handleToggle(descriptor, event.currentTarget.checked)}
-                    color="cliPrimary"
-                    aria-label={text("启用历史会话来源", "Enable history session source")}
-                  />
-                </Group>
-
-                <TextInput
-                  label={slot ? t(slot.labelKey) : text("读取位置", "Read location")}
-                  value={draft}
-                  onChange={(event) => setDrafts((currentDrafts) => ({ ...currentDrafts, [descriptor.id]: event.currentTarget.value }))}
-                  placeholder={slot?.kind === "database" ? text("选择数据库文件", "Choose database file") : text("选择目录", "Choose directory")}
-                  size="sm"
-                  rightSection={
+    <div className="ui-history-settings">
+      <Tabs defaultValue="sources" keepMounted={false} className="ui-history-settings-tabs">
+        <Tabs.List>
+          <Tabs.Tab value="sources">{t("historySources.tabs.sources")}</Tabs.Tab>
+          <Tabs.Tab value="backups">{t("historySources.backup.title")}</Tabs.Tab>
+        </Tabs.List>
+        <Tabs.Panel value="sources">
+          <div className="ui-history-source-intro">
+            <p>{t("historySources.sourcesDescription")}</p>
+            <span>{t("historySources.enabledCount", { count: activeCount })}</span>
+          </div>
+          <div className="ui-history-source-list">
+            {HISTORY_SOURCE_DESCRIPTORS.map((descriptor) => {
+              const current = settings[descriptor.id];
+              const slot = descriptor.locations[0];
+              const draft = drafts[descriptor.id] ?? "";
+              const savedPath = sourcePath(descriptor, current?.activeInstance?.locations);
+              const expanded = expandedSourceId === descriptor.id;
+              const status = !savedPath ? "unconfigured" : current?.enabled ? "enabled" : "disabled";
+              const features = [
+                descriptor.capabilities.list === "supported" && t("historySources.feature.browse"),
+                descriptor.capabilities.resume === "supported" && t("historySources.feature.resume"),
+                descriptor.capabilities.convertFrom === "supported" && t("historySources.feature.convertFrom"),
+                descriptor.capabilities.convertTo === "supported" && t("historySources.feature.convertTo"),
+              ].filter(Boolean).join(" · ");
+              return (
+                <div key={descriptor.id} className="ui-history-source" data-expanded={expanded}>
+                  <div className="ui-history-source-row">
                     <button
                       type="button"
-                      className="px-1 text-xs text-text-muted hover:text-text-primary"
-                      onClick={() => void handleBrowse(descriptor)}
+                      className="ui-history-source-toggle"
+                      aria-expanded={expanded}
+                      aria-controls={`history-source-${descriptor.id}-editor`}
+                      onClick={() => setExpandedSourceId(expanded ? null : descriptor.id)}
                     >
-                      {text("浏览", "Browse")}
+                      <span className="ui-history-source-icon" aria-hidden="true">
+                        <VendorIcon vendor={inferVendor(descriptor.id)} fallback={slot?.kind === "database" ? Database : FolderOpen} size={20} />
+                      </span>
+                      <span className="ui-history-source-summary">
+                        <span className="ui-history-source-name">{t(descriptor.labelKey)}</span>
+                        <span className="ui-history-source-path" title={savedPath || undefined}>
+                          {savedPath || t("historySources.chooseLocation")}
+                        </span>
+                      </span>
+                      <span className="ui-history-source-status" data-status={status}>
+                        {t(`historySources.status.${status}`)}
+                      </span>
+                      <ChevronRight size={14} className="ui-history-source-chevron" aria-hidden="true" />
                     </button>
-                  }
-                  rightSectionWidth={64}
-                />
-
-                <Group gap={6}>
-                  <Badge color={capabilityColor(descriptor.capabilities.list)} variant="light">
-                    list: {descriptor.capabilities.list}
-                  </Badge>
-                  <Badge color={capabilityColor(descriptor.capabilities.convertFrom)} variant="light">
-                    from: {descriptor.capabilities.convertFrom}
-                  </Badge>
-                  <Badge color={capabilityColor(descriptor.capabilities.convertTo)} variant="light">
-                    to: {descriptor.capabilities.convertTo}
-                  </Badge>
-                </Group>
-
-                <Group justify="space-between" gap="xs">
-                  <Text size="xs" c="var(--on-surface-variant)">
-                    {current?.activeInstance
-                      ? text("已确认一个 active instance", "One active instance confirmed")
-                      : text("自动探测只作为候选，需手动确认", "Auto-detection is candidate-only; manual confirmation is required")}
-                  </Text>
-                  <Group gap="xs">
-                    <Button
+                    <Switch
                       size="xs"
-                      variant="default"
-                      color="gray"
-                      leftSection={<RefreshCw size={14} />}
-                      loading={detectingSourceId === descriptor.id}
-                      onClick={() => void handleDetect(descriptor)}
-                    >
-                      {text("检测", "Detect")}
-                    </Button>
-                    <Button
-                      size="xs"
-                      variant="default"
-                      color="gray"
-                      onClick={() => void handleSave(descriptor)}
-                    >
-                      {text("保存", "Save")}
-                    </Button>
-                    <Button size="xs" variant="subtle" color="red" onClick={() => void handleClear(descriptor.id)}>
-                      {text("清除", "Clear")}
-                    </Button>
-                  </Group>
-                </Group>
-              </Stack>
-            </Card>
-          );
-        })}
-      </SimpleGrid>
+                      checked={Boolean(current?.enabled)}
+                      onChange={(event) => void handleToggle(descriptor, event.currentTarget.checked)}
+                      color="cliPrimary"
+                      aria-label={t("historySources.enableSource", { source: t(descriptor.labelKey) })}
+                    />
+                  </div>
+                  <div id={`history-source-${descriptor.id}-editor`} hidden={!expanded} className="ui-history-source-editor">
+                    <div className="ui-history-source-location">
+                      <TextInput
+                        label={slot ? t(slot.labelKey) : t("historySources.readLocation")}
+                        value={draft}
+                        onChange={(event) => {
+                          const value = event.currentTarget.value;
+                          setDrafts((currentDrafts) => ({ ...currentDrafts, [descriptor.id]: value }));
+                        }}
+                        placeholder={t(slot?.kind === "database" ? "historySources.chooseDatabase" : "historySources.chooseDirectory")}
+                        size="xs"
+                      />
+                      <Button size="xs" variant="default" onClick={() => void handleBrowse(descriptor)}>
+                        {t("historySources.browse")}
+                      </Button>
+                    </div>
+                    {features && <p className="ui-history-source-features">{features}</p>}
+                    <div className="ui-history-source-editor-footer">
+                      <p>{t("historySources.detectHint")}</p>
+                      <Group gap={6}>
+                        <Button size="xs" variant="subtle" color="red" disabled={!current && !draft} onClick={() => void handleClear(descriptor.id)}>
+                          {t("historySources.clear")}
+                        </Button>
+                        <Button
+                          size="xs"
+                          variant="default"
+                          leftSection={<RefreshCw size={12} />}
+                          loading={detectingSourceId === descriptor.id}
+                          onClick={() => void handleDetect(descriptor)}
+                        >
+                          {t("historySources.detect")}
+                        </Button>
+                        <Button size="xs" disabled={!draft.trim()} onClick={() => void handleSave(descriptor)}>
+                          {t("historySources.saveAndEnable")}
+                        </Button>
+                      </Group>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          <p className="ui-history-settings-note">{t("historySources.hookSyncHint")}</p>
+        </Tabs.Panel>
+        <Tabs.Panel value="backups">
+          <section className="ui-history-backup-section" aria-labelledby="history-backup-storage-title">
+            <div className="ui-history-backup-heading">
+              <h3 id="history-backup-storage-title">{t("historySources.backup.storage")}</h3>
+              <Group gap={6}>
+                <Button size="xs" variant="default" disabled={!backupStatus?.root} onClick={() => void handleOpenBackupRoot()}>
+                  {t("historySources.backup.open")}
+                </Button>
+                <Button size="xs" variant="default" loading={backupBusy} onClick={() => void handleBackupCleanup()}>
+                  {t("historySources.backup.cleanup")}
+                </Button>
+              </Group>
+            </div>
+            <p className="ui-history-settings-description">{t("historySources.backup.description")}</p>
+            <p className="ui-history-backup-path">{backupStatus?.root ?? t("historySources.backup.loading")}</p>
+            {backupStatus && (
+              <dl className="ui-history-backup-metrics">
+                <div><dt>{t("historySources.backup.space")}</dt><dd>{formatBytes(backupStatus.totalBytes)} <span>/ {formatBytes(backupStatus.maxBytes)}</span></dd></div>
+                <div><dt>{t("historySources.backup.retention")}</dt><dd>{t("historySources.backup.days", { count: backupStatus.retentionDays })}</dd></div>
+                <div><dt>{t("historySources.backup.protectedLabel")}</dt><dd>{backupStatus.protectedEntries}</dd></div>
+                <div><dt>{t("historySources.backup.environment")}</dt><dd>{backupStatus.environmentKey}</dd></div>
+              </dl>
+            )}
+          </section>
+          <section className="ui-history-backup-section" aria-labelledby="history-backup-restore-title">
+            <h3 id="history-backup-restore-title">{t("historySources.backup.restoreTitle")}</h3>
+            <p className="ui-history-settings-description">{t("historySources.backup.restoreDescription")}</p>
+            <Stack gap="sm" mt="md">
+              <Select
+                size="xs"
+                searchable
+                label={t("historySources.backup.restoreCandidate")}
+                placeholder={t("historySources.backup.restoreCandidatePlaceholder")}
+                nothingFoundMessage={t("historySources.backup.restoreCandidateEmpty")}
+                data={restoreCandidateOptions}
+                value={restoreOriginalPath || null}
+                onChange={handleRestoreCandidateChange}
+                disabled={restoreCandidatesLoading || restoreCandidateOptions.length === 0}
+              />
+              {selectedRestoreCandidate ? (
+                <div className="ui-history-restore-details">
+                  <p>
+                    {HISTORY_SOURCE_DESCRIPTORS.find((descriptor) => descriptor.id === selectedRestoreCandidate.source)
+                      ? t(HISTORY_SOURCE_DESCRIPTORS.find((descriptor) => descriptor.id === selectedRestoreCandidate.source)!.labelKey)
+                      : selectedRestoreCandidate.source}
+                    {" · "}{restoreMutationLabel(selectedRestoreCandidate.mutationKind)}
+                    {" · "}{formatBackupTime(selectedRestoreCandidate.createdAt, language)}
+                  </p>
+                  <p>{t("historySources.backup.originalLocation", { path: selectedRestoreCandidate.originalPath })}</p>
+                </div>
+              ) : <p className="ui-history-settings-description">{t("historySources.backup.restoreCandidateEmpty")}</p>}
+              <Group gap={6}>
+                <Button size="xs" variant="default" loading={restoreBusy} disabled={!selectedRestoreCandidate} onClick={() => void handleBuildRestorePlan()}>
+                  {t("historySources.backup.restorePlan")}
+                </Button>
+                <Button size="xs" variant="default" disabled={!restorePlan?.backupPath} onClick={() => void handleExportRestoreManifest()}>
+                  {t("historySources.backup.exportManifest")}
+                </Button>
+                <Button size="xs" color="red" loading={restoreBusy} disabled={!restorePlan?.canRestore} onClick={() => void handleExecuteRestore()}>
+                  {t("historySources.backup.restore")}
+                </Button>
+              </Group>
+              {restorePlan && (
+                <p className="ui-history-restore-result" data-ready={restorePlan.canRestore} role="status">
+                  {t(restorePlan.canRestore ? "historySources.backup.restorePlanReady" : "historySources.backup.restorePlanBlocked")}
+                  {restorePlan.conflict ? `: ${restoreConflictText(restorePlan.conflict)}` : ""}
+                </p>
+              )}
+            </Stack>
+          </section>
+        </Tabs.Panel>
+      </Tabs>
       {confirmDialog}
-    </Stack>
+    </div>
   );
 }

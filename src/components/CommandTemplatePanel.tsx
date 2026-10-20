@@ -12,6 +12,7 @@ import { Skeleton } from "./ui/Skeleton";
 import { toast } from "sonner";
 import { logError } from "../lib/logger";
 import { useI18n } from "../lib/i18n";
+import { RecentCommandTemplates } from "./RecentCommandTemplates";
 import { terminalProcessManager } from "../terminal/core/TerminalProcessManager";
 
 type TemplateScope = "global" | "project" | "session";
@@ -157,6 +158,7 @@ export function CommandTemplatePanel({
   );
   const { projects } = useProjectStore();
   const [open, setOpen] = useState(false);
+  const [view, setView] = useState<"templates" | "recent">("templates");
   const [showForm, setShowForm] = useState(false);
   const [editingTemplate, setEditingTemplate] = useState<CommandTemplate | null>(null);
   const [pendingDeleteTemplate, setPendingDeleteTemplate] = useState<CommandTemplate | null>(null);
@@ -242,6 +244,7 @@ export function CommandTemplatePanel({
       setShowForm(false);
       return;
     }
+    setView("templates");
     setPendingDeleteTemplate(null);
     resetForm();
     setShowForm(true);
@@ -414,6 +417,10 @@ export function CommandTemplatePanel({
           </button>
         </div>
 
+        <div className="ui-command-template-views" role="group" aria-label={t("commandTemplate.recent.viewLabel")}>
+          <button type="button" aria-pressed={view === "templates"} onClick={() => setView("templates")}>{t("commandTemplate.recent.saved")}</button>
+          <button type="button" aria-pressed={view === "recent"} onClick={() => { closeForm(); setView("recent"); }}>{t("commandTemplate.recent.title")}</button>
+        </div>
         <div className="command-template-panel__filters">
           <div className="command-template-panel__search ui-focus-ring">
             <Search size={13} strokeWidth={1.8} />
@@ -421,8 +428,8 @@ export function CommandTemplatePanel({
               type="text"
               value={searchQuery}
               onChange={(event) => setSearchQuery(event.currentTarget.value)}
-              placeholder={t("commandTemplate.searchPlaceholder")}
-              aria-label={t("commandTemplate.searchAria")}
+              placeholder={t(view === "recent" ? "commandHistory.searchPlaceholder" : "commandTemplate.searchPlaceholder")}
+              aria-label={t(view === "recent" ? "commandHistory.searchAria" : "commandTemplate.searchAria")}
             />
             {searchQuery && (
               <button
@@ -435,7 +442,7 @@ export function CommandTemplatePanel({
               </button>
             )}
           </div>
-          <div className="command-template-panel__scope-tabs" role="tablist" aria-label={t("commandTemplate.scopeFilterAria")}>
+          <div hidden={view !== "templates"} className="command-template-panel__scope-tabs" role="tablist" aria-label={t("commandTemplate.scopeFilterAria")}>
             {scopeFilterOptions.map((option) => (
               <button
                 key={option.value}
@@ -451,6 +458,17 @@ export function CommandTemplatePanel({
           </div>
         </div>
 
+        {view === "recent" && <RecentCommandTemplates projectId={activeSession?.projectId ?? null} query={searchQuery} onSelect={(value) => {
+          resetForm();
+          setCommand(value);
+          setName(value.slice(0, 80));
+          setProjectId(activeSession?.projectId ?? null);
+          setScope(activeSession?.projectId ? "project" : "global");
+          setView("templates");
+          setScopeFilter("all");
+          setSearchQuery("");
+          setShowForm(true);
+        }} />}
         {showForm && (
           <div className="command-template-panel__form">
             <div className="flex items-center justify-between gap-2">
@@ -529,7 +547,7 @@ export function CommandTemplatePanel({
           </div>
         )}
 
-        <div className="command-template-panel__list ui-thin-scroll">
+        <div hidden={view !== "templates"} className="command-template-panel__list ui-thin-scroll">
           {panelLoading ? (
             <div className="space-y-3 px-3 py-3">
               {[1, 2, 3].map((item) => (

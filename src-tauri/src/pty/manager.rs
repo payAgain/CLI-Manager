@@ -362,6 +362,7 @@ impl PtyManager {
         //   C = 命令开始执行（PSConsoleHostReadLine 提交非空行时发出）
         // 是否真的跑过命令用 history id 判断，避免空回车误报 command_finished。
         let script = r#"
+$global:CliManagerCommandCounter = 0
 $global:CliManagerLastHistoryId = $null
 $global:CliManagerPreviousPrompt = if (Test-Path function:\prompt) { (Get-Command prompt).ScriptBlock } else { $null }
 function global:prompt {
@@ -390,6 +391,11 @@ if (Test-Path function:\PSConsoleHostReadLine) {
     $line = & $global:CliManagerOriginalReadLine
     if (($null -ne $line) -and ($line.Trim().Length -gt 0)) {
       [Console]::Write("$([char]27)]133;C$([char]7)")
+      if (($env:CLI_MANAGER_COMMAND_HISTORY -eq '1') -and ($line -cmatch '^\S') -and ($line.Length -le 4096)) {
+        $global:CliManagerCommandCounter++
+        $encoded = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($line))
+        [Console]::Write("$([char]27)]777;cli-manager-history;$env:CLI_MANAGER_TAB_ID;$PID-$global:CliManagerCommandCounter;$encoded$([char]7)")
+      }
     }
     $line
   }
@@ -424,7 +430,11 @@ PROMPT_COMMAND="__cli_manager_prompt${PROMPT_COMMAND:+;$PROMPT_COMMAND}"
 PS0='\e]133;C\a${PS0:0:$((__cli_manager_ran=1,0))}'
 "#;
         let path = std::env::temp_dir().join("cli-manager-bash-integration.bashrc");
-        std::fs::write(&path, script).map_err(|e| e.to_string())?;
+        std::fs::write(
+            &path,
+            format!("{script}\n{}", super::shell_history::BASH_HISTORY),
+        )
+        .map_err(|e| e.to_string())?;
         Ok(path.to_string_lossy().replace('\\', "/"))
     }
 
@@ -533,7 +543,7 @@ PS0='\e]133;C\a${PS0:0:$((__cli_manager_ran=1,0))}'
         env_vars: Option<&HashMap<String, String>>,
     ) -> Result<(String, Vec<String>), String> {
         let monitoring_enabled = Self::shell_runtime_monitoring_enabled(env_vars);
-        if !monitoring_enabled {
+        if !monitoring_enabled && !super::shell_history::enabled(env_vars) {
             return Self::resolve_shell(shell);
         }
         match shell {
@@ -597,6 +607,21 @@ PS0='\e]133;C\a${PS0:0:$((__cli_manager_ran=1,0))}'
         let default_shell_key = Self::default_shell_key();
         let shell_key = shell.unwrap_or(default_shell_key);
         let mut env_vars = env_vars;
+        let mut history_bash_args = None;
+        if ssh_launch.is_none() && super::shell_history::enabled(env_vars.as_ref()) {
+            let vars = env_vars.get_or_insert_with(HashMap::new);
+            let setup = match shell_key {
+                "zsh" if !cfg!(target_os = "windows") => super::shell_history::prepare_zsh(vars),
+                "bash" if !cfg!(target_os = "windows") => {
+                    super::shell_history::prepare_bash(vars, cfg!(target_os = "macos"))
+                        .map(|args| { history_bash_args = Some(args); })
+                }
+                _ => Ok(()),
+            };
+            if let Err(error) = setup {
+                warn!("shell command history setup failed: {error}");
+            }
+        }
         Self::apply_terminal_capabilities(
             env_vars.get_or_insert_with(HashMap::new),
             cfg!(target_os = "windows"),
@@ -621,7 +646,7 @@ PS0='\e]133;C\a${PS0:0:$((__cli_manager_ran=1,0))}'
                 .or_insert_with(|| "1".to_string());
         }
         let mut ssh_env = HashMap::new();
-        let (exe, args) = if let Some(ssh_launch) = ssh_launch {
+        let (exe, mut args) = if let Some(ssh_launch) = ssh_launch {
             let launch = ssh_launch.build_process_launch().map_err(|e| {
                 error!(
                     "pty resolve ssh launch failed: id={}, error={}",
@@ -640,6 +665,9 @@ PS0='\e]133;C\a${PS0:0:$((__cli_manager_ran=1,0))}'
                 e
             })?
         };
+        if let Some(history_args) = history_bash_args {
+            args = history_args;
+        }
         let launch_shell_key = if ssh_launch.is_some() {
             "ssh"
         } else {

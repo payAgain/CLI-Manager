@@ -384,7 +384,6 @@ export function HookSettingsPage() {
   const [codexWorking, setCodexWorking] = useState(false);
   const [piWorking, setPiWorking] = useState(false);
   const [grokWorking, setGrokWorking] = useState(false);
-  const hookPopupNotificationsEnabled = useSettingsStore((s) => s.hookPopupNotificationsEnabled);
   const hookPopupAutoCloseEnabled = useSettingsStore((s) => s.hookPopupAutoCloseEnabled);
   const hookPopupAutoCloseSeconds = useSettingsStore((s) => s.hookPopupAutoCloseSeconds);
   const hookSubagentSplitViewEnabled = useSettingsStore((s) => s.hookSubagentSplitViewEnabled);
@@ -920,21 +919,15 @@ export function HookSettingsPage() {
         </Button>
       </Group>
       <CollapsibleHookSection
-        title={text("Hook 通知弹框", "Hook Toast Notifications")}
-        description={text("控制 Claude Code、Codex CLI 和 Pi Agent Hook 事件的右上角弹框；终端标签小圆点不受这里的弹框开关影响。", "Controls top-right toast cards for Claude Code, Codex CLI, and Pi Agent Hook events. Terminal tab dots are not affected.")}
+        title={t("settings.hooks.taskAlerts.title")}
+        description={t("settings.hooks.taskAlerts.description")}
         open={hookSettingsSectionsExpanded.toast}
         onToggle={() => toggleHookSection("toast")}
       >
         <Stack gap="md">
           <SettingsSwitchRow
-            title={text("通知弹框", "Toast Notifications")}
-            description={text("关闭后不再弹出 Hook 通知卡片，只更新标签栏小圆点颜色。", "When disabled, Hook notification cards stop popping up; only tab dot color updates.")}
-            checked={hookPopupNotificationsEnabled}
-            onCheckedChange={(checked) => void updateSetting("hookPopupNotificationsEnabled", checked)}
-          />
-          <SettingsSwitchRow
-            title={text("自动关闭", "Auto-close")}
-            description={text("开启后 Hook 通知和子任务转录窗格会在指定时间后自动关闭。", "When enabled, Hook notifications and sub-agent transcript panes close after the configured delay.")}
+            title={t("settings.hooks.transcriptClose.title")}
+            description={t("settings.hooks.transcriptClose.description")}
             checked={hookPopupAutoCloseEnabled}
             onCheckedChange={(checked) => void updateSetting("hookPopupAutoCloseEnabled", checked)}
           />
@@ -948,10 +941,10 @@ export function HookSettingsPage() {
             <Group justify="space-between" align="center" gap="md">
               <Box>
                 <Text size="sm" fw={500} c="var(--on-surface)">
-                  {text("默认关闭时间", "Default Close Delay")}
+                  {t("settings.hooks.transcriptClose.delay")}
                 </Text>
                 <Text mt={4} size="xs" c="var(--text-muted)">
-                  {text("单位：秒，默认 60 秒；同时用于 Hook 通知和子任务转录窗格。", "Seconds. Default is 60. Applies to Hook notifications and sub-agent transcript panes.")}
+                  {t("settings.hooks.transcriptClose.delayDescription")}
                 </Text>
               </Box>
               <Group gap="xs">
@@ -971,7 +964,7 @@ export function HookSettingsPage() {
                 }}
                 w={96}
                 size="xs"
-                aria-label={text("Hook 通知和子任务转录默认关闭时间", "Hook notification and sub-agent transcript default close delay")}
+                aria-label={t("settings.hooks.transcriptClose.delay")}
               />
                 <Text size="xs" c="var(--on-surface-variant)">
                   {text("秒", "sec")}

@@ -1,93 +1,11 @@
 import { create } from "zustand";
 import { getDb } from "../lib/db";
+import { normalizeHistoryCommand } from "../lib/commandHistory";
 import type { CommandHistoryEntry } from "../lib/types";
 
 const MAX_HISTORY = 1000;
 const CLEANUP_INTERVAL = 50;
 let addCounter = 0;
-
-const COMMON_COMMAND_ROOTS = new Set([
-  "cd",
-  "clear",
-  "cls",
-  "cmd",
-  "copy",
-  "cp",
-  "cargo",
-  "cat",
-  "choco",
-  "claude",
-  "codex",
-  "code",
-  "del",
-  "deno",
-  "dir",
-  "docker",
-  "docker-compose",
-  "dotnet",
-  "echo",
-  "gemini",
-  "git",
-  "go",
-  "grep",
-  "kubectl",
-  "ll",
-  "ls",
-  "make",
-  "mkdir",
-  "move",
-  "mv",
-  "node",
-  "npm",
-  "npx",
-  "pnpm",
-  "poetry",
-  "powershell",
-  "pwsh",
-  "pip",
-  "pipx",
-  "python",
-  "py",
-  "rm",
-  "rmdir",
-  "rustc",
-  "scoop",
-  "ssh",
-  "tauri",
-  "tar",
-  "touch",
-  "type",
-  "uv",
-  "vim",
-  "where",
-  "winget",
-  "yarn",
-]);
-
-const NATURAL_LANGUAGE_STARTERS = new Set([
-  "add",
-  "can",
-  "could",
-  "create",
-  "explain",
-  "fix",
-  "help",
-  "how",
-  "implement",
-  "please",
-  "should",
-  "what",
-  "when",
-  "where",
-  "why",
-  "write",
-]);
-
-const NON_COMMAND_SCRIPT_PATTERN = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}\p{Script=Thai}\p{Script=Arabic}\p{Script=Devanagari}\p{Script=Cyrillic}\p{Script=Hebrew}]/u;
-const PATH_OR_INVOCATION_PATTERN = /^(?:\.{1,2}[\\/]|~[\\/]|[a-z]:[\\/]|&\s*["']?|\.\s+)/iu;
-const SHELL_OPERATOR_PATTERN = /(?:&&|\|\||[|<>;`])/u;
-const ENV_ASSIGNMENT_PATTERN = /^[a-z_][\w.-]*=/iu;
-const SLASH_COMMAND_PATTERN = /^\/[a-z][\w-]*(?:\s|$)/iu;
 
 export interface CommandHistoryStorageStats {
   commandCount: number;
@@ -96,42 +14,14 @@ export interface CommandHistoryStorageStats {
 
 interface CommandHistoryStore {
   entries: CommandHistoryEntry[];
+  revision: number;
   searchQuery: string;
   setSearchQuery: (q: string) => void;
-  addCommand: (projectId: string | null, command: string) => Promise<void>;
+  addCommand: (projectId: string | null, command: string, eventId?: string) => Promise<void>;
   getRecent: (projectId?: string | null, limit?: number) => Promise<CommandHistoryEntry[]>;
   getStorageStats: () => Promise<CommandHistoryStorageStats>;
   fetchAll: () => Promise<void>;
-  cleanup: () => Promise<void>;
-}
-
-function commandRoot(command: string): string {
-  const first = command.trim().match(/^(?:&\s*)?(?:"([^"]+)"|'([^']+)'|(\S+))/u);
-  const token = (first?.[1] ?? first?.[2] ?? first?.[3] ?? "").trim();
-  const basename = token.split(/[\\/]/u).pop() ?? token;
-  return basename.replace(/\.(?:cmd|exe|ps1|bat)$/iu, "").toLowerCase();
-}
-
-function isLikelyShellCommand(command: string): boolean {
-  const trimmed = command.trim();
-  if (!trimmed || trimmed.includes("\n") || trimmed.includes("\r")) return false;
-  if (SLASH_COMMAND_PATTERN.test(trimmed)) return true;
-  if (PATH_OR_INVOCATION_PATTERN.test(trimmed)) return true;
-  if (SHELL_OPERATOR_PATTERN.test(trimmed)) return true;
-  if (ENV_ASSIGNMENT_PATTERN.test(trimmed)) return true;
-
-  const root = commandRoot(trimmed);
-  if (!root) return false;
-  if (COMMON_COMMAND_ROOTS.has(root)) return true;
-  if (NATURAL_LANGUAGE_STARTERS.has(root)) return false;
-
-  const firstToken = trimmed.split(/\s+/u)[0] ?? "";
-  if (NON_COMMAND_SCRIPT_PATTERN.test(firstToken)) return false;
-  if (/[?？。！]/u.test(trimmed)) return false;
-
-  const words = trimmed.split(/\s+/u);
-  const allPlainWords = words.every((word) => /^[a-z]+$/iu.test(word));
-  return !(words.length >= 3 && allPlainWords);
+  cleanup: (projectId?: string) => Promise<void>;
 }
 
 function normalizeCount(value: unknown): number {
@@ -142,30 +32,23 @@ function normalizeCount(value: unknown): number {
 export const useCommandHistoryStore = create<CommandHistoryStore>((set, get) => ({
   entries: [],
   searchQuery: "",
+  revision: 0,
 
   setSearchQuery: (q) => set({ searchQuery: q }),
 
-  addCommand: async (projectId, command) => {
-    const trimmed = command.replace(/\r?\n$/, "").trim();
+  addCommand: async (projectId, command, eventId) => {
+    const trimmed = normalizeHistoryCommand(command);
     if (!trimmed) return;
-    if (!isLikelyShellCommand(trimmed)) return;
 
     const db = await getDb();
-    // Deduplicate against the persisted latest command for this project.
-    // The in-memory list may be filtered or truncated, so it is not a safe source of truth here.
-    const last = await db.select<Pick<CommandHistoryEntry, "command">[]>(
-      "SELECT command FROM command_history WHERE project_id IS $1 ORDER BY executed_at DESC LIMIT 1",
-      [projectId]
-    );
-    if (last.length > 0 && last[0].command === trimmed) return;
-
-    const existing = get().entries;
-    const id = crypto.randomUUID();
+    const id = eventId ?? crypto.randomUUID();
     const executedAt = Date.now().toString();
-    await db.execute(
-      "INSERT INTO command_history (id, project_id, command, executed_at) VALUES ($1, $2, $3, $4)",
+    const result = await db.execute(
+      "INSERT OR IGNORE INTO command_history (id, project_id, command, executed_at) VALUES ($1, $2, $3, $4)",
       [id, projectId, trimmed, executedAt]
     );
+
+    if (result.rowsAffected === 0) return;
 
     // Increment local cache without re-querying the DB
     const newEntry: CommandHistoryEntry = {
@@ -176,7 +59,9 @@ export const useCommandHistoryStore = create<CommandHistoryStore>((set, get) => 
     };
     const query = get().searchQuery.trim().toLowerCase();
     if (!query || trimmed.toLowerCase().includes(query)) {
-      set({ entries: [newEntry, ...existing].slice(0, 100) });
+      set((state) => ({ entries: [newEntry, ...state.entries.filter((entry) => entry.id !== id)].slice(0, 100), revision: state.revision + 1 }));
+    } else {
+      set((state) => ({ revision: state.revision + 1 }));
     }
 
     // Periodic FIFO cleanup; running it every command is wasteful
@@ -185,17 +70,12 @@ export const useCommandHistoryStore = create<CommandHistoryStore>((set, get) => 
       addCounter = 0;
       void (async () => {
         try {
-          const countResult = await db.select<[{ cnt: number }]>(
-            "SELECT COUNT(*) as cnt FROM command_history"
+          await db.execute(
+            `DELETE FROM command_history WHERE id IN (
+              SELECT id FROM command_history ORDER BY executed_at DESC, rowid DESC LIMIT -1 OFFSET $1
+            )`,
+            [MAX_HISTORY]
           );
-          if (countResult[0]?.cnt > MAX_HISTORY) {
-            await db.execute(
-              `DELETE FROM command_history WHERE id IN (
-                SELECT id FROM command_history ORDER BY executed_at ASC LIMIT $1
-              )`,
-              [countResult[0].cnt - MAX_HISTORY]
-            );
-          }
         } catch {
           // best effort
         }
@@ -207,12 +87,12 @@ export const useCommandHistoryStore = create<CommandHistoryStore>((set, get) => 
     const db = await getDb();
     if (projectId) {
       return db.select<CommandHistoryEntry[]>(
-        "SELECT * FROM command_history WHERE project_id = $1 ORDER BY executed_at DESC LIMIT $2",
+        "SELECT * FROM command_history WHERE project_id = $1 ORDER BY executed_at DESC, rowid DESC LIMIT $2",
         [projectId, limit]
       );
     }
     return db.select<CommandHistoryEntry[]>(
-      "SELECT * FROM command_history ORDER BY executed_at DESC LIMIT $1",
+      "SELECT * FROM command_history ORDER BY executed_at DESC, rowid DESC LIMIT $1",
       [limit]
     );
   },
@@ -243,20 +123,21 @@ export const useCommandHistoryStore = create<CommandHistoryStore>((set, get) => 
     let entries: CommandHistoryEntry[];
     if (query) {
       entries = await db.select<CommandHistoryEntry[]>(
-        "SELECT * FROM command_history WHERE command LIKE $1 ORDER BY executed_at DESC LIMIT 100",
+        "SELECT * FROM command_history WHERE command LIKE $1 ORDER BY executed_at DESC, rowid DESC LIMIT 100",
         [`%${query}%`]
       );
     } else {
       entries = await db.select<CommandHistoryEntry[]>(
-        "SELECT * FROM command_history ORDER BY executed_at DESC LIMIT 100"
+        "SELECT * FROM command_history ORDER BY executed_at DESC, rowid DESC LIMIT 100"
       );
     }
     set({ entries });
   },
 
-  cleanup: async () => {
+  cleanup: async (projectId) => {
     const db = await getDb();
-    await db.execute("DELETE FROM command_history");
-    set({ entries: [] });
+    if (projectId) await db.execute("DELETE FROM command_history WHERE project_id = $1", [projectId]);
+    else await db.execute("DELETE FROM command_history");
+    set((state) => ({ entries: projectId ? state.entries.filter((entry) => entry.project_id !== projectId) : [], revision: state.revision + 1 }));
   },
 }));

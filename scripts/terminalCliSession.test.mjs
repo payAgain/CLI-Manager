@@ -55,6 +55,6 @@ test("Hook 对账持久化快照后，恢复时优先使用明确 ID", () => {
   );
   assert.match(
     terminalStoreSource,
-    /const base = hasValidId \? `codex resume --no-alt-screen \$\{id\}` : "codex resume --no-alt-screen --last";/,
+    /const conversation = resolveTerminalConversationRestore\(ps, restoreProject\);/,
   );
 });

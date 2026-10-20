@@ -19,7 +19,11 @@ export interface AgentDetection {
 export function applyAgentDetection(session: TerminalSession, detection: AgentDetection): TerminalSession {
   if (session.runtimeAgentObservedAtMs != null && detection.updatedAtMs < session.runtimeAgentObservedAtMs) return session;
   const next = detection.agent ? { ...detection.agent, source: "process" as const } : null;
-  if (session.runtimeAgent !== undefined && session.runtimeAgent?.runId === next?.runId
+  const pending = session.pendingConversationResume;
+  const pendingValid = pending && detection.updatedAtMs <= pending.expiresAtMs;
+  const waitingForResume = pendingValid && !next;
+  const matchingResume = pendingValid && next?.tool === pending.tool;
+  if (!pending && session.runtimeAgent !== undefined && session.runtimeAgent?.runId === next?.runId
     && session.runtimeAgent?.source !== "hook") {
     const id = detection.agent?.cliSessionId;
     return id && id !== session.cliSessionId
@@ -34,8 +38,9 @@ export function applyAgentDetection(session: TerminalSession, detection: AgentDe
     ...session,
     runtimeAgent: next,
     runtimeAgentObservedAtMs: detection.updatedAtMs,
+    pendingConversationResume: waitingForResume ? pending : undefined,
     ...(preserveBinding ? {} : {
-      cliSessionId: detection.agent?.cliSessionId ?? undefined,
+      cliSessionId: detection.agent?.cliSessionId ?? (waitingForResume || matchingResume ? pending?.sessionId : undefined),
       cliReasoningEffort: undefined,
       remoteTranscriptRef: undefined,
     }),
@@ -69,6 +74,7 @@ export function applyHookAgentIdentity(
   return {
     ...session,
     runtimeAgent: { tool: payload.source, runId, source: "hook", detectedAtMs: Number.isFinite(timestamp) ? timestamp : Date.now() },
+    pendingConversationResume: undefined,
     cliSessionId: undefined,
     cliReasoningEffort: undefined,
     remoteTranscriptRef: undefined,

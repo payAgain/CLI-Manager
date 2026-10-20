@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { Store } from "@tauri-apps/plugin-store";
 import { invoke } from "@tauri-apps/api/core";
 import { resolveAutoTerminalThemeId } from "../lib/terminalThemes";
+import { migrateDefaultTerminalAppearance } from "../lib/terminalAppearanceMigration";
 import { backgroundImageExists } from "../lib/assetUrl";
 import { defaultShellForOs, getOsPlatform, isWindowsOnlyShellKey } from "../lib/shell";
 import { getCliManagerDataPaths } from "../lib/appPaths";
@@ -324,6 +325,7 @@ export interface Settings {
   systemResourceCardOrder: SystemResourceCardOrderSettings;
   systemResourceMonitoringEnabled: boolean;
   shellRuntimeMonitoringEnabled: boolean;
+  commandHistoryEnabled: boolean;
   windowsConptyCompatibilityFixEnabled: boolean;
   hideCodexRuntimeCursor: boolean;
   terminalSessionRestoreEnabled: boolean;
@@ -404,8 +406,8 @@ interface SettingsStore extends Settings {
 const DEFAULTS: Settings = {
   language: "auto",
   theme: "system",
-  lightThemePalette: "emerald-mist",
-  darkThemePalette: "terminal-green",
+  lightThemePalette: "warm-paper",
+  darkThemePalette: "carbon-black",
   fontSize: TERMINAL_FONT_SIZE_DEFAULT,
   terminalScrollbackCustomEnabled: false,
   terminalScrollbackRows: TERMINAL_SCROLLBACK_ROWS_DEFAULT,
@@ -424,8 +426,8 @@ const DEFAULTS: Settings = {
   collapsedGroupIds: [],
   useExternalTerminal: false,
   debugMode: false,
-  terminalThemeMode: "independent",
-  terminalThemeName: "forestNightDark",
+  terminalThemeMode: "system",
+  terminalThemeName: "auto",
   sidebarDensity: "comfortable",
   sidebarProjectFilterVisible: false,
   viewMode: "standard",
@@ -476,6 +478,7 @@ const DEFAULTS: Settings = {
   systemResourceCardOrder: [...SYSTEM_RESOURCE_CARD_KEYS],
   systemResourceMonitoringEnabled: false,
   shellRuntimeMonitoringEnabled: false,
+  commandHistoryEnabled: true,
   windowsConptyCompatibilityFixEnabled: true,
   hideCodexRuntimeCursor: false,
   terminalSessionRestoreEnabled: true,
@@ -919,6 +922,13 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
     const persistSetting = (key: keyof Settings, value: Settings[keyof Settings]) => {
       pendingStoreWrites.push(s.set(key, value));
     };
+    const appearanceMigration = migrateDefaultTerminalAppearance(Object.fromEntries(rawEntries));
+    if (appearanceMigration) {
+      for (const [key, value] of Object.entries(appearanceMigration)) {
+        pendingStoreWrites.push(s.set(key, value));
+      }
+      Object.assign(entries, appearanceMigration);
+    }
     const osPlatformPromise = getOsPlatform();
 
     const theme = (entries.theme as ThemeMode) ?? DEFAULTS.theme;
@@ -1068,6 +1078,8 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
     const currentDefaultShell = typeof entries.defaultShell === "string" ? entries.defaultShell.trim() : "";
     entries.defaultShell = currentDefaultShell || DEFAULTS.defaultShell;
 
+    entries.commandHistoryEnabled = typeof entries.commandHistoryEnabled === "boolean"
+      ? entries.commandHistoryEnabled : DEFAULTS.commandHistoryEnabled;
     entries.shellRuntimeMonitoringEnabled =
       typeof entries.shellRuntimeMonitoringEnabled === "boolean"
         ? entries.shellRuntimeMonitoringEnabled
