@@ -53,18 +53,11 @@ export function MemoryUsage({ collapsed }: { collapsed: boolean }) {
             const memory = snapshot?.terminals.find((entry) => entry.sessionId === session.id);
             const localOnly = memory?.localOnly || session.environmentType === "ssh" || session.environmentType === "wsl" || session.shell?.toLowerCase().includes("wsl");
             return (
-              <details key={session.id} className="ui-memory-group" open={session.id === activeId}>
-                <summary><ChevronRight size={12} className="ui-memory-chevron" /><Terminal size={14} /><span className="ui-memory-name" title={session.title}>{session.title}</span>{session.id === activeId && <span className="ui-memory-current">{t("memory.current")}</span>}<span className="ui-memory-value">{formatMemory(memory?.totalBytes)}</span></summary>
-                <div className="ui-memory-children">
-                  {memory?.totalBytes != null ? <>
-                    <div className="ui-memory-row"><span>{t("memory.shell")}</span><span className="ui-memory-value">{formatMemory(memory.shellBytes)}</span></div>
-                    {memory.agents.map((agent) => <div className="ui-memory-row" key={agent.pid} title={`PID ${agent.pid}`}><span>{agent.name} <small>{t("memory.processes", { count: agent.processCount })}</small></span><span className="ui-memory-value">{formatMemory(agent.memoryBytes)}</span></div>)}
-                    {memory.otherBytes > 0 && <div className="ui-memory-row"><span>{t("memory.otherChildren")}</span><span className="ui-memory-value">{formatMemory(memory.otherBytes)}</span></div>}
-                    {memory.agents.length === 0 && !localOnly && <p className="ui-memory-note">{t("memory.noAgents")}</p>}
-                  </> : <p className="ui-memory-note">{t("memory.unavailable")}</p>}
-                  {localOnly && <p className="ui-memory-note">{t("memory.remoteNote")}</p>}
-                </div>
-              </details>
+              <div key={session.id} className="ui-memory-tab" data-current={session.id === activeId}>
+                <div className="ui-memory-tab-summary"><Terminal size={14} /><span className="ui-memory-name" title={session.title}>{session.title}</span>{session.id === activeId && <span className="ui-memory-current">{t("memory.current")}</span>}<span className="ui-memory-value">{formatMemory(memory?.totalBytes)}</span></div>
+                {memory?.totalBytes == null && <p className="ui-memory-note">{t("memory.unavailable")}</p>}
+                {localOnly && <p className="ui-memory-note">{t("memory.remoteNote")}</p>}
+              </div>
             );
           })}
           {backgroundBytes > 0 && <div className="ui-memory-row"><span>{t("memory.background")}</span><span className="ui-memory-value">{formatMemory(backgroundBytes)}</span></div>}
