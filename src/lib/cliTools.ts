@@ -140,7 +140,7 @@ export const CLI_TOOL_DESCRIPTORS: readonly CliToolDescriptor[] = [
 
 export const CLI_TOOL_COMMANDS = CLI_TOOL_DESCRIPTORS.map((tool) => tool.command);
 
-const HISTORY_SOURCE_ICON_KEYS: Partial<Record<HistorySourceId, CliToolIconKey>> = {
+const HISTORY_SOURCE_ICON_KEYS: Record<HistorySourceId, CliToolIconKey> = {
   claude: "claude-code",
   codex: "codex",
   gemini: "gemini-cli",

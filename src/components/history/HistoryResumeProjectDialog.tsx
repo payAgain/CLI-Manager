@@ -2,7 +2,8 @@ import { ChevronRight, Folder, Search, Terminal, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import type { Group, Project } from "../../lib/types";
 import { useI18n } from "../../lib/i18n";
-import { VendorIcon, inferVendor } from "../VendorIcon";
+import { resolveCliToolIconKey } from "../../lib/cliTools";
+import { CliToolIcon } from "../CliToolIcon";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../ui/dialog";
 
 interface HistoryResumeProjectDialogProps {
@@ -22,8 +23,8 @@ interface ProjectGroup {
 }
 
 function ProjectIcon({ project }: { project: Project }) {
-  const vendor = inferVendor(project.cli_tool);
-  return vendor ? <VendorIcon vendor={vendor} size={15} /> : <Terminal size={15} strokeWidth={1.5} />;
+  const icon = resolveCliToolIconKey(project.cli_tool);
+  return icon ? <CliToolIcon icon={icon} size={15} /> : <Terminal size={15} strokeWidth={1.5} />;
 }
 
 export function HistoryResumeProjectDialog({ open, projects, groups, onUseNewWindow, useOriginalRemoteLocation = false, onSelect, onClose }: HistoryResumeProjectDialogProps) {

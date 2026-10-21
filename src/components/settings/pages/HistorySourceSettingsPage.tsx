@@ -10,7 +10,7 @@ import {
 } from "@mantine/core";
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { ChevronRight, Database, FolderOpen, RefreshCw } from "lucide-react";
+import { ChevronRight, FolderOpen, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 import {
   HISTORY_SOURCE_DESCRIPTORS,
@@ -21,7 +21,8 @@ import {
 } from "../../../lib/historySources";
 import { getLanguageLocale, pickByLanguage, useI18n } from "../../../lib/i18n";
 import { useHistorySourceSettingsStore } from "../../../stores/historySourceSettingsStore";
-import { VendorIcon, inferVendor } from "../../VendorIcon";
+import { resolveHistorySourceIconKey } from "../../../lib/cliTools";
+import { CliToolIcon } from "../../CliToolIcon";
 import { useAppConfirm } from "../../ui/useAppConfirm";
 
 function sourcePath(descriptor: HistorySourceDescriptor, locations: Record<string, string> | undefined): string {
@@ -436,6 +437,7 @@ export function HistorySourceSettingsPage() {
             {HISTORY_SOURCE_DESCRIPTORS.map((descriptor) => {
               const current = settings[descriptor.id];
               const slot = descriptor.locations[0];
+              const icon = resolveHistorySourceIconKey(descriptor.id);
               const draft = drafts[descriptor.id] ?? "";
               const savedPath = sourcePath(descriptor, current?.activeInstance?.locations);
               const expanded = expandedSourceId === descriptor.id;
@@ -457,7 +459,7 @@ export function HistorySourceSettingsPage() {
                       onClick={() => setExpandedSourceId(expanded ? null : descriptor.id)}
                     >
                       <span className="ui-history-source-icon" aria-hidden="true">
-                        <VendorIcon vendor={inferVendor(descriptor.id)} fallback={slot?.kind === "database" ? Database : FolderOpen} size={20} />
+                        {icon ? <CliToolIcon icon={icon} size={20} /> : <FolderOpen size={20} />}
                       </span>
                       <span className="ui-history-source-summary">
                         <span className="ui-history-source-name">{t(descriptor.labelKey)}</span>
