@@ -176,13 +176,15 @@ export function BackgroundTasksPanel({ tasks, onRefresh, showText, popoverStyle 
   };
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover open={open} onOpenChange={(nextOpen) => {
+      setOpen(nextOpen);
+      if (nextOpen) void onRefresh();
+    }}>
       <PopoverTrigger asChild>
         <button
           className="ui-focus-ring ui-icon-action ui-action-background-tasks"
           data-active={open ? "true" : "false"}
           data-has-tasks={hasAnyTask ? "true" : "false"}
-          disabled={!hasAnyTask}
           aria-label={t("terminal.backgroundTasks.title")}
         >
           <Layers size={14} strokeWidth={1.8} />
