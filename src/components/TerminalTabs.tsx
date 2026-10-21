@@ -586,12 +586,20 @@ function SortableTab({
   menuStyle,
 }: SortableTabProps) {
   const { t } = useI18n();
+  const subagentStatus = useTerminalStore((state) => {
+    if (sessionKind !== "subagent-transcript") return undefined;
+    const transcript = state.subagentTranscripts[id];
+    return transcript?.status ?? (transcript?.ended ? "completed" : undefined);
+  });
+  const displayNotification: TabNotificationState = subagentStatus === undefined ? notification
+    : subagentStatus === "running" ? "running" : subagentStatus === "completed" ? "done"
+      : subagentStatus === "failed" ? "failed" : subagentStatus === "interrupted" ? "attention" : "none";
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id,
     data: {
       type: "session",
       paneId,
-      overlay: { title, notification, vendor, cliToolIcon },
+      overlay: { title, notification: displayNotification, vendor, cliToolIcon },
     },
     transition: DND_SORTABLE_TRANSITION,
   });
@@ -600,7 +608,7 @@ function SortableTab({
   const [editValue, setEditValue] = useState(title);
   const editInputRef = useRef<HTMLInputElement | null>(null);
   const skipNextBlurSubmitRef = useRef(false);
-  const statusLabel = t(TAB_NOTIFICATION_LABELS[notification]);
+  const statusLabel = subagentStatus ? t(`subagentTranscript.status.${subagentStatus}`) : t(TAB_NOTIFICATION_LABELS[notification]);
   const tabMinWidthClass = "min-w-[92px]";
   const [worktreePopoverOpen, setWorktreePopoverOpen] = useState(false);
   const {
@@ -675,12 +683,13 @@ function SortableTab({
         >
           <span
             className="ui-tab-runtime-dot w-2 h-2 rounded-full shrink-0"
-            data-pulsing={PULSING_TAB_STATES.has(notification) ? "true" : "false"}
-            style={{ backgroundColor: TAB_NOTIFICATION_COLORS[notification], color: TAB_NOTIFICATION_COLORS[notification] }}
+            data-pulsing={subagentStatus === "interrupted" ? "false" : PULSING_TAB_STATES.has(displayNotification) ? "true" : "false"}
+            style={{ backgroundColor: TAB_NOTIFICATION_COLORS[displayNotification], color: TAB_NOTIFICATION_COLORS[displayNotification] }}
             role="status"
             aria-label={statusLabel}
+            title={statusLabel}
           />
-          {vendor ? (
+          {sessionKind === "subagent-transcript" ? <GitBranch size={13} className="shrink-0 text-[var(--text-muted)]" aria-hidden="true" /> : vendor ? (
             <span className="ui-terminal-tab-vendor inline-flex shrink-0 items-center" aria-hidden="true">
               <VendorIcon vendor={vendor} size={14} />
             </span>

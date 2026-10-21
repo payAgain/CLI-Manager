@@ -378,9 +378,14 @@ export function SubagentTranscriptView({ sessionId, title, isVisible }: Props) {
             {t(`subagentTranscript.mode.${mode}`)}
           </button>)}
         </div>
-        {parentId && <button className="subagent-transcript-action" type="button"
-          aria-label={t("subagentTranscript.backToParent")} title={t("subagentTranscript.backToParent")}
-          onClick={() => useTerminalStore.getState().setActive(parentId)}>
+        {parentId && parentTitle !== undefined && <button className="subagent-transcript-action" type="button"
+          aria-label={t(ended ? "subagentTranscript.collapseToParent" : "subagentTranscript.backToParent")}
+          title={t(ended ? "subagentTranscript.collapseToParent" : "subagentTranscript.backToParent")}
+          onClick={() => {
+            const store = useTerminalStore.getState();
+            if (ended) store.collapseSubagentTranscript(sessionId, true);
+            else store.setActive(parentId);
+          }}>
           <ArrowUpLeft size={14} aria-hidden="true" />
         </button>}
         <button className="subagent-transcript-action" type="button"
@@ -432,7 +437,7 @@ export function SubagentTranscriptView({ sessionId, title, isVisible }: Props) {
         </div>
       </div>
       <footer className="subagent-transcript-footer">
-        <span>{t("subagentTranscript.executionHint")}</span>
+        <span>{t(ended ? "subagentTranscript.resultRetained" : "subagentTranscript.executionHint")}</span>
         {messages.length > 0 && !hasReasoning && <span title={t("subagentTranscript.reasoningUnavailableHint")}>
           {t("subagentTranscript.reasoningUnavailable")}
         </span>}

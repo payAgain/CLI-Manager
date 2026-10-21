@@ -164,20 +164,40 @@ test("summary groups preserve messages, thinking, failures and pending calls wit
 });
 
 // Execute the real store actions with isolated state, IPC-free timers and settings.
+const moduleUrl = (code) => `data:text/javascript;base64,${Buffer.from(code).toString("base64")}`;
+const paneTreeUrl = moduleUrl(ts.transpileModule(readFileSync(new URL("../src/stores/terminalPaneTree.ts", import.meta.url), "utf8"), {
+  compilerOptions: { module: ts.ModuleKind.ES2022, target: ts.ScriptTarget.ES2022 },
+}).outputText);
+const paneTree = await import(paneTreeUrl);
+const workspanCode = ts.transpileModule(readFileSync(new URL("../src/stores/terminalWorkspan.ts", import.meta.url), "utf8"), {
+  compilerOptions: { module: ts.ModuleKind.ES2022, target: ts.ScriptTarget.ES2022 },
+}).outputText.replace('from "./terminalPaneTree"', `from "${paneTreeUrl}"`);
+const workspan = await import(moduleUrl(workspanCode));
 const storeSource = readFileSync(new URL("../src/stores/terminalStore.ts", import.meta.url), "utf8");
 const ast = ts.createSourceFile("terminalStore.ts", storeSource, ts.ScriptTarget.Latest, true);
 const actions = {};
+let mirrorDeclaration;
 function visit(node) {
   if (ts.isPropertyAssignment(node) && ts.isIdentifier(node.name)
-    && ["appendSubagentTranscript", "finishSubagentTranscript"].includes(node.name.text)) {
+    && ["appendSubagentTranscript", "finishSubagentTranscript", "collapseSubagentTranscript", "setActive"].includes(node.name.text)) {
     actions[node.name.text] = node.initializer.getText(ast);
   }
+  if (ts.isFunctionDeclaration(node) && node.name?.text === "buildWorkspanMirror") mirrorDeclaration = node.getText(ast);
   ts.forEachChild(node, visit);
 }
 visit(ast);
 function harness(autoClose = true) {
   const timers = new Map();
   const settings = { hookPopupAutoCloseEnabled: autoClose, hookPopupAutoCloseSeconds: 10 };
+  const owner = {
+    id: "workspan", customTitle: null,
+    paneTree: {
+      type: "split", id: "root", direction: "horizontal", ratio: 0.5,
+      first: { type: "leaf", id: "parent-pane", sessionIds: ["parent"], activeSessionId: "parent" },
+      second: { type: "leaf", id: "child-pane", sessionIds: ["pane"], activeSessionId: "pane" },
+    },
+    activePaneId: "parent-pane", activeSessionId: "parent",
+  };
   const state = {
     sessions: [
       { id: "parent", title: "Parent", kind: "pty" },
@@ -185,6 +205,8 @@ function harness(autoClose = true) {
     ],
     subagentTranscripts: { pane: { content: "", ended: false, status: "running", resetSeq: 0, source: { kind: "child-jsonl" } } },
     closed: [], closeSession(id) { state.closed.push(id); },
+    workspans: [owner], activeWorkspanId: owner.id, paneTree: owner.paneTree,
+    activePaneId: owner.activePaneId, activeSessionId: owner.activeSessionId,
   };
   let timerId = 0;
   const environment = {
@@ -192,18 +214,25 @@ function harness(autoClose = true) {
     set: update => Object.assign(state, typeof update === "function" ? update(state) : update),
     readSubagentTranscriptLifecycle,
     trimOptional: value => typeof value === "string" ? value.trim() || null : null,
-    subagentCloseTimers: new Map(), subagentDiscoveryTimers: new Map(),
+    subagentFoldTimers: new Map(), subagentDiscoveryTimers: new Map(),
     setTimeout: callback => { timers.set(++timerId, callback); return timerId; },
     clearTimeout: id => timers.delete(id), clearInterval() {},
     findSubagentSessionId: (sessions, payload) => sessions.find(item => item.subagent?.parentSessionId === payload.tabId && item.subagent?.agentId === payload.agentId)?.id,
     useSettingsStore: { getState: () => settings }, useTerminalStore: { getState: () => state },
     stopSubagentTranscriptRetry() {}, logInfo() {}, logWarn() {}, debugConsoleWarn() {},
+    findWorkspanBySession: workspan.findWorkspanBySession,
+    updateTerminalWorkspan: workspan.updateTerminalWorkspan,
+    syncTerminalWorkspanLayout: workspan.syncTerminalWorkspanLayout,
+    findPaneLeafBySession: paneTree.findPaneLeafBySession,
+    moveSessionToPaneTree: paneTree.moveSessionToPane,
+    setPaneActiveSession: paneTree.setPaneActiveSession,
+    scheduleSaveActiveId() {}, persistWorkspanState() {},
     SUBAGENT_TRANSCRIPT_MAX_CHARS: 4 * 1024 * 1024,
   };
-  const code = ts.transpileModule(Object.entries(actions).map(([name, value]) => `const ${name} = ${value};`).join("\n"), {
+  const code = ts.transpileModule([mirrorDeclaration, ...Object.entries(actions).map(([name, value]) => `const ${name} = ${value};`)].join("\n"), {
     compilerOptions: { module: ts.ModuleKind.None, target: ts.ScriptTarget.ES2022 },
   }).outputText;
-  const resolved = new Function(...Object.keys(environment), `${code}\nreturn {appendSubagentTranscript, finishSubagentTranscript};`)(...Object.values(environment));
+  const resolved = new Function(...Object.keys(environment), `${code}\nreturn {appendSubagentTranscript, finishSubagentTranscript, collapseSubagentTranscript, setActive};`)(...Object.values(environment));
   Object.assign(state, resolved);
   return { state, settings, timers };
 }
@@ -220,7 +249,7 @@ test("store updates run independently of visibility and preserves an interrupted
   assert.equal(state.sessions[0].title, "Parent");
 });
 
-test("a new child turn cancels its previous auto-close and keeps user titles", () => {
+test("a new child turn cancels its previous auto-fold and keeps user titles", () => {
   const { state, timers } = harness();
   state.sessions[1].title = "My label";
   state.appendSubagentTranscript("pane", lines(...fork(), event("task_complete", { turn_id: "child-turn" })), true);
@@ -241,11 +270,82 @@ test("foreign-window append keys never create transcripts", () => {
   assert.deepEqual(Object.keys(state.subagentTranscripts), ["pane"]);
 });
 
-test("disabling auto-close after completion preserves the result", () => {
+test("disabling auto-fold after completion preserves the result and split", () => {
   const { state, timers, settings } = harness();
   state.appendSubagentTranscript("pane", lines(...fork(), event("task_complete", { turn_id: "child-turn" })), true);
   assert.equal(timers.size, 1);
   settings.hookPopupAutoCloseEnabled = false;
   for (const callback of timers.values()) callback();
   assert.deepEqual(state.closed, []);
+  assert.equal(paneTree.collectPaneLeaves(state.paneTree).length, 2);
+});
+
+test("completion folds the split into a result tab without deleting its transcript, title or identity", () => {
+  const { state, timers } = harness();
+  state.appendSubagentTranscript("pane", lines(...fork(), event("task_complete", { turn_id: "child-turn" })), true);
+  const transcript = state.subagentTranscripts.pane;
+  const child = state.sessions[1];
+  for (const callback of timers.values()) callback();
+  assert.equal(paneTree.collectPaneLeaves(state.paneTree).length, 1);
+  assert.deepEqual(state.paneTree.sessionIds, ["parent", "pane"]);
+  assert.equal(state.paneTree.activeSessionId, "parent");
+  assert.equal(state.activeSessionId, "parent");
+  assert.equal(state.subagentTranscripts.pane, transcript);
+  assert.equal(state.sessions[1], child);
+  assert.deepEqual(state.closed, []);
+  state.setActive("pane");
+  assert.equal(state.activeSessionId, "pane");
+  assert.equal(state.paneTree.activeSessionId, "pane");
+  assert.equal(parseSubagentTranscript(state.subagentTranscripts.pane.content, 1, undefined, "child").messages.at(-1).text, "Own answer");
+});
+
+test("a result being read stays in place, while manual folding activates its parent", () => {
+  const { state, timers } = harness();
+  state.setActive("pane");
+  state.appendSubagentTranscript("pane", lines(...fork(), event("turn_aborted", { turn_id: "child-turn" })), true);
+  for (const callback of timers.values()) callback();
+  assert.equal(paneTree.collectPaneLeaves(state.paneTree).length, 2);
+  assert.equal(state.activeSessionId, "pane");
+  state.collapseSubagentTranscript("pane", true);
+  assert.equal(paneTree.collectPaneLeaves(state.paneTree).length, 1);
+  assert.equal(state.activeSessionId, "parent");
+  assert.equal(state.subagentTranscripts.pane.status, "interrupted");
+  assert.deepEqual(state.closed, []);
+});
+
+test("folding a hidden Workspan keeps the visible Workspan and its terminal focused", () => {
+  const { state, timers } = harness();
+  const visible = workspan.createTerminalWorkspan("visible", "visible-pane", "visible-terminal");
+  state.workspans.push(visible);
+  state.activeWorkspanId = visible.id;
+  state.paneTree = visible.paneTree;
+  state.activeSessionId = visible.activeSessionId;
+  state.activePaneId = visible.activePaneId;
+  state.appendSubagentTranscript("pane", lines(...fork(), event("task_failed", { turn_id: "child-turn" })), true);
+  for (const callback of timers.values()) callback();
+  assert.equal(state.activeWorkspanId, "visible");
+  assert.equal(state.activeSessionId, "visible-terminal");
+  assert.equal(state.paneTree, visible.paneTree);
+  assert.deepEqual(state.workspans[0].paneTree.sessionIds, ["parent", "pane"]);
+  assert.equal(state.subagentTranscripts.pane.status, "failed");
+  assert.deepEqual(state.closed, []);
+});
+
+test("missing or detached parents keep results in their original pane, and running tasks never fold", () => {
+  for (const scenario of ["running", "missing", "detached"]) {
+    const { state } = harness();
+    if (scenario !== "running") state.subagentTranscripts.pane.ended = true;
+    if (scenario === "missing") state.sessions[1].subagent.parentSessionId = "closed-parent";
+    if (scenario === "detached") {
+      state.workspans = [
+        workspan.createTerminalWorkspan("parent", "parent-pane", "parent"),
+        workspan.createTerminalWorkspan("child", "child-pane", "pane"),
+      ];
+    }
+    const before = state.workspans;
+    state.collapseSubagentTranscript("pane");
+    assert.equal(state.workspans, before, scenario);
+    assert.ok(state.subagentTranscripts.pane, scenario);
+    assert.deepEqual(state.closed, [], scenario);
+  }
 });

@@ -327,8 +327,10 @@ interface TerminalStore {
   showBackgroundForSession: (sessionId: string) => void;
   /** 收到 CLI SubagentStart：在发起 Tab 所在 pane 分屏出只读转录面板并开始 tail。 */
   openSubagentTranscript: (payload: CliHookPayload) => Promise<void>;
-  /** 收到 CLI SubagentStop：标记完成并延迟关闭对应子 Agent 转录面板。 */
+  /** 收到 CLI SubagentStop：标记完成，并按设置收起分屏但保留结果。 */
   finishSubagentTranscript: (payload: CliHookPayload, status?: SubagentTranscriptStatus) => void;
+  /** 收起已完成的转录分屏，保留会话、输出和订阅供重新查看。 */
+  collapseSubagentTranscript: (sessionId: string, activateParent?: boolean) => void;
   /** tail 增量推送：追加（reset=true 时替换）某转录面板内容。 */
   appendSubagentTranscript: (key: string, content: string, reset: boolean) => void;
 }
@@ -420,7 +422,7 @@ let saveActiveIdTimer: ReturnType<typeof setTimeout> | null = null;
 let paneIdSeq = 0;
 let workspanIdSeq = 0;
 let subagentSeq = 0;
-const subagentCloseTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const subagentFoldTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const subagentDiscoveryTimers = new Map<string, ReturnType<typeof setInterval>>();
 const subagentTranscriptRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const subagentTranscriptRetryDiagnostics = new Map<string, {
@@ -1674,10 +1676,10 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     const closingSession = state.sessions.find((s) => s.id === id);
     const isTranscript = closingSession?.kind === "subagent-transcript";
     const isFileEditor = closingSession?.kind === "file-editor";
-    const closeTimer = subagentCloseTimers.get(id);
+    const closeTimer = subagentFoldTimers.get(id);
     if (closeTimer) {
       clearTimeout(closeTimer);
-      subagentCloseTimers.delete(id);
+      subagentFoldTimers.delete(id);
     }
     stopSubagentTranscriptRetry(id, "session_closed");
 
@@ -3352,9 +3354,9 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
         : undefined;
       const restarting = payload.event === "SubagentStart" || payload.event === "SessionStart" || payload.event === "UserPromptSubmit";
       if (restarting) {
-        const timer = subagentCloseTimers.get(pseudoId);
+        const timer = subagentFoldTimers.get(pseudoId);
         if (timer) clearTimeout(timer);
-        subagentCloseTimers.delete(pseudoId);
+        subagentFoldTimers.delete(pseudoId);
       }
 
       set((state) => ({
@@ -3525,20 +3527,51 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
       };
     });
 
-    const existingTimer = subagentCloseTimers.get(sessionId);
+    const existingTimer = subagentFoldTimers.get(sessionId);
     if (existingTimer) clearTimeout(existingTimer);
     const settings = useSettingsStore.getState();
     if (!settings.hookPopupAutoCloseEnabled) return;
-    const closeDelayMs = settings.hookPopupAutoCloseSeconds * 1000;
-    logInfo("[subagent_transcript] schedule transcript close", { sessionId, closeDelayMs, sourceKind: currentTranscript?.source.kind });
+    const foldDelayMs = settings.hookPopupAutoCloseSeconds * 1000;
+    logInfo("[subagent_transcript] schedule transcript fold", { sessionId, foldDelayMs, sourceKind: currentTranscript?.source.kind });
     const timer = setTimeout(() => {
-      subagentCloseTimers.delete(sessionId);
+      subagentFoldTimers.delete(sessionId);
       const store = useTerminalStore.getState();
       if (!useSettingsStore.getState().hookPopupAutoCloseEnabled) return;
       if (!store.sessions.some((session) => session.id === sessionId) || !store.subagentTranscripts[sessionId]?.ended) return;
-      void store.closeSession(sessionId);
-    }, closeDelayMs);
-    subagentCloseTimers.set(sessionId, timer);
+      store.collapseSubagentTranscript(sessionId);
+    }, foldDelayMs);
+    subagentFoldTimers.set(sessionId, timer);
+  },
+
+  collapseSubagentTranscript: (sessionId, activateParent = false) => {
+    const state = get();
+    const session = state.sessions.find((item) => item.id === sessionId);
+    if (session?.kind !== "subagent-transcript" || !session.subagent || !state.subagentTranscripts[sessionId]?.ended) return;
+    // Reading a completed result must never be interrupted by the fold timer.
+    if (!activateParent && state.activeSessionId === sessionId) return;
+    const parentId = session.subagent.parentSessionId;
+    const owner = findWorkspanBySession(state.workspans, sessionId);
+    if (!owner || owner.id !== findWorkspanBySession(state.workspans, parentId)?.id) return;
+    const sourcePane = findPaneLeafBySession(owner.paneTree, sessionId);
+    const parentPane = findPaneLeafBySession(owner.paneTree, parentId);
+    if (!sourcePane || !parentPane) return;
+    if (sourcePane.id === parentPane.id) {
+      if (activateParent) get().setActive(parentId);
+      return;
+    }
+    const result = moveSessionToPaneTree(owner.paneTree, sourcePane.id, parentPane.id, sessionId);
+    const targetActiveId = activateParent ? parentId
+      : owner.activeSessionId === sessionId ? sessionId : parentPane.activeSessionId;
+    const tree = targetActiveId ? setPaneActiveSession(result.tree, targetActiveId).tree : result.tree;
+    const workspans = updateTerminalWorkspan(state.workspans, owner.id, (workspan) => (
+      syncTerminalWorkspanLayout(workspan, tree,
+        activateParent ? parentPane.id : workspan.activePaneId,
+        activateParent ? parentId : workspan.activeSessionId)
+    ));
+    const activeWorkspanId = activateParent ? owner.id : state.activeWorkspanId;
+    set(buildWorkspanMirror(workspans, activeWorkspanId));
+    if (activateParent) scheduleSaveActiveId(parentId);
+    persistWorkspanState(workspans, activeWorkspanId, state.sessions);
   },
 
   appendSubagentTranscript: (key, content, reset) => {
@@ -3548,9 +3581,9 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     const lifecycle = readSubagentTranscriptLifecycle(content, reset ? undefined : previous.lifecycle, session?.subagent?.agentId);
     const restarting = lifecycle.status === "running" && previous.ended;
     if (restarting) {
-      const timer = subagentCloseTimers.get(key);
+      const timer = subagentFoldTimers.get(key);
       if (timer) clearTimeout(timer);
-      subagentCloseTimers.delete(key);
+      subagentFoldTimers.delete(key);
     }
     const shouldFinish = Boolean(
       session?.kind === "subagent-transcript"
