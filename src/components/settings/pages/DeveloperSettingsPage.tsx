@@ -36,7 +36,7 @@ function SettingSwitchCard({
   ariaLabel,
 }: SettingSwitchCardProps) {
   return (
-    <Card className="border border-border bg-surface-container-lowest" p="sm" radius="lg">
+    <Card className="ui-settings-option-row" radius="sm">
       <Group justify="space-between" align="center" gap="md" wrap="nowrap">
         <Group gap="sm" align="flex-start" wrap="nowrap" style={{ minWidth: 0 }}>
           <Box style={{ color: "var(--primary)", marginTop: 2 }}>{icon}</Box>

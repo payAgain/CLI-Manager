@@ -218,18 +218,17 @@ export function ShortcutSettingsPage({ searchValue }: ShortcutSettingsPageProps)
             return (
               <Card
                 key={action}
-                className={`border ${conflict ? "border-warning/60" : "border-border"}`}
-                p="sm"
-                radius="lg"
+                className="ui-settings-option-row"
+                radius="sm"
                 style={{
                   backgroundColor: conflict
                     ? "color-mix(in srgb, var(--warning) 10%, var(--surface-container-high) 90%)"
-                    : "var(--surface-container-high)",
+                    : undefined,
                 }}
               >
                 <Group justify="space-between" align="center" gap="md" wrap="nowrap">
                   <Box className="min-w-0">
-                    <Text size="sm" fw={500} c="var(--on-surface)">
+                    <Text size="xs" fw={500} c="var(--on-surface)">
                       {t(SHORTCUT_LABELS[action])}
                     </Text>
                     {conflict && (

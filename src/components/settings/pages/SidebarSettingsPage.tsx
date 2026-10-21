@@ -1,3 +1,4 @@
+import { SettingsChoiceItem } from "../SettingsChoiceItem";
 import {
   ActionIcon,
   Badge,
@@ -10,7 +11,6 @@ import {
   Switch,
   Text,
   Tooltip,
-  UnstyledButton,
 } from "@mantine/core";
 import { DndContext, PointerSensor, closestCenter, useSensor, useSensors, type DragEndEvent } from "@dnd-kit/core";
 import { SortableContext, arrayMove, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
@@ -151,8 +151,8 @@ function SortableStatsCardRow({
   };
 
   return (
-    <div ref={setNodeRef} style={style}>
-      <Card className="border border-border bg-surface-container-lowest" p="sm" radius="lg">
+    <div ref={setNodeRef} style={style} className="ui-settings-sortable-row">
+      <Card className="ui-settings-option-row" radius="sm">
         <Group justify="space-between" align="center" gap="md" wrap="nowrap">
           <Group gap="xs" wrap="nowrap" style={{ minWidth: 0 }}>
             <Tooltip label={dragLabel} withArrow>
@@ -271,7 +271,7 @@ export function SidebarSettingsPage() {
           <Text size="sm" fw={600} c="var(--on-surface)">
             {t("settings.sidebar.behavior")}
           </Text>
-          <Card className="border border-primary bg-surface-container-low" p="md" radius="lg">
+          <Card className="ui-settings-option-row" radius="sm">
             <Group justify="space-between" align="center" gap="md" wrap="nowrap">
               <Box>
                 <Text size="sm" fw={600} c="var(--on-surface)">
@@ -298,41 +298,15 @@ export function SidebarSettingsPage() {
               {SIDEBAR_DENSITY_OPTIONS.map((opt) => {
                 const active = sidebarDensity === opt.value;
                 return (
-                  <UnstyledButton
-                    key={opt.value}
-                    type="button"
-                    onClick={() => void update("sidebarDensity", opt.value)}
-                    className="ui-interactive ui-focus-ring ui-selection-card rounded-xl border px-4 py-3 text-left"
-                    data-selected={active ? "true" : "false"}
-                    aria-pressed={active}
-                    w="100%"
-                    style={{
-                      display: "block",
-                      minHeight: 76,
-                      minWidth: 0,
-                      backgroundColor: active
-                        ? "color-mix(in srgb, var(--primary) 6%, var(--surface-container-lowest))"
-                        : "var(--surface-container-lowest)",
-                      borderColor: active
-                        ? "color-mix(in srgb, var(--primary) 54%, var(--border))"
-                        : "color-mix(in srgb, var(--border) 92%, transparent)",
-                    }}
-                  >
-                    <Stack gap={4} style={{ minWidth: 0, padding: "6px 10px 4px" }}>
-                      <Text size="sm" fw={600} c={active ? "var(--on-surface)" : "var(--on-surface-variant)"}>
-                        {t(opt.labelKey)}
-                      </Text>
-                      <Text size="xs" lh={1.45} c="var(--text-muted)" style={{ whiteSpace: "normal", overflowWrap: "anywhere" }}>
-                        {t(opt.descriptionKey)}
-                      </Text>
-                    </Stack>
-                  </UnstyledButton>
+                  <SettingsChoiceItem key={opt.value} selected={active}
+                    title={t(opt.labelKey)} description={t(opt.descriptionKey)}
+                    onClick={() => void update("sidebarDensity", opt.value)} />
                 );
               })}
             </SimpleGrid>
           </Stack>
 
-          <Card className="border border-border bg-surface-container-lowest" p="sm" radius="lg">
+          <Card className="ui-settings-option-row" radius="sm">
             <Group justify="space-between" align="center" gap="md" wrap="nowrap">
               <Box>
                 <Text size="xs" c="var(--on-surface-variant)">
@@ -355,7 +329,7 @@ export function SidebarSettingsPage() {
             </Group>
           </Card>
 
-          <Card className="border border-border bg-surface-container-lowest" p="sm" radius="lg">
+          <Card className="ui-settings-option-row" radius="sm">
             <Group justify="space-between" align="center" gap="md" wrap="nowrap">
               <Box>
                 <Text size="xs" c="var(--on-surface-variant)">
@@ -374,7 +348,7 @@ export function SidebarSettingsPage() {
             </Group>
           </Card>
 
-          <Card className="border border-border bg-surface-container-lowest" p="sm" radius="lg">
+          <Card className="ui-settings-option-row" radius="sm">
             <Group justify="space-between" align="center" gap="md" wrap="nowrap">
               <Box>
                 <Text size="xs" c="var(--on-surface-variant)">
@@ -408,68 +382,12 @@ export function SidebarSettingsPage() {
             {SIDE_PANEL_SKIN_OPTIONS.map((option) => {
               const active = terminalSidePanelSkin === option.value;
               return (
-                <UnstyledButton
-                  key={option.value}
-                  type="button"
+                <SettingsChoiceItem key={option.value} selected={active}
+                  title={t(option.labelKey)} description={t(option.descriptionKey)}
                   onClick={() => void update("terminalSidePanelSkin", option.value)}
-                  className="ui-interactive ui-focus-ring ui-selection-card relative rounded-xl border px-4 py-3 text-left transition-[transform,box-shadow,border-color,background-color]"
-                  data-selected={active ? "true" : "false"}
-                  aria-pressed={active}
-                  w="100%"
-                  style={{
-                    display: "block",
-                    minHeight: 76,
-                    minWidth: 0,
-                    overflow: "hidden",
-                    whiteSpace: "normal",
-                    backgroundColor: active
-                      ? "color-mix(in srgb, var(--primary) 6%, var(--surface-container-lowest))"
-                      : "var(--surface-container-lowest)",
-                    borderColor: active
-                      ? "color-mix(in srgb, var(--primary) 56%, var(--border))"
-                      : "color-mix(in srgb, var(--border) 88%, transparent)",
-                    boxShadow: active
-                      ? "0 2px 8px color-mix(in srgb, var(--primary) 8%, transparent), inset 0 0 0 1px color-mix(in srgb, var(--primary) 24%, transparent)"
-                      : "0 2px 8px color-mix(in srgb, var(--on-surface) 6%, transparent), inset 0 1px 0 color-mix(in srgb, #fff 12%, transparent)",
-                  }}
-                >
-                  <Group
-                    justify="space-between"
-                    align="flex-start"
-                    gap="sm"
-                    wrap="nowrap"
-                    style={{ minWidth: 0, padding: "2px 6px 1px" }}
-                  >
-                    <Box style={{ minWidth: 0 }}>
-                      <Text
-                        size="sm"
-                        fw={600}
-                        c={active ? "var(--on-surface)" : "var(--on-surface-variant)"}
-                        style={{ whiteSpace: "normal", overflowWrap: "anywhere", lineHeight: 1.25 }}
-                      >
-                        {t(option.labelKey)}
-                      </Text>
-                      <Text
-                        mt={4}
-                        size="xs"
-                        lh={1.55}
-                        c={active ? "var(--on-surface-variant)" : "var(--text-muted)"}
-                        style={{ whiteSpace: "normal", overflowWrap: "anywhere" }}
-                      >
-                        {t(option.descriptionKey)}
-                      </Text>
-                    </Box>
-                    <Group gap={3} wrap="nowrap" aria-hidden="true">
-                      {option.swatches.map((color) => (
-                        <span
-                          key={color}
-                          className="h-4 w-4 rounded-full border border-border"
-                          style={{ backgroundColor: color }}
-                        />
-                      ))}
-                    </Group>
-                  </Group>
-                </UnstyledButton>
+                  preview={<span className="ui-settings-swatch-strip" aria-hidden="true">
+                    {option.swatches.map((color) => <span key={color} style={{ backgroundColor: color }} />)}
+                  </span>} />
               );
             })}
           </SimpleGrid>
@@ -699,7 +617,7 @@ export function SidebarSettingsPage() {
           </Text>
           <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="xs">
             {TERMINAL_TOOLBAR_OPTIONS.map((option) => (
-              <Card key={option.key} className="border border-border bg-surface-container-lowest" p="sm" radius="lg">
+              <Card key={option.key} className="ui-settings-option-row" radius="sm">
                 <Group justify="space-between" align="center" gap="md" wrap="nowrap">
                   <Text size="xs" c="var(--on-surface-variant)">
                     {t(option.labelKey)}

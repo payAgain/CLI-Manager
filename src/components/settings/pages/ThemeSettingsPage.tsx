@@ -1,3 +1,5 @@
+import { SettingsField } from "../SettingsField";
+import { SettingsChoiceItem } from "../SettingsChoiceItem";
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import {
   ActionIcon,
@@ -282,7 +284,7 @@ function CollapsibleSettingsSection({
         <Text size="sm" fw={600} c="var(--on-surface)">
           {title}
         </Text>
-        {description && (
+        {description && (!collapsible || open) && (
           <Text mt={4} size="xs" c="var(--on-surface-variant)">
             {description}
           </Text>
@@ -299,23 +301,24 @@ function CollapsibleSettingsSection({
   );
 
   return (
-    <section className={`ui-surface-card rounded-2xl border border-border overflow-hidden ${className}`}>
+    <section className={`ui-surface-card ui-settings-collapsible rounded-2xl border border-border overflow-hidden ${className}`}>
       {collapsible ? (
         <button
           type="button"
           onClick={onToggle}
-          className="ui-focus-ring flex w-full items-center justify-between gap-3 p-4 text-left outline-none transition-colors hover:bg-surface-container-highest/50"
+          className="ui-settings-section-toggle ui-focus-ring flex w-full items-center justify-between text-left outline-none"
           aria-expanded={open}
+          title={description}
         >
           {headerContent}
         </button>
       ) : (
-        <div className="p-4">{headerContent}</div>
+        <div className="ui-settings-section-toggle">{headerContent}</div>
       )}
       {collapsible ? (
-        open === true && <Box px="md" pt="sm" pb="md">{children}</Box>
+        open === true && <Box px={0} pt={4} pb={10}>{children}</Box>
       ) : (
-        <Box px="md" pb="md">{children}</Box>
+        <Box px={0} pb={10}>{children}</Box>
       )}
     </section>
   );
@@ -770,7 +773,7 @@ export function ThemeSettingsPage() {
           </Card>
         )}
         {shellProfilesForPlatform.map((profile) => (
-          <Card key={profile.id} className="border border-border bg-surface-container-lowest" p="sm" radius="lg">
+          <Card key={profile.id} className="ui-settings-option-row" radius="sm">
             <Group justify="space-between" align="center" gap="md" wrap="nowrap">
               <Box style={{ minWidth: 0 }}>
                 <Group gap="xs" wrap="nowrap">
@@ -815,7 +818,7 @@ export function ThemeSettingsPage() {
         ))}
       </Stack>
 
-      <Card className="border border-border bg-surface-container-lowest" p="sm" radius="lg">
+      <Card className="ui-settings-option-row" radius="sm">
         <Stack gap="sm">
           <Text size="xs" fw={600} c="var(--on-surface)">
             {text("添加自定义终端", "Add Custom Shell")}
@@ -1026,25 +1029,23 @@ export function ThemeSettingsPage() {
               </Text>
             </Stack>
 
-            <FontFamilySelect
-              label={text("终端字体族", "Terminal Font Family")}
-              value={normalizedFontFamily}
-              onChange={(value) => {
-                if (value) void update("fontFamily", normalizeTerminalFontFamily(value));
-              }}
-              data={fontFamilyOptions}
-              maxDropdownHeight={320}
-              nothingFoundMessage={systemFontsLoading ? text("正在读取系统字体...", "Reading system fonts...") : text("未找到匹配字体", "No matching font found")}
-              size="xs"
-              aria-label={text("终端字体族", "Terminal Font Family")}
-              description={
-                systemFontsError ??
-                text(
-                  `影响内置终端字体；已读取 ${systemFonts.length} 个系统字体。建议选择等宽字体。`,
-                  `Affects built-in terminal font. ${systemFonts.length} system fonts loaded. Monospace fonts are recommended.`
-                )
-              }
-            />
+            <SettingsField label={text("终端字体族", "Terminal Font Family")} status={systemFontsError} description={systemFontsError ??
+              text(
+                `影响内置终端字体；已读取 ${systemFonts.length} 个系统字体。建议选择等宽字体。`,
+                `Affects built-in terminal font. ${systemFonts.length} system fonts loaded. Monospace fonts are recommended.`
+              )}>
+              <FontFamilySelect
+                value={normalizedFontFamily}
+                onChange={(value) => {
+                  if (value) void update("fontFamily", normalizeTerminalFontFamily(value));
+                }}
+                data={fontFamilyOptions}
+                maxDropdownHeight={320}
+                nothingFoundMessage={systemFontsLoading ? text("正在读取系统字体...", "Reading system fonts...") : text("未找到匹配字体", "No matching font found")}
+                size="xs"
+                aria-label={text("终端字体族", "Terminal Font Family")}
+              />
+            </SettingsField>
 
             <Box className="overflow-hidden rounded-xl border border-border bg-surface-container-lowest">
               <Box className="border-b border-border bg-surface-container-low px-3 py-2.5">
@@ -1092,76 +1093,75 @@ export function ThemeSettingsPage() {
               </Stack>
             </Box>
 
-            <Select<string>
-              label={text("默认 Shell", "Default Shell")}
-              value={shellSelectValue}
-              onChange={(value) => {
-                if (value) void update("defaultShell", value);
-              }}
-              data={shellOptions}
-              allowDeselect={false}
-              size="xs"
-              aria-label={text("默认 Shell", "Default Shell")}
-            />
+            <SettingsField label={text("默认 Shell", "Default Shell")}>
+              <Select<string>
+                value={shellSelectValue}
+                onChange={(value) => {
+                  if (value) void update("defaultShell", value);
+                }}
+                data={shellOptions}
+                allowDeselect={false}
+                size="xs"
+                aria-label={text("默认 Shell", "Default Shell")}
+              />
+            </SettingsField>
 
-            <Select<UnsplitBehavior>
-              label={text("取消分屏行为", "Unsplit Behavior")}
-              value={unsplitBehavior}
-              onChange={(value) => {
-                if (value) void update("unsplitBehavior", value);
-              }}
-              data={unsplitOptions}
-              allowDeselect={false}
-              size="xs"
-              aria-label={text("取消分屏行为", "Unsplit Behavior")}
-              description={text("影响 Unsplit 时当前 Pane 内终端的处理方式。", "Controls how terminals in the current Pane are handled when unsplitting.")}
-            />
+            <SettingsField label={text("取消分屏行为", "Unsplit Behavior")} description={text("影响 Unsplit 时当前 Pane 内终端的处理方式。", "Controls how terminals in the current Pane are handled when unsplitting.")}>
+              <Select<UnsplitBehavior>
+                value={unsplitBehavior}
+                onChange={(value) => {
+                  if (value) void update("unsplitBehavior", value);
+                }}
+                data={unsplitOptions}
+                allowDeselect={false}
+                size="xs"
+                aria-label={text("取消分屏行为", "Unsplit Behavior")}
+              />
+            </SettingsField>
 
-            <Select<CloseBehavior>
-              label={t("settings.general.closeBehavior")}
-              value={closeBehavior}
-              onChange={(value) => {
-                if (value) void update("closeBehavior", value);
-              }}
-              data={closeBehaviorOptions}
-              allowDeselect={false}
-              size="xs"
-              aria-label={t("settings.general.closeBehavior")}
-              description={t("settings.general.closeBehaviorDescription")}
-            />
+            <SettingsField label={t("settings.general.closeBehavior")} description={t("settings.general.closeBehaviorDescription")}>
+              <Select<CloseBehavior>
+                value={closeBehavior}
+                onChange={(value) => {
+                  if (value) void update("closeBehavior", value);
+                }}
+                data={closeBehaviorOptions}
+                allowDeselect={false}
+                size="xs"
+                aria-label={t("settings.general.closeBehavior")}
+              />
+            </SettingsField>
 
-            <Select<ExitWithRunningTasksBehavior>
-              label={t("settings.general.exitWithRunningTasks")}
-              value={exitWithRunningTasksBehavior}
-              onChange={(value) => {
-                if (value) void update("exitWithRunningTasksBehavior", value);
-              }}
-              data={exitWithRunningTasksOptions}
-              allowDeselect={false}
-              size="xs"
-              aria-label={t("settings.general.exitWithRunningTasks")}
-              description={t("settings.general.exitWithRunningTasksDescription")}
-            />
+            <SettingsField label={t("settings.general.exitWithRunningTasks")} description={t("settings.general.exitWithRunningTasksDescription")}>
+              <Select<ExitWithRunningTasksBehavior>
+                value={exitWithRunningTasksBehavior}
+                onChange={(value) => {
+                  if (value) void update("exitWithRunningTasksBehavior", value);
+                }}
+                data={exitWithRunningTasksOptions}
+                allowDeselect={false}
+                size="xs"
+                aria-label={t("settings.general.exitWithRunningTasks")}
+              />
+            </SettingsField>
 
-            <Select<TerminalSessionRestoreMode>
-              label={t("settings.general.terminalSessionRestoreMode")}
-              value={terminalSessionRestoreMode}
-              onChange={(value) => {
-                if (value) void update("terminalSessionRestoreMode", value);
-              }}
-              data={terminalSessionRestoreModeOptions}
-              allowDeselect={false}
-              disabled={!terminalSessionRestoreEnabled}
-              size="xs"
-              aria-label={t("settings.general.terminalSessionRestoreMode")}
-              description={
-                terminalSessionRestoreEnabled
-                  ? t("settings.general.terminalSessionRestoreModeDescription")
-                  : t("settings.general.terminalSessionRestoreModeDisabledHint")
-              }
-            />
+            <SettingsField label={t("settings.general.terminalSessionRestoreMode")} description={terminalSessionRestoreEnabled
+              ? t("settings.general.terminalSessionRestoreModeDescription")
+              : t("settings.general.terminalSessionRestoreModeDisabledHint")}>
+              <Select<TerminalSessionRestoreMode>
+                value={terminalSessionRestoreMode}
+                onChange={(value) => {
+                  if (value) void update("terminalSessionRestoreMode", value);
+                }}
+                data={terminalSessionRestoreModeOptions}
+                allowDeselect={false}
+                disabled={!terminalSessionRestoreEnabled}
+                size="xs"
+                aria-label={t("settings.general.terminalSessionRestoreMode")}
+              />
+            </SettingsField>
 
-            <Card className="border border-border bg-surface-container-lowest" p="sm" radius="lg">
+            <Card className="ui-settings-option-row" radius="sm">
               <Group justify="space-between" align="center" gap="md" wrap="nowrap">
                 <Box>
                   <Text size="xs" c="var(--on-surface-variant)">
@@ -1180,7 +1180,7 @@ export function ThemeSettingsPage() {
               </Group>
             </Card>
 
-            <Card className="border border-border bg-surface-container-lowest" p="sm" radius="lg">
+            <Card className="ui-settings-option-row" radius="sm">
               <Group justify="space-between" align="center" gap="md" wrap="nowrap">
                 <Box>
                   <Text size="xs" c="var(--on-surface-variant)">
@@ -1203,7 +1203,7 @@ export function ThemeSettingsPage() {
               </Group>
             </Card>
 
-            <Card className="border border-border bg-surface-container-lowest" p="sm" radius="lg">
+            <Card className="ui-settings-option-row" radius="sm">
               <Group justify="space-between" align="center" gap="md" wrap="nowrap">
                 <Box>
                   <Text size="xs" c="var(--on-surface-variant)">
@@ -1226,7 +1226,7 @@ export function ThemeSettingsPage() {
               </Group>
             </Card>
 
-            <Card className="border border-border bg-surface-container-lowest" p="sm" radius="lg">
+            <Card className="ui-settings-option-row" radius="sm">
               <Group justify="space-between" align="center" gap="md" wrap="nowrap">
                 <Box>
                   <Text size="xs" c="var(--on-surface-variant)">
@@ -1245,7 +1245,7 @@ export function ThemeSettingsPage() {
               </Group>
             </Card>
 
-            <Card className="border border-border bg-surface-container-lowest" p="sm" radius="lg">
+            <Card className="ui-settings-option-row" radius="sm">
               <Group justify="space-between" align="center" gap="md" wrap="nowrap">
                 <Box>
                   <Text size="xs" c="var(--on-surface-variant)">
@@ -1264,7 +1264,7 @@ export function ThemeSettingsPage() {
               </Group>
             </Card>
 
-            <Card className="border border-border bg-surface-container-lowest" p="sm" radius="lg">
+            <Card className="ui-settings-option-row" radius="sm">
               <Group justify="space-between" align="center" gap="md" wrap="nowrap">
                 <Box>
                   <Text size="xs" c="var(--on-surface-variant)">
@@ -1300,7 +1300,7 @@ export function ThemeSettingsPage() {
                 </Group>
               )}
             </Card>
-            <Card className="border border-border bg-surface-container-lowest" p="sm" radius="lg">
+            <Card className="ui-settings-option-row" radius="sm">
               <Group justify="space-between" align="center" gap="md" wrap="nowrap">
                 <Box>
                   <Text size="xs" c="var(--on-surface-variant)">
@@ -1322,7 +1322,7 @@ export function ThemeSettingsPage() {
                 />
               </Group>
             </Card>
-            <Card className="border border-border bg-surface-container-lowest" p="sm" radius="lg">
+            <Card className="ui-settings-option-row" radius="sm">
               <Group justify="space-between" align="center" gap="md" wrap="nowrap">
                 <Box>
                   <Text size="xs" c="var(--on-surface-variant)">
@@ -1508,85 +1508,13 @@ export function ThemeSettingsPage() {
                         ? selectedResolvedThemeId === preset.id
                         : terminalThemeName === preset.id;
                     return (
-                      <UnstyledButton
-                        key={preset.id}
-                        onClick={() => {
-                          void selectIndependentTerminalTheme(preset.id);
-                        }}
-                        className="ui-interactive ui-focus-ring ui-selection-card relative rounded-xl border p-4 text-left transition-[transform,box-shadow,border-color,background-color]"
-                        data-selected={active ? "true" : "false"}
-                        aria-pressed={active}
-                        w="100%"
-                        style={{
-                          display: "block",
-                          minHeight: 108,
-                          minWidth: 0,
-                          overflow: "hidden",
-                          whiteSpace: "normal",
-                          backgroundColor: active
-                            ? "color-mix(in srgb, var(--primary) 6%, var(--surface-container-lowest))"
-                            : "var(--surface-container-lowest)",
-                          borderColor: active
-                            ? "color-mix(in srgb, var(--primary) 56%, var(--border))"
-                            : "color-mix(in srgb, var(--border) 88%, transparent)",
-                          boxShadow: active
-                            ? "0 2px 8px color-mix(in srgb, var(--primary) 8%, transparent), inset 0 0 0 1px color-mix(in srgb, var(--primary) 24%, transparent)"
-                            : "0 2px 8px color-mix(in srgb, var(--on-surface) 6%, transparent), inset 0 1px 0 color-mix(in srgb, #fff 12%, transparent)",
-                        }}
-                      >
-                        {active && (
-                          <Badge
-                            className="absolute right-3 top-3"
-                            size="xs"
-                            variant="light"
-                            style={{
-                              backgroundColor: "color-mix(in srgb, var(--primary) 10%, transparent)",
-                              border: "1px solid color-mix(in srgb, var(--primary) 22%, transparent)",
-                              color: "var(--primary)",
-                            }}
-                          >
-                            {text("当前", "Current")}
-                          </Badge>
-                        )}
-                        <Stack gap={8} pr={active ? 48 : 0} style={{ minWidth: 0, padding: "4px 8px 2px" }}>
-                          <Stack gap={2}>
-                            <Text
-                              size="sm"
-                              fw={600}
-                              c={active ? "var(--on-surface)" : "var(--on-surface-variant)"}
-                              style={{ whiteSpace: "normal", overflowWrap: "anywhere", lineHeight: 1.25 }}
-                            >
-                              {preset.labelKey ? t(preset.labelKey) : preset.name}
-                            </Text>
-                            <Text
-                              size="xs"
-                              lh={1.55}
-                              c={active ? "var(--on-surface-variant)" : "var(--text-muted)"}
-                              style={{ whiteSpace: "normal", overflowWrap: "anywhere" }}
-                            >
-                              {preset.tone === "light" ? text("浅色", "Light") : text("深色", "Dark")}{preset.family ? ` · ${preset.family}` : ""}
-                            </Text>
-                          </Stack>
-                          <Group gap={6}>
-                            {SWATCH_KEYS.map((key) => (
-                              <Box
-                                key={key}
-                                component="span"
-                                w={16}
-                                h={16}
-                                className="h-4 w-4 rounded-[4px] border"
-                                style={{
-                                  backgroundColor:
-                                    (preset.theme as Record<string, string | undefined>)[key] ??
-                                    "var(--surface-container-lowest)",
-                                  borderColor: active ? "color-mix(in srgb, var(--primary) 48%, var(--border))" : "var(--border)",
-                                  boxShadow: "none",
-                                }}
-                              />
-                            ))}
-                          </Group>
-                        </Stack>
-                      </UnstyledButton>
+                      <SettingsChoiceItem key={preset.id} selected={active}
+                        onClick={() => { void selectIndependentTerminalTheme(preset.id); }}
+                        title={preset.labelKey ? t(preset.labelKey) : preset.name}
+                        description={`${preset.tone === "light" ? text("浅色", "Light") : text("深色", "Dark")}${preset.family ? ` · ${preset.family}` : ""}`}
+                        preview={<span className="ui-settings-swatch-grid" aria-hidden="true">
+                          {SWATCH_KEYS.map((key) => <span key={key} style={{ backgroundColor: (preset.theme as Record<string, string | undefined>)[key] ?? "var(--surface-container-lowest)" }} />)}
+                        </span>} />
                     );
                   })}
                 </SimpleGrid>

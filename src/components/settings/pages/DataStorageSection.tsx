@@ -220,7 +220,7 @@ export function DataStorageSection() {
             </Alert>
           ) : status ? (
             <>
-              <Card className="border border-border bg-surface-container-lowest" p="sm" radius="lg">
+              <Card className="ui-settings-option-row" radius="sm">
                 <Stack gap="sm">
                   <Box>
                     <Text size="xs" fw={600} c="var(--on-surface-variant)">
@@ -297,7 +297,7 @@ export function DataStorageSection() {
           </DialogHeader>
           {switchRequest && (
             <Stack gap="sm">
-              <Card className="border border-border bg-surface-container-lowest" p="sm" radius="lg">
+              <Card className="ui-settings-option-row" radius="sm">
                 <Text size="xs" ff="monospace" style={{ overflowWrap: "anywhere" }}>
                   {switchRequest.inspection.targetDir}
                 </Text>

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
-import { ActionIcon, Badge, Box, Button, Card, Divider, Group, NumberInput, SegmentedControl, SimpleGrid, Stack, Switch, Text, TextInput } from "@mantine/core";
+import { ActionIcon, Badge, Box, Button, Card, Divider, Group, NumberInput, SegmentedControl, Stack, Switch, Text, TextInput } from "@mantine/core";
 import { Play, CheckCircle, HelpCircle, ChevronDown, ChevronUp, Folder, FileCode, Copy, Check, X, Activity, Bell, ShieldAlert, ToggleRight, AlertTriangle, BellOff, XCircle, Layers } from "lucide-react";
 import { useSettingsStore, type HookEventType, type HookSettingsSectionKey } from "@/stores/settingsStore";
 import { getErrorMessage, getPiHookErrorMessage } from "@/lib/hookErrors";
@@ -89,7 +89,7 @@ function PathRow({ label, value }: { label: string; value: string | null }) {
   };
 
   return (
-    <Card className="border border-border/50 bg-surface-container-lowest" p="sm" radius="md">
+    <Card className="ui-settings-option-row" radius="sm">
       <Group gap="xs" wrap="nowrap" align="flex-start">
         <Box
           style={{
@@ -158,9 +158,8 @@ function HookCard({
   const interactive = Boolean(onClick);
   return (
     <Card
-      className="border transition-colors"
-      p="md"
-      radius="lg"
+      className="ui-settings-hook-option ui-focus-ring"
+      radius="sm"
       role={interactive ? "button" : undefined}
       tabIndex={interactive && !disabled ? 0 : undefined}
       aria-disabled={interactive ? disabled : undefined}
@@ -168,56 +167,32 @@ function HookCard({
       title={actionLabel}
       onClick={interactive && !disabled ? onClick : undefined}
       onKeyDown={interactive ? (event) => {
-        if (disabled) return;
+        if (disabled || event.target !== event.currentTarget) return;
         if (event.key === "Enter" || event.key === " ") {
           event.preventDefault();
           onClick?.();
         }
       } : undefined}
       style={{
-        borderColor: checked ? "var(--success)" : "var(--border)",
-        backgroundColor: checked ? "var(--success-container)" : "var(--surface-container-low)",
+        borderColor: checked ? "color-mix(in srgb, var(--success) 45%, var(--border))" : "var(--border)",
         cursor: interactive && !disabled ? "pointer" : "default",
         opacity: disabled ? 0.68 : 1,
       }}
     >
-      <Stack gap={8} align="center">
-        <Box
-          style={{
-            color: checked ? "var(--success)" : "var(--text-muted)",
-            fontSize: 26,
-            lineHeight: 1,
-          }}
-        >
-          {icon}
-        </Box>
-        <Text size="xs" fw={500} c={checked ? "var(--on-success-container)" : "var(--on-surface-variant)"} ta="center" lh={1.3}>
-          {label}
+      <Group gap={6} wrap="nowrap">
+        <span className="ui-settings-hook-icon" style={{ color: checked ? "var(--success)" : "var(--text-muted)" }}>{icon}</span>
+        <Text className="min-w-0 flex-1 truncate" size="xs" fw={500} c="var(--text-primary)">{label}</Text>
+        <Text size="xs" className="shrink-0" c={checked ? "var(--success)" : "var(--text-muted)"}>
+          {checked ? pickText(language, "已安装", "Installed") : pickText(language, "未安装", "Not Installed")}
         </Text>
-        <Group gap={4} align="center" wrap="nowrap">
-          <Badge
-            variant="filled"
-            color={checked ? "green" : "gray"}
-            radius="xl"
-            size="xs"
-          >
-            {checked ? pickText(language, "已安装", "Installed") : pickText(language, "未安装", "Not Installed")}
-          </Badge>
-          {onToggleNotify && (
-            <ActionIcon
-              variant={notifyEnabled ? "light" : "subtle"}
-              color={notifyEnabled ? "blue" : "gray"}
-              size="sm"
-              radius="xl"
-              onClick={(e) => { e.stopPropagation(); onToggleNotify(); }}
-              disabled={notifyDisabled}
-              aria-label={pickText(language, `${label} 系统通知`, `${label} system notification`)}
-            >
-              {notifyEnabled ? <Bell size={12} /> : <BellOff size={12} />}
-            </ActionIcon>
-          )}
-        </Group>
-      </Stack>
+        {onToggleNotify && (
+          <ActionIcon variant="subtle" color={notifyEnabled ? "blue" : "gray"} size="sm" radius="sm"
+            onClick={(e) => { e.stopPropagation(); onToggleNotify(); }} disabled={notifyDisabled}
+            aria-label={pickText(language, `${label} 系统通知`, `${label} system notification`)}>
+            {notifyEnabled ? <Bell size={12} /> : <BellOff size={12} />}
+          </ActionIcon>
+        )}
+      </Group>
     </Card>
   );
 }
@@ -319,7 +294,7 @@ function CollapsibleHookSection({
       <Text size="sm" fw={600} c="var(--on-surface)">
         {title}
       </Text>
-      {description && (
+      {description && (!collapsible || open) && (
         <Text mt={4} size="xs" c="var(--on-surface-variant)">
           {description}
         </Text>
@@ -328,14 +303,15 @@ function CollapsibleHookSection({
   );
 
   return (
-    <section className="ui-surface-card overflow-hidden rounded-2xl border border-border">
-      <div className="flex w-full items-center gap-3 p-4 transition-colors hover:bg-surface-container-highest/50">
+    <section className="ui-surface-card ui-settings-collapsible overflow-hidden rounded-2xl border border-border">
+      <div className="ui-settings-section-toggle flex w-full items-center">
         {collapsible ? (
           <button
             type="button"
             onClick={onToggle}
             className="ui-focus-ring min-w-0 flex-1 text-left outline-none"
             aria-expanded={open}
+            title={description}
           >
             {titleContent}
           </button>
@@ -362,7 +338,7 @@ function CollapsibleHookSection({
           )}
         </Group>
       </div>
-      {collapsible && open && <Box px="md" pt="sm" pb="md">{children}</Box>}
+      {collapsible && open && <Box px={0} pt={4} pb={10}>{children}</Box>}
     </section>
   );
 }
@@ -1115,7 +1091,7 @@ export function HookSettingsPage() {
         <Stack gap="lg">
           {claudeHookBridgeEnabled && (
             <>
-              <SimpleGrid cols={{ base: 2, sm: 3 }} spacing="md">
+              <div className="ui-settings-hook-grid">
             <HookCard
               icon={<Play />}
               label={claudeSessionStartLabel}
@@ -1179,7 +1155,7 @@ export function HookSettingsPage() {
               disabled={loading || claudeWorking || codexWorking || piWorking || claudeStatus === "directoryMissing"}
               actionLabel={buildModuleActionLabel(claudeToolLabel, claudeSubagentLabel, claudeSubagentInstalled)}
             />
-          </SimpleGrid>
+          </div>
 
           <Group gap="xs">
             <Button
@@ -1314,7 +1290,7 @@ export function HookSettingsPage() {
         <Stack gap="lg">
           {codexHookBridgeEnabled && (
             <>
-              <SimpleGrid cols={{ base: 2, sm: 3 }} spacing="md">
+              <div className="ui-settings-hook-grid">
             <HookCard
               icon={<Play />}
               label={codexSessionStartLabel}
@@ -1375,7 +1351,7 @@ export function HookSettingsPage() {
               disabled={loading || claudeWorking || codexWorking || piWorking || codexStatus === "directoryMissing"}
               actionLabel={buildModuleActionLabel(codexToolLabel, codexHooksFeatureLabel, Boolean(codex?.hooksFeatureInstalled))}
             />
-          </SimpleGrid>
+          </div>
 
           <Group gap="xs">
             <Button
@@ -1517,7 +1493,7 @@ export function HookSettingsPage() {
         <Stack gap="lg">
           {piHookBridgeEnabled && (
             <>
-              <SimpleGrid cols={{ base: 2, sm: 3 }} spacing="md">
+              <div className="ui-settings-hook-grid">
             <HookCard
               icon={<Play />}
               label={piSessionStartLabel}
@@ -1551,7 +1527,7 @@ export function HookSettingsPage() {
               disabled={loading || claudeWorking || codexWorking || piWorking || piStatus === "directoryMissing"}
               actionLabel={buildModuleActionLabel(piToolLabel, piStopLabel, piStopInstalled)}
             />
-          </SimpleGrid>
+          </div>
 
           <Group gap="xs">
             <Button
@@ -1692,7 +1668,7 @@ export function HookSettingsPage() {
         <Stack gap="lg">
           {grokHookBridgeEnabled && (
             <>
-              <SimpleGrid cols={{ base: 2, sm: 3 }} spacing="md">
+              <div className="ui-settings-hook-grid">
                 <HookCard
                   icon={<Play />}
                   label={grokSessionStartLabel}
@@ -1756,7 +1732,7 @@ export function HookSettingsPage() {
                   disabled={anyWorking || grokStatus === "directoryMissing"}
                   actionLabel={buildModuleActionLabel(grokToolLabel, grokSubagentLabel, grokSubagentInstalled)}
                 />
-              </SimpleGrid>
+              </div>
 
               <Card className="bg-surface-container-low/50" p="sm" radius="lg">
                 <Group gap="sm" wrap="nowrap" align="flex-start">

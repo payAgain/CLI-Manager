@@ -29,8 +29,8 @@ export function AgentSettingsPage() {
   };
 
   return (
-    <div className="mx-auto w-full max-w-[960px] space-y-7">
-      <section className="border-b border-border pb-6">
+    <div className="mx-auto w-full max-w-[960px] space-y-4">
+      <section className="border-b border-border pb-4">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div className="min-w-0 flex-1 space-y-2">
             <h3 className="text-[14px] font-medium text-text-primary">{t("settings.agents.permissions")}</h3>
@@ -60,9 +60,9 @@ export function AgentSettingsPage() {
         {tools.length === 0 && <p role="status" className="py-3 text-[12px] text-text-muted">{t(status === "loading" ? "cliTools.scanning" : status === "error" ? "cliTools.scanFailed" : "settings.agents.noneInstalled")}</p>}
         <div className="divide-y divide-border">
           {tools.map(tool => (
-            <div key={tool.id} className="flex items-center gap-3 py-3">
-              <span className="flex h-8 w-8 shrink-0 items-center justify-center text-text-secondary">
-                <CliToolIcon icon={tool.icon} size={20} />
+            <div key={tool.id} className="flex items-center gap-2 py-2">
+              <span className="flex h-6 w-6 shrink-0 items-center justify-center text-text-secondary">
+                <CliToolIcon icon={tool.icon} size={16} />
               </span>
               <div className="min-w-0 flex-1">
                 <p className="text-[13px] font-medium text-text-primary">{tool.label}</p>

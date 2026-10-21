@@ -331,12 +331,16 @@ export function SshHostsSettingsPage({ searchValue, onTerminalOpened }: Props) {
 
   return (
     <div className="space-y-4">
-      <div className="ui-surface-low flex items-center justify-between rounded-2xl border border-border px-4 py-3">
-        <div className="flex items-center gap-3">
-          {client?.available ? <CheckCircle2 className="h-5 w-5 text-primary" /> : <CircleAlert className="h-5 w-5 text-warning" />}
-          <div><div className="text-sm font-bold text-text-primary">{t("settings.sshHosts.openSsh")}</div><div className="text-xs text-text-muted">{client?.available ? client.version : t("settings.sshHosts.openSshMissing")}</div></div>
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border pb-2">
+        <div className="flex min-w-0 items-center gap-2">
+          {client?.available ? <CheckCircle2 className="h-4 w-4 shrink-0 text-primary" /> : <CircleAlert className="h-4 w-4 shrink-0 text-warning" />}
+          <div className="min-w-0"><div className="text-xs font-medium text-text-primary">{t("settings.sshHosts.openSsh")}</div><div className="break-words text-[11px] text-text-muted">{client?.available ? client.version : t("settings.sshHosts.openSshMissing")}</div></div>
         </div>
-        <div className="flex items-center gap-2"><button className="ui-button-secondary flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-bold" onClick={() => void addGroup(null)}><FolderPlus className="h-4 w-4" />{t("settings.sshHosts.groupAdd")}</button><button className="ui-button-secondary flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-bold" onClick={() => setImportOpen(true)}><ImportIcon className="h-4 w-4" />{t("settings.sshHosts.import.action")}</button><button className="ui-button-primary flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-bold" onClick={() => openCreate(null)}><Plus className="h-4 w-4" />{t("settings.sshHosts.add")}</button></div>
+        <div className="flex flex-wrap items-center gap-1.5">
+          <button type="button" className="ui-button-secondary ui-settings-toolbar-button" onClick={() => void addGroup(null)}><FolderPlus size={13} />{t("settings.sshHosts.groupAdd")}</button>
+          <button type="button" className="ui-button-secondary ui-settings-toolbar-button" onClick={() => setImportOpen(true)}><ImportIcon size={13} />{t("settings.sshHosts.import.action")}</button>
+          <button type="button" className="ui-button-primary ui-settings-toolbar-button" onClick={() => openCreate(null)}><Plus size={13} />{t("settings.sshHosts.add")}</button>
+        </div>
       </div>
       {visibleAgentInstallJobs.length > 0 && (
         <section className="space-y-2 rounded-xl border border-border bg-surface-lowest p-3" aria-label={t("settings.sshHosts.cliIntegration.agent.queueTitle")}>

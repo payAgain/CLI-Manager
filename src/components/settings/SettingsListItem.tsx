@@ -31,28 +31,11 @@ export function SettingsListItem({
       data-selected={selected ? "true" : "false"}
       aria-label={ariaLabel}
       aria-pressed={ariaPressed}
-      className="ui-focus-ring flex w-full items-center gap-3 text-left transition-all"
-      style={{
-        padding: "9px 10px",
-        borderRadius: 12,
-        backgroundColor: selected
-          ? "color-mix(in srgb, var(--primary) 10%, var(--surface-container-lowest))"
-          : "var(--surface-container-lowest)",
-        border: selected
-          ? "1px solid color-mix(in srgb, var(--primary) 42%, transparent)"
-          : "1px solid color-mix(in srgb, var(--border) 22%, transparent)",
-        boxShadow: "none",
-      }}
-      onMouseEnter={(event) => {
-        if (!selected) event.currentTarget.style.backgroundColor = "var(--surface-container-low)";
-      }}
-      onMouseLeave={(event) => {
-        if (!selected) event.currentTarget.style.backgroundColor = "var(--surface-container-lowest)";
-      }}
+      className="ui-settings-list-item ui-focus-ring flex w-full items-center gap-2 text-left"
     >
       {leading}
       <Box className="min-w-0 flex-1">
-        <Text className="truncate" fz={13} fw={500} c={selected ? "var(--primary)" : "var(--on-surface)"}>
+        <Text className="truncate" fz={12} fw={500} c="var(--on-surface)">
           {title}
         </Text>
         {subtitle != null && (

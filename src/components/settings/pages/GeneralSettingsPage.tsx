@@ -1,5 +1,7 @@
+import { SettingsField } from "../SettingsField";
 import { useEffect, useMemo, useState } from "react";
-import { Box, Button, Group, NumberInput, SegmentedControl, Select, SimpleGrid, Slider, Stack, Text, TextInput } from "@mantine/core";
+import { Box, Button, Group, NumberInput, SegmentedControl, Select, Slider, Stack, Text, TextInput } from "@mantine/core";
+import { RotateCcw } from "lucide-react";
 import { debugConsoleWarn } from "../../../lib/debugConsole";
 import {
   useSettingsStore,
@@ -371,12 +373,12 @@ export function GeneralSettingsPage() {
     <Stack gap="md">
       <section className="ui-surface-card rounded-2xl border border-border p-4">
         <Stack gap="md">
-            <Text size="sm" fw={600} c="var(--on-surface)">
-              {t("settings.general.appearance")}
-            </Text>
+          <Text size="sm" fw={600} c="var(--on-surface)">
+            {t("settings.general.appearance")}
+          </Text>
 
+          <SettingsField label={t("settings.general.language")} description={t("settings.general.languageDescription")}>
             <Select<LanguagePreference>
-              label={t("settings.general.language")}
               value={language}
               onChange={(value) => {
                 if (value) void update("language", value);
@@ -385,50 +387,51 @@ export function GeneralSettingsPage() {
               allowDeselect={false}
               size="xs"
               aria-label={t("settings.general.language")}
-              description={t("settings.general.languageDescription")}
             />
+          </SettingsField>
 
-            <Stack gap={6}>
-              <Text size="xs" c="var(--on-surface-variant)">
-                {t("settings.general.theme")}
-              </Text>
-              <SegmentedControl<ThemeMode>
-                value={theme}
-                onChange={(value) => void setTheme(value)}
-                data={themeOptions}
-                color="cliPrimary"
-                fullWidth
-                aria-label={t("settings.general.theme")}
-              />
-            </Stack>
+          <Stack gap={6} className="ui-settings-inline-choice">
+            <Text size="xs" c="var(--on-surface-variant)">
+              {t("settings.general.theme")}
+            </Text>
+            <SegmentedControl<ThemeMode>
+              value={theme}
+              onChange={(value) => void setTheme(value)}
+              data={themeOptions}
+              color="cliPrimary"
+              fullWidth
+              aria-label={t("settings.general.theme")}
+            />
+          </Stack>
 
-            <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="md">
-              {showLightPalettes && (
+          <Stack gap={8}>
+            {showLightPalettes && (
+              <SettingsField label={t("settings.general.lightTheme")} description={t((LIGHT_PALETTE_OPTIONS.find((option) => option.value === lightThemePalette) ?? LIGHT_PALETTE_OPTIONS[0]).descriptionKey)}>
                 <Select<LightThemePalette>
-                  label={t("settings.general.lightTheme")}
                   value={lightThemePalette}
                   onChange={(value) => { if (value) void update("lightThemePalette", value); }}
                   data={LIGHT_PALETTE_OPTIONS.map((option) => ({ value: option.value, label: t(option.labelKey) }))}
-                  description={t((LIGHT_PALETTE_OPTIONS.find((option) => option.value === lightThemePalette) ?? LIGHT_PALETTE_OPTIONS[0]).descriptionKey)}
                   allowDeselect={false}
                   size="xs"
                 />
-              )}
-              {showDarkPalettes && (
+              </SettingsField>
+            )}
+            {showDarkPalettes && (
+              <SettingsField label={t("settings.general.darkTheme")} description={t((DARK_PALETTE_OPTIONS.find((option) => option.value === darkThemePalette) ?? DARK_PALETTE_OPTIONS[0]).descriptionKey)}>
                 <Select<DarkThemePalette>
-                  label={t("settings.general.darkTheme")}
                   value={darkThemePalette}
                   onChange={(value) => { if (value) void update("darkThemePalette", value); }}
                   data={DARK_PALETTE_OPTIONS.map((option) => ({ value: option.value, label: t(option.labelKey) }))}
-                  description={t((DARK_PALETTE_OPTIONS.find((option) => option.value === darkThemePalette) ?? DARK_PALETTE_OPTIONS[0]).descriptionKey)}
                   allowDeselect={false}
                   size="xs"
                 />
-              )}
-            </SimpleGrid>
+              </SettingsField>
+            )}
+          </Stack>
 
+          <SettingsField label={t("settings.general.uiFont")} status={systemFontsError} description={systemFontsError ??
+            t("settings.general.uiFontDescription", { count: systemFonts.length })}>
             <FontFamilySelect
-              label={t("settings.general.uiFont")}
               value={normalizedUiFontFamily}
               onChange={(value) => {
                 if (value) void update("uiFontFamily", normalizeFontFamilyStack(value, UI_FONT_FALLBACK));
@@ -438,32 +441,13 @@ export function GeneralSettingsPage() {
               nothingFoundMessage={systemFontsLoading ? t("settings.general.uiFontLoading") : t("settings.general.uiFontEmpty")}
               size="xs"
               aria-label={t("settings.general.uiFont")}
-              description={
-                systemFontsError ??
-                t("settings.general.uiFontDescription", { count: systemFonts.length })
-              }
             />
+          </SettingsField>
 
-            <Stack gap={6}>
-              <Group justify="space-between" align="center">
-                <Text size="xs" c="var(--on-surface-variant)">
-                  {t("settings.general.uiFontSize")}
-                </Text>
-                <NumberInput
-                  min={UI_FONT_SIZE_MIN}
-                  max={UI_FONT_SIZE_MAX}
-                  value={uiFontSizeDraft}
-                  onChange={(value) => setUiFontSizeDraft(typeof value === "number" ? value : Number(value))}
-                  onBlur={() => commitUiFontSize()}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") commitUiFontSize();
-                  }}
-                  size="xs"
-                  w={84}
-                  aria-label={t("settings.general.uiFontSizeValue")}
-                />
-              </Group>
+          <SettingsField label={t("settings.general.uiFontSize")} description={t("settings.general.uiFontSizeDescription")} multiple>
+            <Group gap="xs" wrap="nowrap">
               <Slider
+                style={{ flex: 1, minWidth: 60 }}
                 min={UI_FONT_SIZE_MIN}
                 max={UI_FONT_SIZE_MAX}
                 step={1}
@@ -473,16 +457,26 @@ export function GeneralSettingsPage() {
                 color="cliPrimary"
                 aria-label={t("settings.general.uiFontSizeSlider")}
               />
-              <Text size="xs" c="var(--text-muted)">
-                {t("settings.general.uiFontSizeDescription")}
-              </Text>
-            </Stack>
+              <NumberInput
+                min={UI_FONT_SIZE_MIN}
+                max={UI_FONT_SIZE_MAX}
+                value={uiFontSizeDraft}
+                onChange={(value) => setUiFontSizeDraft(typeof value === "number" ? value : Number(value))}
+                onBlur={() => commitUiFontSize()}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") commitUiFontSize();
+                }}
+                size="xs"
+                w={64}
+                aria-label={t("settings.general.uiFontSizeValue")}
+              />
+            </Group>
+          </SettingsField>
 
-            <Stack gap={6}>
-              <Text size="xs" c="var(--on-surface-variant)">
-                {t("settings.general.uiTextColor")}
-              </Text>
-              <Group gap="xs" align="flex-start" wrap="nowrap">
+          <SettingsField label={t("settings.general.uiTextColor")} description={uiTextColorHint} multiple
+            status={uiTextColorHintColor !== "var(--text-muted)" ? <Text size="xs" c={uiTextColorHintColor}>{uiTextColorHint}</Text> : null}>
+            <Stack gap={4}>
+              <Group gap="xs" align="center" wrap="nowrap">
                 <TextInput
                   type="color"
                   value={colorPickerValue}
@@ -494,7 +488,7 @@ export function GeneralSettingsPage() {
                     commitUiTextColor(value);
                   }}
                   onBlur={() => commitUiTextColor()}
-                  w={52}
+                  w={32}
                   size="xs"
                   aria-label={t("settings.general.uiTextColorPicker")}
                   styles={{ input: { cursor: "pointer", padding: 4 } }}
@@ -512,7 +506,8 @@ export function GeneralSettingsPage() {
                   }}
                   placeholder={defaultUiTextColor}
                   size="xs"
-                  w={120}
+                  w={106}
+                  style={{ flex: 1, minWidth: 60 }}
                   aria-label={t("settings.general.uiTextColorHex")}
                   aria-invalid={uiTextColorDraftInvalid}
                   styles={{ input: { fontFamily: "var(--font-ui-mono)", fontSize: 12 } }}
@@ -528,20 +523,23 @@ export function GeneralSettingsPage() {
                       void update("uiTextColor", "");
                     }}
                     className="shrink-0"
+                    aria-label={t("settings.general.restoreThemeColor")}
+                    title={t("settings.general.restoreThemeColor")}
                     style={{
                       backgroundColor: "color-mix(in srgb, var(--primary) 10%, transparent)",
                       border: "1px solid color-mix(in srgb, var(--primary) 22%, transparent)",
                       color: "var(--primary)",
-                  }}
-                >
-                    {t("settings.general.restoreThemeColor")}
+                      paddingInline: 6,
+                    }}
+                  >
+                    <RotateCcw size={12} />
                   </Button>
                 )}
               </Group>
               <Group gap="xs" c="var(--text-muted)">
                 <Box
-                  w={16}
-                  h={16}
+                  w={10}
+                  h={10}
                   style={{
                     backgroundColor: uiTextColor || defaultUiTextColor,
                     border: "1px solid var(--border)",
@@ -554,10 +552,8 @@ export function GeneralSettingsPage() {
                     : t("settings.general.currentThemeColor", { color: defaultUiTextColor })}
                 </Text>
               </Group>
-              <Text size="xs" c={uiTextColorHintColor}>
-                {uiTextColorHint}
-              </Text>
             </Stack>
+          </SettingsField>
         </Stack>
       </section>
 

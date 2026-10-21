@@ -242,7 +242,7 @@ export function TerminalBackgroundSection({ embedded = false }: { embedded?: boo
         )}
 
         <Stack gap="md" style={detailsDisabled ? { opacity: 0.55, pointerEvents: "none" } : undefined} aria-disabled={detailsDisabled}>
-          <Card className="border border-border bg-surface-container-lowest" p="sm" radius="lg">
+          <Card className="ui-settings-option-row" radius="sm">
             <Stack gap="sm">
               <Text size="xs" fw={600} c="var(--on-surface)">
                 {text("图片", "Image")}
@@ -315,7 +315,7 @@ export function TerminalBackgroundSection({ embedded = false }: { embedded?: boo
             </Stack>
           </Card>
 
-          <Card className="border border-border bg-surface-container-lowest" p="sm" radius="lg">
+          <Card className="ui-settings-option-row" radius="sm">
             <Stack gap="sm">
               <Text size="xs" fw={600} c="var(--on-surface)">
                 {text("显示设置", "Display Settings")}
@@ -367,7 +367,7 @@ export function TerminalBackgroundSection({ embedded = false }: { embedded?: boo
             </Stack>
           </Card>
 
-          <Card className="border border-border bg-surface-container-lowest" p="sm" radius="lg">
+          <Card className="ui-settings-option-row" radius="sm">
             <Stack gap="xs">
               <Text size="xs" fw={600} c="var(--on-surface)">
                 {text("位置对齐", "Position Alignment")}

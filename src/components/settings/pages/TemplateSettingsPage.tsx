@@ -451,7 +451,7 @@ export function TemplateSettingsPage({ searchValue }: TemplateSettingsPageProps)
           )}
 
           {form.scope === "session" && (
-            <Card className="border border-border bg-surface-container-lowest" p="sm" radius="lg">
+            <Card className="ui-settings-option-row" radius="sm">
               <Text size="xs" c="var(--on-surface-variant)">
                 {activeSessionId
                   ? t("settings.templates.bindSession", { sessionId: activeSessionId })

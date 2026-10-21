@@ -23,11 +23,22 @@ export function SettingsTopBar({
 
   return (
     <header className="ui-settings-topbar z-10">
-      <div className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-x-4 gap-y-3">
+      <div className="ui-settings-heading">
         <div className="min-w-0">
           <h2 className="text-on-surface">{title}</h2>
           <p>{description}</p>
         </div>
+        {searchPlaceholder && (
+          <TextInput
+            value={searchValue}
+            onChange={(event) => onSearchChange(event.currentTarget.value)}
+            placeholder={searchPlaceholder}
+            size="xs"
+            leftSection={<Search size={12} strokeWidth={1.75} />}
+            aria-label={t("settings.searchLabel")}
+            className="ui-settings-topbar-search"
+          />
+        )}
         <button
           onClick={onClose}
           className="ui-settings-close ui-focus-ring"
@@ -35,17 +46,6 @@ export function SettingsTopBar({
         >
           <X size={17} strokeWidth={1.6} aria-hidden="true" />
         </button>
-        {searchPlaceholder && (
-          <TextInput
-            value={searchValue}
-            onChange={(event) => onSearchChange(event.currentTarget.value)}
-            placeholder={searchPlaceholder}
-            size="xs"
-            leftSection={<Search size={14} strokeWidth={1.75} />}
-            aria-label={t("settings.searchLabel")}
-            className="col-span-2 min-w-0 min-[1280px]:ml-auto min-[1280px]:w-56"
-          />
-        )}
       </div>
     </header>
   );
