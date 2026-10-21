@@ -27,7 +27,7 @@ const transpiled = ts.transpileModule(source, {
 const modulePath = join(tempDir, "TerminalMouseInteraction.mjs");
 writeFileSync(modulePath, transpiled, "utf8");
 
-const { attachTerminalHistoryWheel, createTerminalMouseInteractionOptions } = await import(
+const { attachTerminalHistoryWheel, attachTerminalTuiWheel, createTerminalMouseInteractionOptions } = await import(
   pathToFileURL(modulePath).href
 );
 const { trackTerminalMouseProtocol, writeTerminalReplay } = await import(pathToFileURL(replayPath).href);
@@ -97,6 +97,83 @@ test("alternate-screen applications are not converted to local history scrolling
   const h = await wheelTerminal(t, "\x1b[?1049h\x1b[?1003h");
   assert.equal(h.terminal.buffer.active.type, "alternate");
   assert.equal(h.wheel().defaultPrevented, false);
+});
+
+class TestWheelEvent extends Event {
+  constructor(type, init = {}) {
+    super(type, init);
+    for (const key of ["deltaX", "deltaY", "deltaZ", "deltaMode", "clientX", "clientY", "screenX", "screenY", "altKey", "ctrlKey", "shiftKey", "metaKey"]) {
+      this[key] = init[key] ?? (key.endsWith("Key") ? false : 0);
+    }
+  }
+}
+
+async function tuiWheelTerminal(t, modes, initialMultiplier = 3) {
+  const terminal = new Terminal({ cols: 80, rows: 10, allowProposedApi: true });
+  t.after(() => terminal.dispose());
+  const element = new EventTarget();
+  element.ownerDocument = { defaultView: { WheelEvent: TestWheelEvent } };
+  terminal._core.element = element;
+  const protocol = trackTerminalMouseProtocol(terminal);
+  t.after(() => protocol.dispose());
+  await new Promise(resolve => writeTerminalReplay(terminal, modes, resolve));
+  const options = { multiplier: initialMultiplier };
+  const attachment = attachTerminalTuiWheel(terminal, () => options.multiplier);
+  t.after(() => attachment.dispose());
+  const delivered = [];
+  element.addEventListener("wheel", event => delivered.push(event));
+  return { terminal, options, attachment, delivered, wheel(overrides = {}) {
+    delivered.length = 0;
+    const event = new TestWheelEvent("wheel", { deltaY: -90, deltaMode: 0, clientX: 135, clientY: 72,
+      bubbles: true, cancelable: true, ...overrides });
+    element.dispatchEvent(event);
+    return event;
+  } };
+}
+
+test("TUI wheel repeats enter xterm's own event path with original direction, coordinates and pixel fractions", async t => {
+  const h = await tuiWheelTerminal(t, "\x1b[?1003h\x1b[?1006h");
+  h.wheel({ deltaY: -0.4, altKey: true });
+  assert.equal(h.delivered.length, 3);
+  assert.deepEqual(h.delivered.map(e => [e.deltaY, e.deltaMode, e.clientX, e.clientY, e.altKey]), Array(3).fill([-0.4, 0, 135, 72, true]));
+  h.options.multiplier = 5;
+  h.wheel({ deltaY: 2, deltaMode: 1 });
+  assert.equal(h.delivered.length, 5, "speed updates without recreating the terminal");
+  assert.ok(h.delivered.every(e => e.deltaY === 2 && e.deltaMode === 1));
+});
+
+test("TUI speed leaves normal history and modifier gestures untouched", async t => {
+  const h = await tuiWheelTerminal(t, "\x1b[?1003h\x1b[?1006h");
+  for (const modifier of ["ctrlKey", "metaKey", "shiftKey"]) {
+    const original = h.wheel({ [modifier]: true });
+    assert.deepEqual(h.delivered, [original]);
+    assert.equal(original.defaultPrevented, false);
+  }
+  await new Promise(resolve => h.terminal.write("\x1b[?1003l", resolve));
+  const original = h.wheel();
+  assert.deepEqual(h.delivered, [original]);
+});
+
+test("1x, invalid values and disposal preserve original wheel delivery; excessive values are bounded", async t => {
+  const h = await tuiWheelTerminal(t, "\x1b[?1049h");
+  for (const value of [1, 0, -2, Number.NaN]) {
+    h.options.multiplier = value;
+    const original = h.wheel();
+    assert.deepEqual(h.delivered, [original]);
+  }
+  h.options.multiplier = 999;
+  h.wheel();
+  assert.equal(h.delivered.length, 10);
+  h.attachment.dispose();
+  const original = h.wheel();
+  assert.deepEqual(h.delivered, [original]);
+});
+
+test("old quarantined mouse modes never gain new live reports through wheel acceleration", async t => {
+  const h = await tuiWheelTerminal(t, "\x1b[?1049h\x1b[?1003h");
+  const original = h.wheel();
+  assert.deepEqual(h.delivered, [original]);
+  assert.equal(original.defaultPrevented, false);
 });
 
 test("mouse-aware TUIs receive unmodified click and drag reports", () => {

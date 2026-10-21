@@ -438,6 +438,7 @@ export function ThemeSettingsPage() {
   const fontSize = useSettingsStore((s) => s.fontSize);
   const terminalScrollbackCustomEnabled = useSettingsStore((s) => s.terminalScrollbackCustomEnabled);
   const terminalScrollbackRows = useSettingsStore((s) => s.terminalScrollbackRows);
+  const terminalTuiScrollMultiplier = useSettingsStore((s) => s.terminalTuiScrollMultiplier);
   const fontFamily = useSettingsStore((s) => s.fontFamily);
   const terminalTextColor = useSettingsStore((s) => s.terminalTextColor);
   const terminalTuiUserColor = useSettingsStore((s) => s.terminalTuiUserColor);
@@ -920,6 +921,12 @@ export function ThemeSettingsPage() {
           onToggle={() => toggleSection("behavior")}
         >
           <Stack gap="md">
+            <SettingsField label={t("settings.terminal.tuiScrollMultiplier")} description={t("settings.terminal.tuiScrollMultiplierDescription")}>
+              <NumberInput min={1} max={10} step={1} allowDecimal={false} clampBehavior="strict"
+                value={terminalTuiScrollMultiplier}
+                onChange={(value) => { if (typeof value === "number") void update("terminalTuiScrollMultiplier", value); }}
+                size="xs" suffix="×" />
+            </SettingsField>
             <Stack gap={6}>
               <Group justify="space-between" align="center">
                 <Text size="xs" c="var(--on-surface-variant)">

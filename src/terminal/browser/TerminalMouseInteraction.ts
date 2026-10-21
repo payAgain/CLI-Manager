@@ -16,6 +16,43 @@ export const createTerminalMouseInteractionOptions =
     mouseEventsRequireAlt: false,
   });
 
+/** xterm emits one mouse report per wheel event, regardless of its delta size.
+ * Repeat through its own event path so encodings, coordinates and trackpad
+ * fractions remain owned by xterm. Ordinary history scrolling is unaffected.
+ */
+export function attachTerminalTuiWheel(
+  terminal: Terminal,
+  getMultiplier: () => number,
+): { dispose(): void } {
+  const element = terminal.element;
+  const forwarded = new WeakSet<WheelEvent>();
+  const onWheel = (event: WheelEvent) => {
+    if (forwarded.has(event) || event.defaultPrevented || event.ctrlKey || event.metaKey || event.shiftKey || !event.deltaY) return;
+    if (!isTerminalMouseInputSafe(terminal)) return;
+    if (terminal.buffer.active.type !== "alternate" && terminal.modes.mouseTrackingMode === "none") return;
+    const value = getMultiplier();
+    const multiplier = Number.isFinite(value) ? Math.min(10, Math.max(1, Math.round(value))) : 1;
+    if (multiplier === 1) return;
+    const Wheel = element?.ownerDocument?.defaultView?.WheelEvent;
+    const target = event.target ?? element;
+    if (!Wheel || !target) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    for (let index = 0; index < multiplier; index += 1) {
+      const copy = new Wheel("wheel", {
+        bubbles: true, cancelable: true, composed: true,
+        deltaX: event.deltaX, deltaY: event.deltaY, deltaZ: event.deltaZ, deltaMode: event.deltaMode,
+        clientX: event.clientX, clientY: event.clientY, screenX: event.screenX, screenY: event.screenY,
+        altKey: event.altKey,
+      });
+      forwarded.add(copy);
+      target.dispatchEvent(copy);
+    }
+  };
+  element?.addEventListener("wheel", onWheel, { capture: true, passive: false });
+  return { dispose: () => element?.removeEventListener("wheel", onWheel, true) };
+}
+
 /** A quarantined old mouse mode disables xterm's viewport wheel handler too.
  * Scroll local history in that case, and allow Shift+wheel to inspect history
  * in a mouse-aware TUI. Leave live application mouse handling intact otherwise.

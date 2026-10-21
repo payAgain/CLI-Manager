@@ -74,7 +74,7 @@ import {
   createTerminalCliContext,
   isCodexTerminalContext,
 } from "../terminal/browser/TerminalCliContext";
-import { attachTerminalHistoryWheel, createTerminalMouseInteractionOptions } from "../terminal/browser/TerminalMouseInteraction";
+import { attachTerminalHistoryWheel, attachTerminalTuiWheel, createTerminalMouseInteractionOptions } from "../terminal/browser/TerminalMouseInteraction";
 import {
   createPiTerminalCompatibility,
   type PiTerminalCompatibility,
@@ -1146,6 +1146,7 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
     terminal.loadAddon(webLinksAddon);
     terminal.open(containerRef.current);
     baseDisposables.push(attachTerminalHistoryWheel(terminal));
+    baseDisposables.push(attachTerminalTuiWheel(terminal, () => useSettingsStore.getState().terminalTuiScrollMultiplier));
     const updateCtrlKeyState = (event: KeyboardEvent) => {
       if (event.key === "Control") ctrlKeyDown = event.type === "keydown";
     };

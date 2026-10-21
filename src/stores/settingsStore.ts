@@ -288,6 +288,7 @@ export interface Settings {
   fontSize: number;
   terminalScrollbackCustomEnabled: boolean;
   terminalScrollbackRows: number;
+  terminalTuiScrollMultiplier: number;
   fontFamily: string;
   terminalTextColor: string;
   terminalTuiUserColor: string;
@@ -417,6 +418,7 @@ const DEFAULTS: Settings = {
   fontSize: TERMINAL_FONT_SIZE_DEFAULT,
   terminalScrollbackCustomEnabled: false,
   terminalScrollbackRows: TERMINAL_SCROLLBACK_ROWS_DEFAULT,
+  terminalTuiScrollMultiplier: 3,
   fontFamily: "Cascadia Code, Consolas, monospace",
   terminalTextColor: "",
   terminalTuiUserColor: "",
@@ -1052,6 +1054,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
       typeof entries.terminalScrollbackCustomEnabled === "boolean"
         ? entries.terminalScrollbackCustomEnabled
         : DEFAULTS.terminalScrollbackCustomEnabled;
+    entries.terminalTuiScrollMultiplier = Math.round(clampNumber(entries.terminalTuiScrollMultiplier, 1, 10, DEFAULTS.terminalTuiScrollMultiplier));
 
     entries.keyboardShortcuts = migrateKeyboardShortcuts(entries.keyboardShortcuts);
 
