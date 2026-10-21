@@ -615,7 +615,7 @@ export function ConfigModal({ project, cloneFrom, defaultGroupId, onManageSshHos
                   >
                     {t("common.browse")}
                   </Button>
-                  {symlinkCompatibilityEnabled && (
+                  {symlinkCompatibilityEnabled && osPlatform === "windows" && (
                     <Button
                       type="button"
                       variant="ghost"

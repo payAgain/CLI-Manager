@@ -306,7 +306,7 @@ export function DeveloperSettingsPage() {
             </Box>
           )}
 
-          {developerCards.map((card) => (
+          {developerCards.filter(card => card.key !== "symlinkCompatibilityEnabled" || osPlatform === "windows").map((card) => (
             <SettingSwitchCard
               key={card.key}
               icon={card.icon}
