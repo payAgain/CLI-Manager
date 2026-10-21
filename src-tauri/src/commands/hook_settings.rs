@@ -130,6 +130,32 @@ pub async fn hook_settings_get_status(
     let grok_dir = resolve_grok_dir(grok_selected_dir, false)?;
     let mut claude_auto_repaired = false;
 
+    // Upgrade only our existing Windows commands. Keep disabled/missing modules,
+    // matchers and third-party hooks intact, including when the EXE moved.
+    for (dir, source, file_name) in [
+        (claude_dir.as_deref(), "claude", CLAUDE_SETTINGS_FILE_NAME),
+        (codex_dir.as_deref(), "codex", CODEX_HOOKS_FILE_NAME),
+        (grok_dir.as_deref(), "grok", "hooks/cli-manager.json"),
+    ] {
+        if let Some(dir) = dir {
+            let exe = hook_exe_for_dir(dir)?;
+            let path = dir.join(file_name);
+            let mut settings = read_json_if_exists(&path)?;
+            let previous = settings.clone();
+            if upgrade_windows_hook_commands(&mut settings, source, &exe) {
+                let config_path = dir.join(CODEX_CONFIG_FILE_NAME);
+                let next_config = if source == "codex" && config_path.is_file() {
+                    let config = fs::read_to_string(&config_path).map_err(|err| err.to_string())?;
+                    refresh_migrated_codex_hook_hashes(&config, &previous, &settings, &path)?
+                } else { None };
+                write_json(&path, &settings)?;
+                if let Some(config) = next_config {
+                    fs::write(&config_path, config).map_err(|err| err.to_string())?;
+                }
+            }
+        }
+    }
+
     if auto_repair.unwrap_or(false) {
         if let Some(dir) = claude_dir.as_ref() {
             let current = build_claude_status(Some(dir.clone()))?;
@@ -2722,13 +2748,90 @@ fn ensure_child_object<'a>(
 fn build_command(exe: &str, source: &str, event: &str) -> String {
     if is_windows_native_exe_path(exe) {
         let exe = escape_powershell_single_quoted(exe);
+        // PowerShell does not wait for a Windows GUI executable without a pipeline.
+        // Keep the shell alive until __hook has posted: daemon ancestry validation
+        // must still be able to follow the helper back to its owning Agent.
         return format!(
-            "powershell -NoProfile -ExecutionPolicy Bypass -Command \"& '{exe}' {HOOK_COMMAND_MARKER} --source {source} --event {event}\""
+            "powershell -NoProfile -ExecutionPolicy Bypass -Command \"& '{exe}' {HOOK_COMMAND_MARKER} --source {source} --event {event} | Out-Null\""
         );
     }
 
     let exe = escape_posix_single_quoted(exe);
     format!("{exe} {HOOK_COMMAND_MARKER} --source {source} --event {event}")
+}
+
+fn upgrade_windows_hook_commands(settings: &mut Value, source: &str, exe: &str) -> bool {
+    if !is_windows_native_exe_path(exe) {
+        return false;
+    }
+    let Some(events) = settings.get_mut("hooks").and_then(Value::as_object_mut) else {
+        return false;
+    };
+    let mut changed = false;
+    let marker = format!("' {HOOK_COMMAND_MARKER} --source {source} --event ");
+    for groups in events.values_mut().filter_map(Value::as_array_mut) {
+        for hooks in groups.iter_mut().filter_map(|group| group.get_mut("hooks").and_then(Value::as_array_mut)) {
+            for hook in hooks {
+                let Some(command) = hook.get("command").and_then(Value::as_str) else { continue };
+                let Some(body) = command.strip_prefix("powershell -NoProfile -ExecutionPolicy Bypass -Command \"& '")
+                    .and_then(|body| body.strip_suffix('"')) else { continue };
+                let body = body.strip_suffix(" | Out-Null").unwrap_or(body);
+                let Some((old_exe, event)) = body.rsplit_once(&marker) else { continue };
+                if !is_windows_native_exe_path(old_exe)
+                    || !matches!(event, "SessionStart" | "UserPromptSubmit" | "Notification" | "PermissionRequest" | "Stop" | "StopFailure" | "SubagentStart" | "SubagentStop" | "AgentToolStart" | "AgentToolStop" | "ToolStart" | "ToolStop") {
+                    continue;
+                }
+                let next = build_command(exe, source, event);
+                if next != command {
+                    hook["command"] = json!(next);
+                    changed = true;
+                }
+            }
+        }
+    }
+    changed
+}
+
+/// Carry existing trust to the new command without enabling Hooks or modules.
+fn refresh_migrated_codex_hook_hashes(
+    config: &str, previous: &Value, next: &Value, hooks_path: &Path,
+) -> Result<Option<String>, String> {
+    let parsed: toml::Value = toml::from_str(config).map_err(|err| err.to_string())?;
+    let mut hashes = std::collections::HashMap::new();
+    for event in CODEX_HOOK_EVENTS {
+        let Some(groups) = previous["hooks"][event].as_array() else { continue };
+        for (group_index, group) in groups.iter().enumerate() {
+            let Some(hooks) = group["hooks"].as_array() else { continue };
+            for (hook_index, hook) in hooks.iter().enumerate() {
+                let next_group = &next["hooks"][event][group_index];
+                let next_hook = &next_group["hooks"][hook_index];
+                if hook["command"] == next_hook["command"] { continue }
+                let key = format!("{}:{}:{group_index}:{hook_index}", path_to_string(hooks_path), codex_hook_state_event_name(event).unwrap());
+                let old_hash = codex_hook_trusted_hash(event, group, hook)?;
+                if parsed.get("hooks").and_then(|v| v.get("state")).and_then(|v| v.get(&key))
+                    .and_then(|v| v.get("trusted_hash")).and_then(toml::Value::as_str) == Some(old_hash.as_str()) {
+                    hashes.insert(key, codex_hook_trusted_hash(event, next_group, next_hook)?);
+                }
+            }
+        }
+    }
+    if hashes.is_empty() { return Ok(None) }
+    let mut current = None;
+    let mut output = String::new();
+    for line in config.split_inclusive('\n') {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') { current = toml_hooks_state_key(line); }
+        if trimmed.split_once('=').is_some_and(|(key, _)| key.trim() == "trusted_hash") {
+            if let Some(hash) = current.as_ref().and_then(|key| hashes.get(key)) {
+                output.push_str(&format!("trusted_hash = \"{hash}\""));
+                if line.ends_with("\r\n") { output.push_str("\r\n") }
+                else if line.ends_with('\n') { output.push('\n') }
+                continue;
+            }
+        }
+        output.push_str(line);
+    }
+    Ok((output != config).then_some(output))
 }
 
 fn is_windows_native_exe_path(exe: &str) -> bool {
@@ -2815,6 +2918,103 @@ mod tests {
         config.push_str(&blocks.join("\n\n"));
         config.push('\n');
         fs::write(config_path, config).unwrap();
+    }
+
+    #[test]
+    fn windows_hook_upgrade_preserves_modules_matchers_and_other_commands() {
+        let old = r#"powershell -NoProfile -ExecutionPolicy Bypass -Command "& 'C:\old\cli-manager.exe' __hook --source codex --event SubagentStart""#;
+        let mut settings = json!({"custom": true, "hooks": {
+            "SubagentStart": [{"matcher": "worker", "hooks": [
+                {"type": "command", "command": old, "timeout": 7},
+                {"type": "command", "command": "echo custom"}
+            ]}],
+            "Stop": [{"hooks": [{"command": old.replace("--source codex", "--source claude")}]}]
+        }});
+        let exe = r"C:\new path\it's\cli-manager.exe";
+        assert!(upgrade_windows_hook_commands(&mut settings, "codex", exe));
+        assert_eq!(settings["hooks"]["SubagentStart"][0]["hooks"][0]["command"], build_command(exe, "codex", "SubagentStart"));
+        assert_eq!(settings["hooks"]["SubagentStart"][0]["hooks"][0]["timeout"], 7);
+        assert_eq!(settings["hooks"]["SubagentStart"][0]["matcher"], "worker");
+        assert_eq!(settings["hooks"]["SubagentStart"][0]["hooks"][1]["command"], "echo custom");
+        assert_eq!(settings["hooks"]["Stop"][0]["hooks"][0]["command"], old.replace("--source codex", "--source claude"));
+        assert!(settings["hooks"].get("SubagentStop").is_none());
+        assert!(!upgrade_windows_hook_commands(&mut settings, "codex", exe));
+        assert!(upgrade_windows_hook_commands(&mut settings, "codex", r"D:\moved\cli-manager.exe"));
+        let before = settings.clone();
+        assert!(!upgrade_windows_hook_commands(&mut settings, "codex", "/mnt/c/cli-manager.exe"));
+        assert_eq!(settings, before);
+    }
+
+    #[test]
+    fn windows_hook_upgrade_keeps_disabled_codex_feature_and_module_state() {
+        let path = Path::new(r"C:\fixture\hooks.json");
+        let old_command = r#"powershell -NoProfile -ExecutionPolicy Bypass -Command "& 'C:\old\cli-manager.exe' __hook --source codex --event SubagentStart""#;
+        let previous = json!({"hooks":{"SubagentStart":[{"matcher":"worker","hooks":[{"type":"command","command":old_command,"timeout":15}]}]}});
+        let old_hash = codex_hook_trusted_hash("SubagentStart", &previous["hooks"]["SubagentStart"][0], &previous["hooks"]["SubagentStart"][0]["hooks"][0]).unwrap();
+        let config = format!("# preserved\n[features]\nhooks = false\n[hooks.state.\"{}:subagent_start:0:0\"]\nenabled = false\ntrusted_hash = \"{old_hash}\"\n", toml_escape_basic_string(&path_to_string(path)));
+        let mut next = previous.clone();
+        upgrade_windows_hook_commands(&mut next, "codex", r"D:\new\cli-manager.exe");
+        let updated = refresh_migrated_codex_hook_hashes(&config, &previous, &next, path).unwrap().unwrap();
+        assert!(updated.contains("# preserved\n[features]\nhooks = false"));
+        assert!(updated.contains("enabled = false"));
+        assert!(!updated.contains(&old_hash));
+        let untrusted = config.replace(&old_hash, "sha256:untrusted");
+        assert!(refresh_migrated_codex_hook_hashes(&untrusted, &previous, &next, path).unwrap().is_none());
+    }
+
+    /// Exercise the actual release GUI helper, not this console test executable.
+    /// Set CLI_MANAGER_TEST_HOOK_EXE to a built standalone EXE to run this check.
+    #[cfg(windows)]
+    #[test]
+    fn windows_release_hook_keeps_its_shell_alive_until_delivery() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        use std::process::Stdio;
+        use std::time::{Duration, Instant};
+        let Ok(exe) = env::var("CLI_MANAGER_TEST_HOOK_EXE") else { return };
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let command = build_command(&exe, "codex", "SubagentStart");
+        let script = command.strip_prefix("powershell -NoProfile -ExecutionPolicy Bypass -Command \"").unwrap().strip_suffix('"').unwrap();
+        let mut child = crate::shell_resolver::silent_command("powershell.exe")
+            .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script])
+            .env("CLI_MANAGER_NOTIFY_PORT", port.to_string())
+            .env("CLI_MANAGER_NOTIFY_TOKEN", "fixture-token")
+            .env("CLI_MANAGER_TAB_ID", "fixture-tab")
+            .stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null())
+            .spawn().unwrap();
+        child.stdin.take().unwrap().write_all(br#"{"session_id":"parent","agent_id":"child"}"#).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(12);
+        let mut stream = loop {
+            if let Ok((stream, _)) = listener.accept() { break stream }
+            if Instant::now() >= deadline {
+                let _ = child.kill();
+                panic!("release hook did not reach the local notification endpoint");
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        stream.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+        let mut request = Vec::new();
+        let mut buf = [0u8; 4096];
+        loop {
+            let count = stream.read(&mut buf).unwrap();
+            assert!(count > 0);
+            request.extend_from_slice(&buf[..count]);
+            if let Some(end) = request.windows(4).position(|bytes| bytes == b"\r\n\r\n") {
+                let header = String::from_utf8_lossy(&request[..end]);
+                let length: usize = header.lines().find_map(|line| line.strip_prefix("Content-Length: ")).unwrap().parse().unwrap();
+                if request.len() >= end + 4 + length { break }
+            }
+        }
+        // Hold the HTTP response so an asynchronous GUI launch has time to exit.
+        std::thread::sleep(Duration::from_millis(150));
+        let shell_alive = child.try_wait().unwrap().is_none();
+        stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}").unwrap();
+        drop(stream);
+        assert!(child.wait().unwrap().success());
+        assert!(shell_alive, "PowerShell exited before __hook delivery; Agent ancestry was lost");
+        assert!(String::from_utf8_lossy(&request).contains("\"agentId\":\"child\""));
     }
 
     #[test]

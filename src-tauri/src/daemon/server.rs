@@ -1016,6 +1016,14 @@ impl DaemonHost {
         }
         if let Some(pid) = payload.get("hookProcessId").and_then(|v| v.as_u64()) {
             if !tracker.belongs_to(pid as u32, agent.pid) {
+                log::warn!(
+                    "CLI Hook rejected: helper ancestry does not reach Agent; source={} event={} tab={} helper_pid={} agent_pid={}",
+                    agent.tool,
+                    payload.get("event").and_then(|v| v.as_str()).unwrap_or("unknown"),
+                    session_id,
+                    pid,
+                    agent.pid,
+                );
                 return false;
             }
         }
