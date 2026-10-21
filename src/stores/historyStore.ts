@@ -1428,7 +1428,7 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
     const openRequestSeq = ++historyOpenRequestSeq;
     globalSearchRequestSeq += 1;
     const isCurrentOpenRequest = () => openRequestSeq === historyOpenRequestSeq;
-    const nextSourceFilter = options?.sourceFilter ?? get().sourceFilter;
+    const nextSourceFilter = options?.sourceFilter ?? "all";
     const requestedProjectPath = options?.projectPath?.trim() || null;
     const requestedProjectId = options?.projectId?.trim() || null;
     const projectStore = useProjectStore.getState();

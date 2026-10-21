@@ -17,7 +17,7 @@ import {
 } from "../../stores/worktreeStore";
 import { useExternalSessionSyncStore } from "../../stores/externalSessionSyncStore";
 import type { TerminalPaneSplitDirection } from "../../stores/terminalPaneTree";
-import type { HistorySourceFilter, Project, TreeNode as TNode, Group, TerminalScope, TerminalSession, WorktreeRecord } from "../../lib/types";
+import type { Project, TreeNode as TNode, Group, TerminalScope, TerminalSession, WorktreeRecord } from "../../lib/types";
 import { ConfigModal } from "../ConfigModal";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { useAppConfirm } from "../ui/useAppConfirm";
@@ -25,7 +25,6 @@ import { WorktreeFinishDialog } from "../worktree/WorktreeFinishDialog";
 import { openWindowsTerminal } from "../../lib/externalTerminal";
 import { projectTerminalLaunchLabel, resolveProjectStartupCommand } from "../../lib/projectStartupCommand";
 import { resolveHistoryProjectPath } from "../../lib/historyProjectPaths";
-import { resolveCliToolHistorySourceId } from "../../lib/cliTools";
 import { shouldSidebarBootstrapProjects } from "../../lib/projectLoadPolicy";
 import { parseProjectEnvVars } from "../../lib/projectEnv";
 import { projectWithWorktreePath } from "../../lib/terminalProject";
@@ -125,10 +124,6 @@ function clampExpandedSidebarWidth(width: number): number {
 function normalizePersistedSidebarWidth(width: number): number {
   if (width <= SIDEBAR_COLLAPSED_WIDTH) return SIDEBAR_COLLAPSED_WIDTH;
   return clampExpandedSidebarWidth(width === 280 ? 248 : width);
-}
-
-function resolveHistorySourceFilter(cliTool: string | null | undefined): HistorySourceFilter {
-  return resolveCliToolHistorySourceId(cliTool) ?? "all";
 }
 
 function buildProjectSplitOptions(project: Project): SplitTerminalOptions {
@@ -1356,7 +1351,7 @@ export function Sidebar({
     (project: Project) => {
       if (rejectUnsupportedCapability(project, "history")) return;
       void openHistory({
-        sourceFilter: resolveHistorySourceFilter(project.cli_tool),
+        sourceFilter: "all",
         projectPath: resolveHistoryProjectPath(project),
         projectId: project.id,
       }).then(() => {
@@ -1370,7 +1365,7 @@ export function Sidebar({
   const handleOpenWorktreeHistory = useCallback(
     (project: Project, worktree: WorktreeRecord) => {
       void openHistory({
-        sourceFilter: resolveHistorySourceFilter(project.cli_tool),
+        sourceFilter: "all",
         projectPath: project.path,
         projectId: project.id,
         scopedProjectPath: worktree.path,

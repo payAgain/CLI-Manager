@@ -3,7 +3,7 @@ import { ArrowRightLeft, Bot, Check, ChevronDown, ChevronRight, Clock3, Folder, 
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode, type RefObject } from "react";
 import type { Group, HistoryIndexStatus, HistorySearchHit, HistorySessionView, HistorySourceFilter, Project } from "../../lib/types";
 import { useI18n } from "../../lib/i18n";
-import { HISTORY_SOURCE_DESCRIPTORS, HISTORY_SOURCE_DESCRIPTOR_BY_ID, type HistorySourceId } from "../../lib/historySources";
+import { HISTORY_SOURCE_DESCRIPTOR_BY_ID, type HistorySourceId } from "../../lib/historySources";
 import { resolveCliToolIconKey, resolveHistorySourceIconKey } from "../../lib/cliTools";
 import { findWorktreeByPath } from "../../lib/terminalProject";
 import { useWorktreeStore } from "../../stores/worktreeStore";
@@ -74,7 +74,6 @@ interface HistoryListPaneProps {
   selectedSessionKeys: Set<string>;
   onRefresh: () => void;
   onClose: () => void;
-  onSourceFilterChange: (value: HistorySourceFilter) => void;
   onProjectPathFilterChange: (value: string | null, projectId?: string | null) => void;
   onGlobalQueryChange: (value: string) => void;
   onFavoriteOnlyChange: (value: boolean) => void;
@@ -338,7 +337,6 @@ export function HistoryListPane({
   selectedSessionKeys,
   onRefresh,
   onClose,
-  onSourceFilterChange,
   onProjectPathFilterChange,
   onGlobalQueryChange,
   onFavoriteOnlyChange,
@@ -362,11 +360,9 @@ export function HistoryListPane({
   const [collapsedFilterGroups, setCollapsedFilterGroups] = useState<Set<string>>(new Set());
   const [collapsedSessionParents, setCollapsedSessionParents] = useState<Set<string>>(new Set());
   const [collapsedAgents, setCollapsedAgents] = useState<Set<string>>(new Set());
-  const [sourceMenuOpen, setSourceMenuOpen] = useState(false);
   const [projectMenuOpen, setProjectMenuOpen] = useState(false);
   const [projectSearchQuery, setProjectSearchQuery] = useState("");
   const contextMenuRef = useRef<HTMLDivElement | null>(null);
-  const sourceDropdownRef = useRef<HTMLDivElement | null>(null);
   const projectDropdownRef = useRef<HTMLDivElement | null>(null);
   const projectTreeScrollRef = useRef<HTMLDivElement | null>(null);
   const selectedProjectNodeRef = useRef<HTMLButtonElement | null>(null);
@@ -375,12 +371,6 @@ export function HistoryListPane({
   const globalQueryLength = [...globalQuery.trim()].length;
   const globalQueryTooShort = globalQueryLength > 0 && globalQueryLength < 3;
   const indexBusy = ["seeding", "scanning", "indexing"].includes(indexStatus.phase);
-  const selectedSourceIcon = sourceFilter === "all" ? null : resolveHistorySourceIconKey(sourceFilter);
-  const selectedSourceDescriptor = sourceFilter === "all" ? null : HISTORY_SOURCE_DESCRIPTOR_BY_ID.get(sourceFilter);
-  const selectedSourceLabel = selectedSourceDescriptor
-    ? t(selectedSourceDescriptor.labelKey)
-    : t("history.filter.all");
-
   const projectTree = useMemo(() => buildHistoryProjectTree(groups, projects), [groups, projects]);
   const selectedProject = useMemo(() => {
     if (projectIdFilter) {
@@ -530,23 +520,6 @@ export function HistoryListPane({
       window.removeEventListener("keydown", keyHandler);
     };
   }, [contextMenu]);
-
-  useEffect(() => {
-    if (!sourceMenuOpen) return;
-    const handler = (e: MouseEvent) => {
-      if (sourceDropdownRef.current?.contains(e.target as Node)) return;
-      setSourceMenuOpen(false);
-    };
-    const keyHandler = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setSourceMenuOpen(false);
-    };
-    document.addEventListener("mousedown", handler);
-    window.addEventListener("keydown", keyHandler);
-    return () => {
-      document.removeEventListener("mousedown", handler);
-      window.removeEventListener("keydown", keyHandler);
-    };
-  }, [sourceMenuOpen]);
 
   useEffect(() => {
     const wasOpen = projectMenuWasOpenRef.current;
@@ -702,76 +675,8 @@ export function HistoryListPane({
     >
       <div className="ui-history-sidebar-top p-3">
         <div className="flex items-center gap-2">
-          <div ref={sourceDropdownRef} className="relative min-w-0 flex-1">
-            <button
-              type="button"
-              onClick={() => {
-                setSourceMenuOpen((open) => !open);
-                setProjectMenuOpen(false);
-              }}
-              aria-label={t("history.filter.source")}
-              aria-haspopup="listbox"
-              aria-expanded={sourceMenuOpen}
-              className="ui-history-filter ui-focus-ring flex h-8 w-full items-center gap-2 rounded-md border border-border/60 bg-transparent px-2 text-left text-xs font-normal"
-            >
-              <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center text-primary">
-                {selectedSourceIcon ? <CliToolIcon icon={selectedSourceIcon} size={13} /> : <Bot size={13} />}
-              </span>
-              <span className="min-w-0 flex-1 truncate">{selectedSourceLabel}</span>
-              <ChevronDown
-                size={12}
-                className="shrink-0 text-text-muted transition-transform"
-                style={{ transform: sourceMenuOpen ? "rotate(180deg)" : "rotate(0deg)" }}
-              />
-            </button>
-
-            {sourceMenuOpen && (
-              <div
-                role="listbox"
-                aria-label={t("history.filter.source")}
-                className="absolute left-0 right-0 top-full z-40 mt-1 max-h-72 overflow-y-auto rounded-xl border border-border bg-surface-container-high p-1 shadow-lg"
-              >
-                <button
-                  type="button"
-                  role="option"
-                  aria-selected={sourceFilter === "all"}
-                  onClick={() => {
-                    onSourceFilterChange("all");
-                    setSourceMenuOpen(false);
-                  }}
-                  className="ui-tree-node ui-focus-ring flex h-8 w-full items-center gap-2 rounded-lg px-2 text-left text-[11px]"
-                  data-selected={sourceFilter === "all" ? "true" : "false"}
-                >
-                  <Bot size={13} className="shrink-0 text-text-muted" />
-                  <span className="min-w-0 flex-1 truncate">{t("history.filter.all")}</span>
-                  {sourceFilter === "all" && <Check size={12} className="shrink-0" />}
-                </button>
-                {HISTORY_SOURCE_DESCRIPTORS.map((descriptor) => {
-                  const icon = resolveHistorySourceIconKey(descriptor.id);
-                  const selected = sourceFilter === descriptor.id;
-                  return (
-                    <button
-                      key={descriptor.id}
-                      type="button"
-                      role="option"
-                      aria-selected={selected}
-                      onClick={() => {
-                        onSourceFilterChange(descriptor.id);
-                        setSourceMenuOpen(false);
-                      }}
-                      className="ui-tree-node ui-focus-ring flex h-8 w-full items-center gap-2 rounded-lg px-2 text-left text-[11px]"
-                      data-selected={selected ? "true" : "false"}
-                    >
-                      <span className="inline-flex h-4 w-4 shrink-0 items-center justify-center">
-                        {icon ? <CliToolIcon icon={icon} size={13} /> : <Terminal size={13} />}
-                      </span>
-                      <span className="min-w-0 flex-1 truncate">{t(descriptor.labelKey)}</span>
-                      {selected && <Check size={12} className="shrink-0" />}
-                    </button>
-                  );
-                })}
-              </div>
-            )}
+          <div className="min-w-0 flex-1 truncate text-xs font-medium text-text-primary">
+            {t("workspace.historyNav")}
           </div>
 
           <button

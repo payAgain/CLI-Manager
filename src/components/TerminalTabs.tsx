@@ -62,7 +62,7 @@ import { FileExplorerSidebar } from "./files/LazyFileExplorerSidebar";
 import { openWindowsTerminal } from "../lib/externalTerminal";
 import { normalizeDirectCodexStartupCommand, resolveProjectStartupCommand } from "../lib/projectStartupCommand";
 import { projectSupportsCapability, resolveProjectCapabilities, type ProjectCapability } from "../lib/projectCapabilities";
-import { resolveCliToolHistorySourceId, resolveCliToolIconKey, type CliToolIconKey } from "../lib/cliTools";
+import { resolveCliToolIconKey, type CliToolIconKey } from "../lib/cliTools";
 import { resolveHistoryProjectPath } from "../lib/historyProjectPaths";
 import { parseProjectEnvVars } from "../lib/projectEnv";
 import { Activity, Terminal, TerminalSquare, Sparkles, Plus, ListClockIcon, X, Copy, Maximize2, Minimize2, ChevronDown, ChevronRight, BarChart3, GitBranch, Folder, FolderOpen, Hash, Check, Cpu, Cloud, Undo2 } from "./icons";
@@ -82,7 +82,7 @@ import {
   TERMINAL_TAB_CLOSE_REQUEST_EVENT,
   type TerminalTabCloseRequestDetail,
 } from "../lib/terminalCloseConfirm";
-import type { HistorySourceFilter, Project, TerminalScope, TerminalSession, TreeNode, WorktreeRecord } from "../lib/types";
+import type { Project, TerminalScope, TerminalSession, TreeNode, WorktreeRecord } from "../lib/types";
 import {
   ContextMenu,
   ContextMenuTrigger,
@@ -434,10 +434,6 @@ function resolveWorkspanDropEdge(
     event.over.rect,
     WORKSPAN_SPLIT_ACTIVATION_RATIO
   );
-}
-
-function resolveHistorySourceFilter(cliTool: string | null | undefined): HistorySourceFilter {
-  return resolveCliToolHistorySourceId(cliTool) ?? "all";
 }
 
 // 终端 Tab 厂商图标：从启动命令 + 标题推断（未配自定义启动命令时 startupCmd 即为 cli_tool）
@@ -3123,7 +3119,7 @@ export function TerminalTabs({
     }
     setActiveWorkspaceTab("history");
     void openHistory({
-      sourceFilter: resolveHistorySourceFilter(project.cli_tool),
+      sourceFilter: "all",
       projectPath: project.path,
       projectId: project.id,
       scopedProjectPath: worktree.path,
@@ -3620,7 +3616,7 @@ export function TerminalTabs({
     setHistoryExpanded(false);
     setActiveWorkspaceTab("history");
     void openHistory({
-      sourceFilter: resolveHistorySourceFilter(project?.cli_tool),
+      sourceFilter: "all",
       projectPath: resolveHistoryProjectPath(project) || activeSession?.cwd || null,
       projectId: project?.id ?? null,
       scopedProjectPath: activeWorktree?.path ?? null,

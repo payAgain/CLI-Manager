@@ -199,7 +199,6 @@ export function HistoryWorkspace({ active = true, docked = false, onOpenDetail }
   const focusSessionSearchSeq = useHistoryStore((s) => s.focusSessionSearchSeq);
   const closeHistory = useHistoryStore((s) => s.closeHistory);
   const openHistory = useHistoryStore((s) => s.openHistory);
-  const setSourceFilter = useHistoryStore((s) => s.setSourceFilter);
   const loadMoreSessions = useHistoryStore((s) => s.loadMoreSessions);
   const refreshIndex = useHistoryStore((s) => s.refreshIndex);
   const openSession = useHistoryStore((s) => s.openSession);
@@ -1182,9 +1181,6 @@ export function HistoryWorkspace({ active = true, docked = false, onOpenDetail }
           selectedSessionKeys={selectedSessionKeys}
           onRefresh={handleRefreshSessions}
           onClose={closeHistory}
-          onSourceFilterChange={(value) => {
-            void setSourceFilter(value as HistorySourceFilter);
-          }}
           onProjectPathFilterChange={(value, projectId) => {
             void openHistory({ projectPath: value, projectId: projectId ?? null }).catch((error) => {
               toast.error(t("history.toast.refreshFailed"), { description: String(error) });
