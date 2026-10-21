@@ -14,7 +14,7 @@ export function routeSubagentHook(payload: CliHookPayload, handlers: SubagentHoo
     && Boolean(payload.agentId?.trim());
   // Codex also emits turn hooks for a child, carrying the parent's session_id.
   const codexChildTurn = payload.source === "codex" && Boolean(payload.agentId?.trim())
-    && (payload.event === "SessionStart" || payload.event === "UserPromptSubmit" || payload.event === "Stop");
+    && (payload.event === "SessionStart" || payload.event === "UserPromptSubmit" || payload.event === "Stop" || payload.event === "StopFailure");
   if (!claudeTool && !codexChildTurn && ![
     "SubagentStart", "SubagentStop", "AgentToolStart", "AgentToolStop",
   ].includes(payload.event)) return false;
@@ -22,7 +22,7 @@ export function routeSubagentHook(payload: CliHookPayload, handlers: SubagentHoo
   const tabId = handlers.bind(payload);
   if (!tabId) return true;
   const bound = { ...payload, tabId };
-  const ended = payload.event === "SubagentStop" || (codexChildTurn && payload.event === "Stop");
+  const ended = payload.event === "SubagentStop" || (codexChildTurn && (payload.event === "Stop" || payload.event === "StopFailure"));
   if (ended && !payload.agentTranscriptPath?.trim() && payload.source !== "codex") {
     handlers.finish(bound);
   } else if (ended) {

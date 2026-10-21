@@ -8,6 +8,7 @@ import { defaultShellForOs, getOsPlatform, isWindowsOnlyShellKey } from "../lib/
 import { getCliManagerDataPaths } from "../lib/appPaths";
 import { singleFlight } from "../lib/singleFlight";
 import { normalizeAgentPermissionMode, type AgentPermissionMode } from "../lib/agentLaunchPermissions";
+import type { SubagentTranscriptMode } from "../lib/subagentTranscript";
 import {
   migrateTerminalShellProfiles,
   type TerminalShellProfile,
@@ -349,6 +350,7 @@ export interface Settings {
   hookPopupAutoCloseEnabled: boolean;
   hookPopupAutoCloseSeconds: number;
   hookSubagentSplitViewEnabled: boolean;
+  subagentTranscriptMode: SubagentTranscriptMode;
   claudeHookBridgeEnabled: boolean;
   codexHookBridgeEnabled: boolean;
   piHookBridgeEnabled: boolean;
@@ -510,6 +512,7 @@ const DEFAULTS: Settings = {
   hookPopupAutoCloseEnabled: true,
   hookPopupAutoCloseSeconds: 60,
   hookSubagentSplitViewEnabled: true,
+  subagentTranscriptMode: "summary",
   claudeHookBridgeEnabled: true,
   codexHookBridgeEnabled: true,
   piHookBridgeEnabled: true,
@@ -1181,6 +1184,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
       typeof entries.hookSubagentSplitViewEnabled === "boolean"
         ? entries.hookSubagentSplitViewEnabled
         : DEFAULTS.hookSubagentSplitViewEnabled;
+    entries.subagentTranscriptMode = entries.subagentTranscriptMode === "full" ? "full" : "summary";
     entries.claudeHookBridgeEnabled =
       typeof entries.claudeHookBridgeEnabled === "boolean"
         ? entries.claudeHookBridgeEnabled

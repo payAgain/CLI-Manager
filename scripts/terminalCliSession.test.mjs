@@ -43,11 +43,16 @@ test("内存已绑定但持久化快照缺失 ID 时仍需自愈保存", () => {
 });
 
 test("Hook 对账持久化快照后，恢复时优先使用明确 ID", () => {
-  const hookStart = terminalStoreSource.indexOf("  handleCliHookEvent: (payload) => {");
-  const hookEnd = terminalStoreSource.indexOf("  handleShellRuntimeEvent: (payload) => {", hookStart);
-  assert.notEqual(hookStart, -1);
-  assert.notEqual(hookEnd, -1);
-  const hookBody = terminalStoreSource.slice(hookStart, hookEnd);
+  const storeFile = ts.createSourceFile("terminalStore.ts", terminalStoreSource, ts.ScriptTarget.Latest, true);
+  function findHookBody(node) {
+    if (ts.isPropertyAssignment(node) && ts.isIdentifier(node.name)
+      && node.name.text === "handleCliHookEvent" && ts.isArrowFunction(node.initializer)) {
+      return node.initializer.body.getText(storeFile);
+    }
+    return ts.forEachChild(node, findHookBody);
+  }
+  const hookBody = findHookBody(storeFile);
+  assert.equal(typeof hookBody, "string");
 
   assert.match(
     hookBody,

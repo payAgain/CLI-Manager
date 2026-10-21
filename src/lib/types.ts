@@ -434,6 +434,8 @@ export interface TerminalSession {
   /** 仅 kind="subagent-transcript" 时存在：子 Agent 元数据。 */
   subagent?: {
     parentSessionId: string;
+    /** Last generated title, so transcript metadata never overwrites a user rename. */
+    generatedTitle?: string;
     agentId?: string;
     toolUseId?: string;
     agentType?: string;

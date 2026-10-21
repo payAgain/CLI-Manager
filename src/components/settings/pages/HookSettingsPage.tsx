@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
-import { ActionIcon, Badge, Box, Button, Card, Divider, Group, NumberInput, SegmentedControl, Stack, Switch, Text, TextInput } from "@mantine/core";
+import { ActionIcon, Badge, Box, Button, Card, Divider, Group, NumberInput, SegmentedControl, Select, Stack, Switch, Text, TextInput } from "@mantine/core";
 import { Play, CheckCircle, HelpCircle, ChevronDown, ChevronUp, Folder, FileCode, Copy, Check, X, Activity, Bell, ShieldAlert, ToggleRight, AlertTriangle, BellOff, XCircle, Layers } from "lucide-react";
 import { useSettingsStore, type HookEventType, type HookSettingsSectionKey } from "@/stores/settingsStore";
 import { getErrorMessage, getPiHookErrorMessage } from "@/lib/hookErrors";
 import { pickByLanguage, useI18n, type AppLanguage } from "@/lib/i18n";
 import { ThirdPartyNotificationSection } from "../ThirdPartyNotificationSection";
+import { SettingsField } from "../SettingsField";
+import type { SubagentTranscriptMode } from "@/lib/subagentTranscript";
 
 type HookInstallStatus = "directoryMissing" | "notInstalled" | "partialInstalled" | "installed";
 type HookTool = "claude" | "codex" | "pi" | "grok";
@@ -363,6 +365,7 @@ export function HookSettingsPage() {
   const hookPopupAutoCloseEnabled = useSettingsStore((s) => s.hookPopupAutoCloseEnabled);
   const hookPopupAutoCloseSeconds = useSettingsStore((s) => s.hookPopupAutoCloseSeconds);
   const hookSubagentSplitViewEnabled = useSettingsStore((s) => s.hookSubagentSplitViewEnabled);
+  const subagentTranscriptMode = useSettingsStore((s) => s.subagentTranscriptMode);
   const claudeHookBridgeEnabled = useSettingsStore((s) => s.claudeHookBridgeEnabled);
   const codexHookBridgeEnabled = useSettingsStore((s) => s.codexHookBridgeEnabled);
   const piHookBridgeEnabled = useSettingsStore((s) => s.piHookBridgeEnabled);
@@ -913,6 +916,18 @@ export function HookSettingsPage() {
             checked={hookSubagentSplitViewEnabled}
             onCheckedChange={(checked) => void updateSetting("hookSubagentSplitViewEnabled", checked)}
           />
+          <SettingsField label={t("subagentTranscript.mode.label")} description={t("subagentTranscript.mode.description")}>
+            <Select<SubagentTranscriptMode>
+              value={subagentTranscriptMode}
+              onChange={(value) => { if (value) void updateSetting("subagentTranscriptMode", value); }}
+              data={[
+                { value: "summary", label: t("subagentTranscript.mode.summary") },
+                { value: "full", label: t("subagentTranscript.mode.full") },
+              ]}
+              allowDeselect={false}
+              size="xs"
+            />
+          </SettingsField>
           <Card className="border border-border bg-surface-container-low" p="sm" radius="lg">
             <Group justify="space-between" align="center" gap="md">
               <Box>

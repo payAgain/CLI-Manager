@@ -44,7 +44,7 @@ test("Codex child stop upgrades the transcript and finishes the same resolved pa
 });
 
 test("Codex child turn callbacks bypass parent task and notification processing", () => {
-  for (const name of ["SessionStart","UserPromptSubmit","Stop"]) {
+  for (const name of ["SessionStart","UserPromptSubmit","Stop","StopFailure"]) {
     const {handlers} = harness();
     assert.equal(routeSubagentHook(event({event:name}),handlers),true);
     assert.equal(routeSubagentHook(event({event:name,agentId:null}),handlers),false);

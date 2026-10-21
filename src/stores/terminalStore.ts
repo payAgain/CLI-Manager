@@ -1,4 +1,5 @@
 import { useCommandHistoryStore } from "./commandHistoryStore";
+import { readSubagentTranscriptLifecycle, type SubagentTranscriptCursor, type SubagentTranscriptStatus } from "../lib/subagentTranscript";
 import { acceptsAgentHook, applyAgentDetection, applyHookAgentIdentity, type AgentDetection } from "../lib/terminalAgent";
 import { create } from "zustand";
 import { applyAgentLaunchPermissions } from "../lib/agentLaunchPermissions";
@@ -208,6 +209,8 @@ export interface CliHookPayload {
 export interface SubagentTranscriptContent {
   content: string;
   ended: boolean;
+  status?: SubagentTranscriptStatus;
+  lifecycle?: SubagentTranscriptCursor;
   source: SubagentTranscriptSource;
   truncatedBytes?: number;
   /** 重置序号：reset 或前部裁剪时自增；序号不变 ⇒ content 相对上次为纯尾部追加，消费方可增量解析。 */
@@ -325,7 +328,7 @@ interface TerminalStore {
   /** 收到 CLI SubagentStart：在发起 Tab 所在 pane 分屏出只读转录面板并开始 tail。 */
   openSubagentTranscript: (payload: CliHookPayload) => Promise<void>;
   /** 收到 CLI SubagentStop：标记完成并延迟关闭对应子 Agent 转录面板。 */
-  finishSubagentTranscript: (payload: CliHookPayload) => void;
+  finishSubagentTranscript: (payload: CliHookPayload, status?: SubagentTranscriptStatus) => void;
   /** tail 增量推送：追加（reset=true 时替换）某转录面板内容。 */
   appendSubagentTranscript: (key: string, content: string, reset: boolean) => void;
 }
@@ -425,29 +428,12 @@ const subagentTranscriptRetryDiagnostics = new Map<string, {
   attemptCount: number;
   lastDelayMs: number;
 }>();
-const SUBAGENT_CLOSE_DELAY_MS = 1500;
-const SUBAGENT_CHILD_JSONL_CLOSE_DELAY_MS = 10_000;
 const SUBAGENT_DISCOVERY_INTERVAL_MS = 1000;
 const SUBAGENT_DISCOVERY_FAST_WINDOW_MS = 15000;
 const SUBAGENT_DISCOVERY_SLOW_INTERVAL_MS = 5000;
 const SUBAGENT_DIRECTORY_DISCOVERY_TTL_MS = 15000;
 const PTY_ORPHAN_RECONCILE_INTERVAL_MS = 30_000;
 const TERMINAL_STORE_IN_TAURI = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
-
-function hasCodexTerminalEvent(content: string): boolean {
-  for (const line of content.split("\n")) {
-    if (!line.trim()) continue;
-    try {
-      const record = JSON.parse(line) as { type?: string; payload?: { type?: string } };
-      if (record.type === "event_msg" && (record.payload?.type === "task_complete" || record.payload?.type === "turn_aborted")) {
-        return true;
-      }
-    } catch {
-      // 尾部可能是不完整 JSONL，等待下一次追加。
-    }
-  }
-  return false;
-}
 
 type WindowWithPtyOrphanTimer = Window & {
   __CLI_MANAGER_PTY_ORPHAN_RECONCILE_TIMER__?: ReturnType<typeof setInterval>;
@@ -588,7 +574,7 @@ function buildSubagentTitle(
   existingSubagentCount: number
 ): string {
   const parentTitle = parentSession?.title || "Terminal";
-  const agentLabel = agentType || "子Agent";
+  const agentLabel = agentType || translateCurrent("subagentTranscript.title");
 
   // 如果同一父终端已经有子 Agent，添加序号
   if (existingSubagentCount > 0) {
@@ -3364,6 +3350,12 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
             sessions.filter((s) => s.kind === "subagent-transcript" && s.subagent?.parentSessionId === parentTabId && s.id !== pseudoId).length
           )
         : undefined;
+      const restarting = payload.event === "SubagentStart" || payload.event === "SessionStart" || payload.event === "UserPromptSubmit";
+      if (restarting) {
+        const timer = subagentCloseTimers.get(pseudoId);
+        if (timer) clearTimeout(timer);
+        subagentCloseTimers.delete(pseudoId);
+      }
 
       set((state) => ({
         sessions: state.sessions.map((session) =>
@@ -3376,6 +3368,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
                   agentId: agentId ?? session.subagent.agentId,
                   toolUseId: toolUseId ?? session.subagent.toolUseId,
                   agentType: agentType ?? session.subagent.agentType,
+                  generatedTitle: newTitle ?? session.subagent.generatedTitle,
                   source,
                 },
               }
@@ -3383,7 +3376,10 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
         ),
         subagentTranscripts: {
           ...state.subagentTranscripts,
-          [pseudoId]: { ...(state.subagentTranscripts[pseudoId] ?? { content: "", ended: false, resetSeq: 0 }), ended: false, source },
+          [pseudoId]: {
+            ...(state.subagentTranscripts[pseudoId] ?? { content: "", ended: false, resetSeq: 0 }), source,
+            ...(restarting ? { ended: false, status: "running" as const } : {}),
+          },
         },
       }));
       await subscribeAvailableChild();
@@ -3429,6 +3425,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
       kind: "subagent-transcript",
       subagent: {
         parentSessionId: parentTabId,
+        generatedTitle: buildSubagentTitle(parentSession, agentType, existingSubagentCount),
         agentId: agentId ?? undefined,
         toolUseId: toolUseId ?? undefined,
         agentType: agentType ?? undefined,
@@ -3463,7 +3460,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     set({
       sessions: newSessions,
       ...workspanState,
-      subagentTranscripts: { ...state.subagentTranscripts, [pseudoId]: { content: "", ended: false, resetSeq: 0, source } },
+      subagentTranscripts: { ...state.subagentTranscripts, [pseudoId]: { content: "", ended: false, status: "running", resetSeq: 0, source } },
     });
 
     // 持久化（sessionStore 会过滤掉转录伪会话）。
@@ -3473,7 +3470,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     await subscribeAvailableChild();
   },
 
-  finishSubagentTranscript: (payload) => {
+  finishSubagentTranscript: (payload, status) => {
     const sessionId = findSubagentSessionId(get().sessions, payload);
     if (!sessionId) {
       const candidates = get().sessions.filter(
@@ -3520,24 +3517,25 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
       const prev = state.subagentTranscripts[sessionId];
       if (!prev) return state;
       return {
-        subagentTranscripts: { ...state.subagentTranscripts, [sessionId]: { ...prev, ended: true } },
+        subagentTranscripts: { ...state.subagentTranscripts, [sessionId]: {
+          ...prev, ended: true,
+          status: status ?? (payload.event === "StopFailure" ? "failed"
+            : prev.lifecycle?.status && prev.lifecycle.status !== "running" ? prev.lifecycle.status : "completed"),
+        } },
       };
     });
 
     const existingTimer = subagentCloseTimers.get(sessionId);
     if (existingTimer) clearTimeout(existingTimer);
     const settings = useSettingsStore.getState();
-    const closeDelayMs =
-      settings.hookPopupAutoCloseEnabled
-        ? settings.hookPopupAutoCloseSeconds * 1000
-        : currentTranscript?.source.kind === "child-jsonl" || payload.source === "codex"
-          ? SUBAGENT_CHILD_JSONL_CLOSE_DELAY_MS
-          : SUBAGENT_CLOSE_DELAY_MS;
+    if (!settings.hookPopupAutoCloseEnabled) return;
+    const closeDelayMs = settings.hookPopupAutoCloseSeconds * 1000;
     logInfo("[subagent_transcript] schedule transcript close", { sessionId, closeDelayMs, sourceKind: currentTranscript?.source.kind });
     const timer = setTimeout(() => {
       subagentCloseTimers.delete(sessionId);
       const store = useTerminalStore.getState();
-      if (!store.sessions.some((session) => session.id === sessionId)) return;
+      if (!useSettingsStore.getState().hookPopupAutoCloseEnabled) return;
+      if (!store.sessions.some((session) => session.id === sessionId) || !store.subagentTranscripts[sessionId]?.ended) return;
       void store.closeSession(sessionId);
     }, closeDelayMs);
     subagentCloseTimers.set(sessionId, timer);
@@ -3545,11 +3543,20 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
 
   appendSubagentTranscript: (key, content, reset) => {
     const session = get().sessions.find((candidate) => candidate.id === key);
+    const previous = get().subagentTranscripts[key];
+    if (!previous) return;
+    const lifecycle = readSubagentTranscriptLifecycle(content, reset ? undefined : previous.lifecycle, session?.subagent?.agentId);
+    const restarting = lifecycle.status === "running" && previous.ended;
+    if (restarting) {
+      const timer = subagentCloseTimers.get(key);
+      if (timer) clearTimeout(timer);
+      subagentCloseTimers.delete(key);
+    }
     const shouldFinish = Boolean(
       session?.kind === "subagent-transcript"
       && session.subagent
       && !get().subagentTranscripts[key]?.ended
-      && hasCodexTerminalEvent(content),
+      && lifecycle.status && lifecycle.status !== "running",
     );
     set((state) => {
       const prev = state.subagentTranscripts[key];
@@ -3593,10 +3600,18 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
         });
       }
       return {
+        ...(lifecycle.nickname && session?.subagent?.generatedTitle === session?.title ? {
+          sessions: state.sessions.map((item) => item.id === key && item.subagent
+            ? { ...item, title: lifecycle.nickname!, subagent: { ...item.subagent, generatedTitle: lifecycle.nickname } }
+            : item),
+        } : {}),
         subagentTranscripts: {
           ...state.subagentTranscripts,
           [key]: {
             ...prev,
+            lifecycle,
+            status: lifecycle.status ?? prev.status,
+            ...(restarting ? { ended: false } : {}),
             content: nextContent,
             truncatedBytes: (reset ? 0 : prev.truncatedBytes ?? 0) + droppedChars,
             // reset 或前部裁剪都破坏"纯尾部追加"前提，自增序号通知消费方全量重解析。
@@ -3613,7 +3628,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
         source: "codex",
         sessionId: parentSessionId,
         agentId: session.subagent.agentId ?? null,
-      });
+      }, lifecycle.status);
     }
   },
 }));
