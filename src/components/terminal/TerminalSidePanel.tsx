@@ -20,15 +20,14 @@ const SessionReplayPanel = lazy(() =>
   import("./SessionReplayPanel").then((module) => ({ default: module.SessionReplayPanel }))
 );
 
-export type TerminalSidePanelTab = "stats" | "replay" | "git" | "files" | "backgroundTasks" | "subagents";
+export type TerminalSidePanelTab = "stats" | "replay" | "git" | "files" | "tasks";
 
 export const TERMINAL_SIDE_PANEL_TAB_ORDER: readonly TerminalSidePanelTab[] = [
   "stats",
   "replay",
   "git",
   "files",
-  "backgroundTasks",
-  "subagents",
+  "tasks",
 ];
 
 interface TerminalSidePanelProps {
@@ -277,7 +276,7 @@ export function TerminalSidePanel({
           </Suspense>
         )}
         {filesEnabled && activeTab === "files" ? filesPanelContent : null}
-        {(activeTab === "backgroundTasks" || activeTab === "subagents") && auxiliaryPanelContent}
+        {activeTab === "tasks" && auxiliaryPanelContent}
       </div>
     </ResizableTerminalPanelFrame>
   );

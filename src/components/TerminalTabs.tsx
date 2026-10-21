@@ -4,7 +4,7 @@ import { createPortal } from "react-dom";
 import { useShallow } from "zustand/shallow";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
-import { Bot, Layers, type LucideIcon } from "lucide-react";
+import { Layers, type LucideIcon } from "lucide-react";
 import {
   DndContext,
   DragOverlay,
@@ -51,7 +51,7 @@ import { XTermTerminal } from "./XTermTerminal";
 import { CommandTemplatePanel } from "./CommandTemplatePanel";
 import { useBackgroundOperationStore } from "../stores/backgroundOperationStore";
 import { useSshAgentIntegrationStore } from "../stores/sshAgentIntegrationStore";
-import { BackgroundTasksPanel, type BackgroundTaskMeta } from "./BackgroundTasksPanel";
+import type { BackgroundTaskMeta } from "./BackgroundTasksPanel";
 import {
   ResizableTerminalPanelFrame,
   TerminalSidePanel,
@@ -135,8 +135,8 @@ const SubagentTranscriptView = lazy(() =>
   import("./terminal/SubagentTranscriptView").then((module) => ({ default: module.SubagentTranscriptView }))
 );
 
-const SubagentBrowserPanel = lazy(() =>
-  import("./terminal/SubagentBrowserPanel").then((module) => ({ default: module.SubagentBrowserPanel }))
+const TerminalTasksPanel = lazy(() =>
+  import("./terminal/TerminalTasksPanel").then((module) => ({ default: module.TerminalTasksPanel }))
 );
 
 const SessionReplayPanel = lazy(() =>
@@ -2536,7 +2536,7 @@ export function TerminalTabs({
   const [gitOpen, setGitOpen] = useState(false);
   const [replayOpen, setReplayOpen] = useState(false);
   const [filesOpen, setFilesOpen] = useState(false);
-  const [auxiliaryPanelTab, setAuxiliaryPanelTab] = useState<"backgroundTasks" | "subagents" | null>(null);
+  const [tasksPanelOpen, setTasksPanelOpen] = useState(false);
   const [finishTarget, setFinishTarget] = useState<{ project: Project; worktree: WorktreeRecord } | null>(null);
   const [discardTarget, setDiscardTarget] = useState<{ project: Project; worktree: WorktreeRecord } | null>(null);
   const [activeToolbarDragId, setActiveToolbarDragId] = useState<string | null>(null);
@@ -2925,6 +2925,10 @@ export function TerminalTabs({
   }, [sidePanelMerged, sidePanelOpen, sidePanelTab, visibleSidePanelTabs]);
 
   useEffect(() => {
+    if (!terminalToolbarVisibility.tasks) setTasksPanelOpen(false);
+  }, [terminalToolbarVisibility.tasks]);
+
+  useEffect(() => {
     if (!historyOpen) setHistoryExpanded(false);
     if (!historyOpen && activeWorkspaceTab === "history") setActiveWorkspaceTab("terminal");
   }, [activeWorkspaceTab, historyOpen]);
@@ -2936,7 +2940,7 @@ export function TerminalTabs({
     setGitOpen(false);
     setReplayOpen(false);
     setFilesOpen(false);
-    setAuxiliaryPanelTab(null);
+    setTasksPanelOpen(false);
   }, [historyOpen, terminalSidePanelSingleOpen]);
 
   useEffect(() => {
@@ -3088,7 +3092,7 @@ export function TerminalTabs({
       setGitOpen(false);
       setReplayOpen(false);
       setFilesOpen(false);
-      setAuxiliaryPanelTab(null);
+      setTasksPanelOpen(false);
     }
     setActiveWorkspaceTab("history");
     void openHistory({
@@ -3323,7 +3327,7 @@ export function TerminalTabs({
         setGitOpen(false);
         setReplayOpen(false);
         setFilesOpen(false);
-        setAuxiliaryPanelTab(null);
+        setTasksPanelOpen(false);
       }
       setStatsOpen(true);
     }
@@ -3353,7 +3357,7 @@ export function TerminalTabs({
         setStatsOpen(false);
         setReplayOpen(false);
         setFilesOpen(false);
-        setAuxiliaryPanelTab(null);
+        setTasksPanelOpen(false);
       }
       setGitOpen(true);
     }
@@ -3383,7 +3387,7 @@ export function TerminalTabs({
         setStatsOpen(false);
         setGitOpen(false);
         setFilesOpen(false);
-        setAuxiliaryPanelTab(null);
+        setTasksPanelOpen(false);
       }
       setReplayOpen(true);
     }
@@ -3430,7 +3434,7 @@ export function TerminalTabs({
       setStatsOpen(false);
       setGitOpen(false);
       setReplayOpen(false);
-      setAuxiliaryPanelTab(null);
+      setTasksPanelOpen(false);
     }
     setFilesOpen(true);
     return true;
@@ -3475,32 +3479,32 @@ export function TerminalTabs({
     if (sidePanelMerged) return;
     const enforce = () => {
       if (!terminalSidePanelSingleOpen && window.innerWidth >= 1100) return;
-      const openPanels = [statsOpen, gitOpen, replayOpen, filesOpen, auxiliaryPanelTab !== null].filter(Boolean).length;
+      const openPanels = [statsOpen, gitOpen, replayOpen, filesOpen, tasksPanelOpen].filter(Boolean).length;
       if (openPanels <= 1) return;
       if (statsOpen) {
         setGitOpen(false);
         setReplayOpen(false);
         setFilesOpen(false);
-        setAuxiliaryPanelTab(null);
+        setTasksPanelOpen(false);
         return;
       }
       if (gitOpen) {
         setReplayOpen(false);
         setFilesOpen(false);
-        setAuxiliaryPanelTab(null);
+        setTasksPanelOpen(false);
         return;
       }
       if (replayOpen) {
         setFilesOpen(false);
-        setAuxiliaryPanelTab(null);
+        setTasksPanelOpen(false);
         return;
       }
-      if (filesOpen) setAuxiliaryPanelTab(null);
+      if (filesOpen) setTasksPanelOpen(false);
     };
     enforce();
     window.addEventListener("resize", enforce);
     return () => window.removeEventListener("resize", enforce);
-  }, [auxiliaryPanelTab, filesOpen, gitOpen, replayOpen, sidePanelMerged, statsOpen, terminalSidePanelSingleOpen]);
+  }, [tasksPanelOpen, filesOpen, gitOpen, replayOpen, sidePanelMerged, statsOpen, terminalSidePanelSingleOpen]);
 
   useEffect(() => {
     if (!filesPanelActive) return;
@@ -3532,7 +3536,7 @@ export function TerminalTabs({
       setGitOpen(false);
       setReplayOpen(false);
       setFilesOpen(false);
-      setAuxiliaryPanelTab(null);
+      setTasksPanelOpen(false);
     }
     const project = activeSession?.projectId ? projects.find((item) => item.id === activeSession.projectId) : undefined;
     if (rejectUnsupportedCapability(project, "history")) return;
@@ -3813,26 +3817,24 @@ export function TerminalTabs({
     return () => window.clearInterval(timer);
   }, [refreshBackgroundTasks]);
 
-  const activeAuxiliaryPanel = sidePanelMerged
-    ? sidePanelOpen && (sidePanelTab === "backgroundTasks" || sidePanelTab === "subagents") ? sidePanelTab : null
-    : auxiliaryPanelTab;
+  const tasksPanelActive = sidePanelMerged ? sidePanelOpen && sidePanelTab === "tasks" : tasksPanelOpen;
 
-  const closeAuxiliaryPanel = useCallback(() => {
+  const closeTasksPanel = useCallback(() => {
     if (sidePanelMerged) setSidePanelOpen(false);
-    else setAuxiliaryPanelTab(null);
+    else setTasksPanelOpen(false);
   }, [sidePanelMerged]);
 
-  const toggleAuxiliaryPanel = useCallback((tab: "backgroundTasks" | "subagents") => {
-    if (activeAuxiliaryPanel === tab) { closeAuxiliaryPanel(); return; }
+  const handleToggleTasksPanel = useCallback(() => {
+    if (tasksPanelActive) { closeTasksPanel(); return; }
     if (terminalSidePanelSingleOpen) { closeHistory(); setActiveWorkspaceTab("terminal"); }
-    if (sidePanelMerged) { setSidePanelTab(tab); setSidePanelOpen(true); }
+    if (sidePanelMerged) { setSidePanelTab("tasks"); setSidePanelOpen(true); }
     else {
       if (terminalSidePanelSingleOpen || window.innerWidth < 1100) {
         setStatsOpen(false); setGitOpen(false); setReplayOpen(false); setFilesOpen(false);
       }
-      setAuxiliaryPanelTab(tab);
+      setTasksPanelOpen(true);
     }
-  }, [activeAuxiliaryPanel, closeAuxiliaryPanel, closeHistory, sidePanelMerged, terminalSidePanelSingleOpen]);
+  }, [tasksPanelActive, closeTasksPanel, closeHistory, sidePanelMerged, terminalSidePanelSingleOpen]);
 
   const backgroundTasks = useMemo(() => {
     const openIds = new Set(sessions.map((session) => session.id));
@@ -3864,8 +3866,7 @@ export function TerminalTabs({
             ? t("terminal.toolbar.closeFilesPanel")
             : t("terminal.toolbar.openFilesPanel"),
       stats: statsPanelActive ? t("terminal.toolbar.closeStatsPanel") : t("terminal.toolbar.openStatsPanel"),
-      backgroundTasks: t("terminal.backgroundTasks.title"),
-      subagents: t("terminal.subagents.title"),
+      tasks: t("terminal.tasks.title"),
     };
     const buttonMap: Record<string, ReactNode> = {
       new: (
@@ -3960,19 +3961,12 @@ export function TerminalTabs({
           <BarChart3 size={13} strokeWidth={1.8} />
         </button>
       ),
-      subagents: (
-        <button className="ui-focus-ring ui-icon-action ui-action-subagents" onClick={() => toggleAuxiliaryPanel("subagents")}
-          data-active={activeAuxiliaryPanel === "subagents"} aria-pressed={activeAuxiliaryPanel === "subagents"}
-          aria-label={t("terminal.subagents.title")}><Bot size={14} />
-          {terminalToolbarVisibility.showText && <span>{t("terminal.subagents.title")}</span>}
-        </button>
-      ),
-      backgroundTasks: (
-        <button className="ui-focus-ring ui-icon-action ui-action-background-tasks" onClick={() => toggleAuxiliaryPanel("backgroundTasks")}
-          data-active={activeAuxiliaryPanel === "backgroundTasks"} data-has-tasks={hasBackgroundTasks}
-          aria-pressed={activeAuxiliaryPanel === "backgroundTasks"} aria-label={t("terminal.backgroundTasks.title")}>
+      tasks: (
+        <button className="ui-focus-ring ui-icon-action ui-action-tasks" onClick={handleToggleTasksPanel}
+          data-active={tasksPanelActive} data-has-tasks={hasBackgroundTasks}
+          aria-pressed={tasksPanelActive} aria-label={t("terminal.tasks.title")}>
           <Layers size={14} strokeWidth={1.8} />
-          {terminalToolbarVisibility.showText && <span>{t("terminal.backgroundTasks.shortTitle")}</span>}
+          {terminalToolbarVisibility.showText && <span>{t("terminal.tasks.title")}</span>}
         </button>
       ),
     };
@@ -3982,9 +3976,6 @@ export function TerminalTabs({
         if (key === "new") return true;
         if (key === "fullscreen" && !onToggleFullscreen) return false;
         if (key === "systemResources") return false;
-        if (key === "backgroundTasks") {
-          return terminalToolbarVisibility.backgroundTasks === true;
-        }
         return terminalToolbarVisibility[key as keyof typeof terminalToolbarVisibility] === true;
       })
       .map((key) => ({ id: key, element: buttonMap[key] }))
@@ -4038,8 +4029,8 @@ export function TerminalTabs({
     );
   }, [
     activeToolbarDragId,
-    activeAuxiliaryPanel,
-    toggleAuxiliaryPanel,
+    tasksPanelActive,
+    handleToggleTasksPanel,
     hasBackgroundTasks,
     fullscreen,
     filePanelProject,
@@ -4607,17 +4598,17 @@ export function TerminalTabs({
               projectPath={sidePanelProjectPath}
               projectId={panelSession?.projectId}
               filesPanelContent={<FileExplorerSidebar mode="panel" onClosePanel={closeFilesPanel} />}
-              auxiliaryPanelContent={sidePanelTab === "backgroundTasks"
-                ? <BackgroundTasksPanel tasks={backgroundTasks} onRefresh={refreshBackgroundTasks} onRestored={closeAuxiliaryPanel} />
-                : sidePanelTab === "subagents" ? <Suspense fallback={null}><SubagentBrowserPanel session={panelSession} project={panelProject} /></Suspense> : null}
+              auxiliaryPanelContent={sidePanelTab === "tasks" ? <Suspense fallback={null}>
+                <TerminalTasksPanel session={panelSession} project={panelProject} tasks={backgroundTasks} onRefresh={refreshBackgroundTasks} onRestored={closeTasksPanel} />
+              </Suspense> : null}
             />
           ) : (
             <>
-              {auxiliaryPanelTab && <ResizableTerminalPanelFrame widthKey="merged" defaultWidth={TERMINAL_PANEL_WIDTH_DEFAULTS.merged}
+              {tasksPanelOpen && <ResizableTerminalPanelFrame widthKey="merged" defaultWidth={TERMINAL_PANEL_WIDTH_DEFAULTS.merged}
                 resizeLabel={t("terminal.panel.resizeSideLabel")} resizeTitle={t("terminal.panel.resizeSideTitle")}>
-                {auxiliaryPanelTab === "backgroundTasks"
-                  ? <BackgroundTasksPanel tasks={backgroundTasks} onRefresh={refreshBackgroundTasks} onRestored={closeAuxiliaryPanel} />
-                  : <Suspense fallback={null}><SubagentBrowserPanel session={panelSession} project={panelProject} /></Suspense>}
+                <Suspense fallback={null}>
+                  <TerminalTasksPanel session={panelSession} project={panelProject} tasks={backgroundTasks} onRefresh={refreshBackgroundTasks} onRestored={closeTasksPanel} />
+                </Suspense>
               </ResizableTerminalPanelFrame>}
               {statsOpen && panelCapabilities.statistics && (
                 <ResizableTerminalPanelFrame

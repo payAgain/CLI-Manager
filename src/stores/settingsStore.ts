@@ -192,8 +192,7 @@ export interface TerminalToolbarVisibilitySettings {
   files: boolean;
   stats: boolean;
   gitChanges: boolean;
-  backgroundTasks: boolean;
-  subagents: boolean;
+  tasks: boolean;
   showText: boolean;
 }
 
@@ -446,11 +445,10 @@ const DEFAULTS: Settings = {
     files: true,
     stats: true,
     gitChanges: true,
-    backgroundTasks: true,
-    subagents: true,
+    tasks: true,
     showText: false,
   },
-  terminalToolbarOrder: ["new", "templates", "fullscreen", "sessionHistory", "replay", "files", "gitChanges", "stats", "subagents", "backgroundTasks"],
+  terminalToolbarOrder: ["new", "templates", "fullscreen", "sessionHistory", "replay", "files", "gitChanges", "stats", "tasks"],
   terminalSidePanelMerged: true,
   terminalSidePanelSingleOpen: true,
   terminalSidePanelSkin: "terminal",
@@ -674,8 +672,9 @@ export function migrateTerminalToolbarVisibility(value: unknown): TerminalToolba
     files: typeof raw.files === "boolean" ? raw.files : defaults.files,
     stats: typeof raw.stats === "boolean" ? raw.stats : defaults.stats,
     gitChanges: typeof raw.gitChanges === "boolean" ? raw.gitChanges : defaults.gitChanges,
-    backgroundTasks: typeof raw.backgroundTasks === "boolean" ? raw.backgroundTasks : defaults.backgroundTasks,
-    subagents: typeof raw.subagents === "boolean" ? raw.subagents : defaults.subagents,
+    // Both legacy entries were visible by default. Keep the combined entry
+    // visible when either was available, and preserve an explicit new choice.
+    tasks: typeof raw.tasks === "boolean" ? raw.tasks : raw.subagents !== false || raw.backgroundTasks !== false,
     showText: typeof raw.showText === "boolean" ? raw.showText : defaults.showText,
   };
 }
@@ -685,7 +684,9 @@ export function migrateTerminalToolbarOrder(value: unknown): string[] {
   if (!Array.isArray(value)) return [...defaults];
 
   const validKeys = new Set(defaults);
-  const filtered = value.filter((k): k is string => typeof k === "string" && validKeys.has(k));
+  const filtered = [...new Set(value
+    .map(key => key === "subagents" || key === "backgroundTasks" ? "tasks" : key)
+    .filter((key): key is string => typeof key === "string" && validKeys.has(key)))];
   const missing = defaults.filter((k) => !filtered.includes(k));
   return [...filtered, ...missing];
 }

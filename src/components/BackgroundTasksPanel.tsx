@@ -8,7 +8,7 @@ import { useSshAgentIntegrationStore } from "../stores/sshAgentIntegrationStore"
 import { useSshHostStore } from "../stores/sshHostStore";
 import { useTerminalStore, type TabNotificationState } from "../stores/terminalStore";
 import { ConfirmDialog } from "./ConfirmDialog";
-import { Activity, AlertTriangle, Check, Copy, RefreshCw, X } from "./icons";
+import { Activity, AlertTriangle, Check, Copy, Layers, RefreshCw, X } from "./icons";
 
 export interface BackgroundTaskMeta {
   sessionId: string;
@@ -27,6 +27,7 @@ interface Props {
   tasks: BackgroundTaskMeta[];
   onRefresh: () => Promise<void>;
   onRestored?: () => void;
+  refreshSeq?: number;
 }
 
 type BackgroundTaskDisplayStatus = "running" | "attention" | "done" | "failed";
@@ -93,14 +94,14 @@ function resolveTaskStatus(task: BackgroundTaskMeta): BackgroundTaskDisplayStatu
   return task.alive ? "running" : "done";
 }
 
-export function BackgroundTasksPanel({ tasks, onRefresh, onRestored }: Props) {
+export function BackgroundTasksPanel({ tasks, onRefresh, onRestored, refreshSeq = 0 }: Props) {
   const { t, language } = useI18n();
   const mounted = useRef(false);
   useEffect(() => {
     mounted.current = true;
     void onRefresh();
     return () => { mounted.current = false; };
-  }, [onRefresh]);
+  }, [onRefresh, refreshSeq]);
   const [discardIntent, setDiscardIntent] = useState<BackgroundTaskMeta | null>(null);
   const [discardPending, setDiscardPending] = useState(false);
   const persistedSessions = useSessionStore((state) => state.sessions);
@@ -180,42 +181,31 @@ export function BackgroundTasksPanel({ tasks, onRefresh, onRestored }: Props) {
 
   return (
     <>
-      <section id="background-tasks-panel" className="background-tasks-panel flex h-full min-h-0 flex-col">
-        <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-2">
-          <div className="text-xs font-semibold text-text-primary">{t("terminal.backgroundTasks.title")}</div>
-          <div className="flex items-center gap-1">
-            <button className="ui-focus-ring ui-icon-action" onClick={() => void onRefresh()} aria-label={t("common.refresh")}><RefreshCw size={13} /></button>
+      <section id="background-tasks-panel" className="background-tasks-panel" aria-label={t("terminal.backgroundTasks.title")}>
+        <header className="flex h-8 items-center gap-2 px-3">
+          <Layers size={14} className="shrink-0 text-text-muted" />
+          <h3 className="text-[11px] font-medium text-text-primary">{t("terminal.backgroundTasks.title")}</h3>
+          <span className="text-[10px] tabular-nums text-text-muted">{rows.length + operationRows.length + agentRows.length}</span>
+          <div className="ml-auto flex items-center gap-1">
             {hasFinishedOperation && (
               <button className="background-tasks-panel__action ui-flat-action px-2 py-1 text-[10px]" onClick={clearFinished}>
                 {t("backgroundOperations.clearFinished")}
               </button>
             )}
           </div>
-        </div>
-        <div className="background-tasks-panel__list min-h-0 flex-1">
+        </header>
+        <div className="background-tasks-panel__list">
           {!hasAnyTask ? (
-            <div className="background-tasks-panel__empty flex min-h-32 flex-col items-center justify-center gap-1 rounded-lg px-4 py-6 text-center">
-              <div className="text-xs font-medium text-text-primary">
-                {t("terminal.backgroundTasks.empty")}
-              </div>
-              <div className="text-[11px] text-text-muted">
-                {t("terminal.backgroundTasks.emptyDescription")}
-              </div>
-            </div>
+            <p className="px-1 py-1 text-[11px] text-text-muted" title={t("terminal.backgroundTasks.emptyDescription")}>{t("terminal.backgroundTasks.empty")}</p>
           ) : null}
 
-          {(operationRows.length > 0 || agentRows.length > 0) && (
-            <div className="mb-2 px-1 text-[10px] font-semibold uppercase tracking-wide text-text-muted">
-              {t("backgroundOperations.sectionTitle")}
-            </div>
-          )}
           {agentRows.map((job) => {
             const status = job.status === "succeeded" ? "done" : job.status;
             const hostName = sshHosts.find((host) => host.id === job.hostId)?.name ?? job.hostId;
             const phaseKey = AGENT_INSTALL_PHASE_KEYS[job.phase] ?? AGENT_INSTALL_PHASE_KEYS.resolvingRelease;
             const error = job.error ? resolveOperationError(job.error) : null;
             return (
-              <div key={`agent:${job.hostId}`} className="background-tasks-panel__item mb-2 rounded-lg p-2" role={job.status === "failed" ? "alert" : undefined}>
+              <div key={`agent:${job.hostId}`} className="background-tasks-panel__item px-1 py-2" role={job.status === "failed" ? "alert" : undefined}>
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0">
                     <div className="truncate text-xs font-medium text-text-primary">{t("backgroundOperations.agentInstall.title")}</div>
@@ -254,7 +244,7 @@ export function BackgroundTasksPanel({ tasks, onRefresh, onRestored }: Props) {
             const error = operation.status === "failed" ? resolveOperationError(operation.error) : null;
             const progress = operation.progress ?? (operation.status === "running" ? 45 : operation.status === "succeeded" ? 100 : 0);
             return (
-              <div key={operation.id} className="background-tasks-panel__item mb-2 rounded-lg p-2" role={operation.status === "failed" ? "alert" : undefined}>
+              <div key={operation.id} className="background-tasks-panel__item px-1 py-2" role={operation.status === "failed" ? "alert" : undefined}>
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0">
                     <div className="truncate text-xs font-medium text-text-primary">{t(operation.titleKey)}</div>
@@ -296,24 +286,18 @@ export function BackgroundTasksPanel({ tasks, onRefresh, onRestored }: Props) {
             );
           })}
 
-          {rows.length > 0 && (operationRows.length > 0 || agentRows.length > 0) && (
-            <div className="mb-2 mt-3 px-1 text-[10px] font-semibold uppercase tracking-wide text-text-muted">
-              {t("terminal.backgroundTasks.title")}
-            </div>
-          )}
           {rows.map((task) => {
             const terminalState = task.status === "done" || task.status === "failed";
             return (
-              <div key={task.sessionId} className="background-tasks-panel__item mb-2 rounded-lg p-2 last:mb-0">
+              <div key={task.sessionId} className="background-tasks-panel__item px-1 py-2">
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0">
                     <div className="truncate text-xs font-medium text-text-primary">{task.title}</div>
-                  {task.projectName && (
-                    <div className="truncate text-[10px] text-text-muted">{task.projectName}</div>
-                  )}
-                  {task.location && (
-                    <div className="truncate text-[10px] text-text-muted">{task.location}</div>
-                  )}
+                    {(task.projectName || task.location) && (
+                      <div className="truncate text-[10px] text-text-muted" title={task.location || task.projectName}>
+                        {task.projectName}{task.projectName && task.location ? " · " : ""}{task.location}
+                      </div>
+                    )}
                   </div>
                   <span
                     className="background-tasks-panel__status flex shrink-0 items-center gap-1 text-[10px]"
@@ -329,25 +313,27 @@ export function BackgroundTasksPanel({ tasks, onRefresh, onRestored }: Props) {
                     {task.status === "failed" ? t("terminal.backgroundTasks.failed") : null}
                   </span>
                 </div>
-                <div className="mt-1 text-[10px] text-text-muted">
-                  {new Date(task.createdAtMs).toLocaleString(language, { hour12: false })}
-                </div>
-                <div className="mt-2 flex justify-end gap-1.5">
-                  <button
-                    className="background-tasks-panel__action ui-flat-action px-2 py-1 text-[11px]"
-                    onClick={() => void handleRestore(task.sessionId)}
-                  >
-                    {t("terminal.backgroundTasks.restore")}
-                  </button>
-                  <button
-                    className="background-tasks-panel__action background-tasks-panel__action--danger ui-flat-action px-2 py-1 text-[11px]"
-                    onClick={() => setDiscardIntent(task)}
-                  >
-                    <X size={11} />
-                    {terminalState
-                      ? t("terminal.backgroundTasks.delete")
-                      : t("terminal.backgroundTasks.discard")}
-                  </button>
+                <div className="mt-1 flex items-center justify-between gap-2">
+                  <span className="text-[10px] text-text-muted" title={new Date(task.createdAtMs).toLocaleString(language, { hour12: false })}>
+                    {new Date(task.createdAtMs).toLocaleString(language, { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false })}
+                  </span>
+                  <div className="flex shrink-0 gap-1">
+                    <button
+                      className="background-tasks-panel__action ui-flat-action px-1.5 py-0.5 text-[10px]"
+                      onClick={() => void handleRestore(task.sessionId)}
+                    >
+                      {t("terminal.backgroundTasks.restore")}
+                    </button>
+                    <button
+                      className="background-tasks-panel__action background-tasks-panel__action--danger ui-flat-action px-1.5 py-0.5 text-[10px]"
+                      onClick={() => setDiscardIntent(task)}
+                    >
+                      <X size={11} />
+                      {terminalState
+                        ? t("terminal.backgroundTasks.delete")
+                        : t("terminal.backgroundTasks.discard")}
+                    </button>
+                  </div>
                 </div>
               </div>
             );
