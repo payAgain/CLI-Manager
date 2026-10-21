@@ -59,6 +59,14 @@ pub struct TerminalMemorySnapshot {
     total_bytes: u64,
 }
 
+fn parent_pid(pid: u32, processes: &HashMap<u32, &ProcessSample>) -> Option<u32> {
+    let child = processes.get(&pid)?;
+    let parent = processes.get(&child.parent?)?;
+    (parent.pid != pid && crate::process_attribution::parent_precedes_child(
+        child.started_at, parent.started_at,
+    )).then_some(parent.pid)
+}
+
 fn belongs_to(pid: u32, root: u32, processes: &HashMap<u32, &ProcessSample>) -> bool {
     let mut current = pid;
     let mut visited = HashSet::new();
@@ -66,7 +74,7 @@ fn belongs_to(pid: u32, root: u32, processes: &HashMap<u32, &ProcessSample>) -> 
         if current == root {
             return true;
         }
-        let Some(parent) = processes.get(&current).and_then(|process| process.parent) else {
+        let Some(parent) = parent_pid(current, processes) else {
             break;
         };
         current = parent;
@@ -89,7 +97,7 @@ fn nearest_terminal(
         if let Some(index) = roots.get(&current) {
             return Some(*index);
         }
-        current = processes.get(&current)?.parent?;
+        current = parent_pid(current, processes)?;
     }
     None
 }
@@ -114,7 +122,7 @@ fn agent_owner(
         if current == terminal_root {
             break;
         }
-        let Some(parent) = process.parent else { break };
+        let Some(parent) = parent_pid(current, processes) else { break };
         current = parent;
     }
     owner
@@ -497,6 +505,43 @@ mod tests {
         assert_eq!(snapshot.terminals[1].total_bytes, None);
         assert_eq!(snapshot.unassigned_bytes, 3);
         assert_eq!(snapshot.framework.total_bytes, 3);
+    }
+
+    #[test]
+    fn reused_app_child_pid_does_not_claim_system_and_unrelated_webviews() {
+        let mut old_system = process(40, 2, "wininit.exe", 500);
+        old_system.started_at = 50;
+        let list = vec![
+            process(1, 0, "cli-manager.exe", 10),
+            process(2, 1, "msedgewebview2.exe", 20),
+            old_system,
+            process(41, 40, "services.exe", 600),
+            process(42, 41, "msedgewebview2.exe", 700),
+        ];
+        let snapshot = aggregate(&list, 1, None, &[], false);
+        assert_eq!(snapshot.framework.app_bytes, 10);
+        assert_eq!(snapshot.framework.webview_bytes, 20);
+        assert_eq!(snapshot.framework.helper_bytes, 0);
+        assert_eq!(snapshot.total_bytes, 30);
+    }
+
+    #[test]
+    fn reused_terminal_child_pid_does_not_claim_or_relabel_unrelated_processes() {
+        let mut old_child = process(22, 21, "claude.exe", 500);
+        old_child.started_at = 50;
+        let list = vec![
+            process(1, 0, "cli-manager.exe", 1),
+            process(10, 1, "cli-manager.exe", 2),
+            process(20, 10, "pwsh.exe", 3),
+            process(21, 20, "codex.exe", 4),
+            old_child,
+            process(23, 22, "node.exe", 600),
+        ];
+        let snapshot = aggregate(&list, 1, Some(10), &[session("one", Some(20))], true);
+        assert_eq!(snapshot.terminals[0].total_bytes, Some(7));
+        assert_eq!(snapshot.terminals[0].agents.len(), 1);
+        assert_eq!(snapshot.terminals[0].agents[0].name, "Codex");
+        assert_eq!(snapshot.total_bytes, 10);
     }
 
     #[test]

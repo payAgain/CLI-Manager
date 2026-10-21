@@ -241,10 +241,9 @@ fn log_snapshot(system: &System, cpu_sample_ready: bool) {
     let parents = system
         .processes()
         .iter()
-        .filter_map(|(pid, process)| {
-            process
-                .parent()
-                .map(|parent| (pid.as_u32(), parent.as_u32()))
+        .filter_map(|(pid, _)| {
+            crate::process_attribution::parent_pid(system, *pid)
+                .map(|parent| (pid.as_u32(), parent))
         })
         .collect::<HashMap<_, _>>();
 

@@ -31,7 +31,7 @@ impl AgentTracker {
             .system
             .processes()
             .iter()
-            .map(|(pid, p)| (pid.as_u32(), p.parent().map(|pid| pid.as_u32())))
+            .map(|(pid, _)| (pid.as_u32(), crate::process_attribution::parent_pid(&self.system, *pid)))
             .collect();
         let daemon_pid = std::process::id();
         let managed: Vec<Pid> = parents
@@ -103,7 +103,7 @@ impl AgentTracker {
                 (
                     pid.as_u32(),
                     Process {
-                        parent: process.parent().map(|pid| pid.as_u32()),
+                        parent: parents.get(&pid.as_u32()).copied().flatten(),
                         started_at: process.start_time(),
                         tool: identify_agent(
                             &process
@@ -130,9 +130,12 @@ impl AgentTracker {
             if current == root {
                 return true;
             }
-            let Some(parent) = self.processes.get(&current).and_then(|p| p.parent) else {
+            let Some(child) = self.processes.get(&current) else { break };
+            let Some(parent) = child.parent else { break };
+            let Some(parent_process) = self.processes.get(&parent) else { break };
+            if !crate::process_attribution::parent_precedes_child(child.started_at, parent_process.started_at) {
                 break;
-            };
+            }
             current = parent;
         }
         false
@@ -225,6 +228,7 @@ mod tests {
     fn tracker() -> AgentTracker {
         AgentTracker {
             processes: HashMap::from([
+                (1, process(0, None, false)),
                 (20, process(1, None, false)),
                 (21, process(20, Some("codex"), true)),
                 (22, process(21, Some("codex"), true)),
@@ -242,6 +246,18 @@ mod tests {
         assert_eq!(agent.tool, "codex");
         assert_eq!(agent.pid, 21);
         assert!(!tracker.belongs_to(31, 20));
+    }
+
+    #[test]
+    fn reused_parent_pid_does_not_bind_an_unrelated_agent() {
+        let mut tracker = tracker();
+        tracker.processes.get_mut(&21).unwrap().started_at = 9;
+        assert!(!tracker.belongs_to(21, 20));
+        assert_eq!(tracker.discover(&meta(), 1, 100), Some(None));
+        tracker.processes.get_mut(&20).unwrap().started_at = 9;
+        let mut metadata = meta();
+        metadata.root_started_at = Some(9);
+        assert_eq!(tracker.discover(&metadata, 1, 100), None);
     }
     #[test]
     fn pi_package_discovery_binds_only_its_own_pane_and_clears_on_exit() {
