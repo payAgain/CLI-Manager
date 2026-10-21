@@ -192,13 +192,8 @@ export interface TerminalToolbarVisibilitySettings {
   files: boolean;
   stats: boolean;
   gitChanges: boolean;
-  systemResources: boolean;
   backgroundTasks: boolean;
   showText: boolean;
-}
-
-export interface SidebarToolbarVisibilitySettings {
-  gitChanges: boolean;
 }
 
 export type TerminalStatsCardVisibilitySettings = Record<TerminalStatsCardKey, boolean>;
@@ -316,7 +311,6 @@ export interface Settings {
   terminalNewlineShortcut: TerminalNewlineShortcut;
   unsplitBehavior: UnsplitBehavior;
   terminalToolbarVisibility: TerminalToolbarVisibilitySettings;
-  sidebarToolbarVisibility: SidebarToolbarVisibilitySettings;
   terminalToolbarOrder: string[];
   /** 是否把实时统计与 Git 变更合并为带 Tab 的单一侧边面板；关闭后两者可并排独立显示。 */
   terminalSidePanelMerged: boolean;
@@ -328,7 +322,6 @@ export interface Settings {
   terminalStatsCardOrder: TerminalStatsCardOrderSettings;
   systemResourceCardVisibility: SystemResourceCardVisibilitySettings;
   systemResourceCardOrder: SystemResourceCardOrderSettings;
-  systemResourceMonitoringEnabled: boolean;
   shellRuntimeMonitoringEnabled: boolean;
   commandHistoryEnabled: boolean;
   windowsConptyCompatibilityFixEnabled: boolean;
@@ -347,7 +340,6 @@ export interface Settings {
   terminalSettingsSectionsExpanded: TerminalSettingsSectionsExpanded;
   terminalPaneMarker: TerminalPaneMarkerSettings;
   cliArgsHistory: CliArgsHistoryEntry[];
-  hookPopupNotificationsEnabled: boolean;
   hookPopupAutoCloseEnabled: boolean;
   hookPopupAutoCloseSeconds: number;
   hookSubagentSplitViewEnabled: boolean;
@@ -453,14 +445,10 @@ const DEFAULTS: Settings = {
     files: true,
     stats: true,
     gitChanges: true,
-    systemResources: false,
     backgroundTasks: true,
     showText: false,
   },
-  sidebarToolbarVisibility: {
-    gitChanges: true,
-  },
-  terminalToolbarOrder: ["new", "templates", "fullscreen", "sessionHistory", "replay", "files", "gitChanges", "stats", "systemResources", "backgroundTasks"],
+  terminalToolbarOrder: ["new", "templates", "fullscreen", "sessionHistory", "replay", "files", "gitChanges", "stats", "backgroundTasks"],
   terminalSidePanelMerged: true,
   terminalSidePanelSingleOpen: true,
   terminalSidePanelSkin: "terminal",
@@ -484,7 +472,6 @@ const DEFAULTS: Settings = {
     processes: true,
   },
   systemResourceCardOrder: [...SYSTEM_RESOURCE_CARD_KEYS],
-  systemResourceMonitoringEnabled: false,
   shellRuntimeMonitoringEnabled: false,
   commandHistoryEnabled: true,
   windowsConptyCompatibilityFixEnabled: true,
@@ -510,7 +497,6 @@ const DEFAULTS: Settings = {
   terminalSettingsSectionsExpanded: { ...TERMINAL_SETTINGS_SECTIONS_EXPANDED_DEFAULT },
   terminalPaneMarker: { ...DEFAULT_TERMINAL_PANE_MARKER_SETTINGS },
   cliArgsHistory: [],
-  hookPopupNotificationsEnabled: true,
   hookPopupAutoCloseEnabled: true,
   hookPopupAutoCloseSeconds: 60,
   hookSubagentSplitViewEnabled: true,
@@ -686,21 +672,8 @@ export function migrateTerminalToolbarVisibility(value: unknown): TerminalToolba
     files: typeof raw.files === "boolean" ? raw.files : defaults.files,
     stats: typeof raw.stats === "boolean" ? raw.stats : defaults.stats,
     gitChanges: typeof raw.gitChanges === "boolean" ? raw.gitChanges : defaults.gitChanges,
-    systemResources: typeof raw.systemResources === "boolean" ? raw.systemResources : defaults.systemResources,
     backgroundTasks: typeof raw.backgroundTasks === "boolean" ? raw.backgroundTasks : defaults.backgroundTasks,
     showText: typeof raw.showText === "boolean" ? raw.showText : defaults.showText,
-  };
-}
-
-export function migrateSidebarToolbarVisibility(value: unknown): SidebarToolbarVisibilitySettings {
-  const defaults = DEFAULTS.sidebarToolbarVisibility;
-  if (typeof value !== "object" || value === null) {
-    return { ...defaults };
-  }
-  const raw = value as Record<string, unknown>;
-
-  return {
-    gitChanges: typeof raw.gitChanges === "boolean" ? raw.gitChanges : defaults.gitChanges,
   };
 }
 
@@ -926,7 +899,8 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
     const s = await getStore();
     const rawEntries = await s.entries();
     const entries = Object.fromEntries(
-      rawEntries.filter(([, value]) => value !== null && value !== undefined)
+      rawEntries.filter(([key, value]) => value !== null && value !== undefined
+        && !["sidebarToolbarVisibility", "systemResourceMonitoringEnabled", "hookPopupNotificationsEnabled"].includes(key))
     ) as Partial<Settings>;
     const pendingStoreWrites: Promise<void>[] = [];
     const persistSetting = (key: keyof Settings, value: Settings[keyof Settings]) => {
@@ -1063,7 +1037,6 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
       : DEFAULTS.collapsedGroupIds;
 
     entries.terminalToolbarVisibility = migrateTerminalToolbarVisibility(entries.terminalToolbarVisibility);
-    entries.sidebarToolbarVisibility = migrateSidebarToolbarVisibility(entries.sidebarToolbarVisibility);
     entries.terminalToolbarOrder = migrateTerminalToolbarOrder(entries.terminalToolbarOrder);
     entries.unsplitBehavior = migrateUnsplitBehavior(entries.unsplitBehavior);
     entries.terminalSidePanelMerged =
@@ -1096,10 +1069,6 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
       typeof entries.shellRuntimeMonitoringEnabled === "boolean"
         ? entries.shellRuntimeMonitoringEnabled
         : DEFAULTS.shellRuntimeMonitoringEnabled;
-    entries.systemResourceMonitoringEnabled =
-      typeof entries.systemResourceMonitoringEnabled === "boolean"
-        ? entries.systemResourceMonitoringEnabled
-        : DEFAULTS.systemResourceMonitoringEnabled;
     entries.useExternalTerminal =
       typeof entries.useExternalTerminal === "boolean"
         ? entries.useExternalTerminal
@@ -1169,10 +1138,6 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
       : DEFAULTS.linuxGraphicsMode;
     entries.cliArgsHistory = normalizeCliArgsHistory(entries.cliArgsHistory);
 
-    entries.hookPopupNotificationsEnabled =
-      typeof entries.hookPopupNotificationsEnabled === "boolean"
-        ? entries.hookPopupNotificationsEnabled
-        : DEFAULTS.hookPopupNotificationsEnabled;
     entries.hookPopupAutoCloseEnabled =
       typeof entries.hookPopupAutoCloseEnabled === "boolean"
         ? entries.hookPopupAutoCloseEnabled
