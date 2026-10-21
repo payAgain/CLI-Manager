@@ -408,7 +408,7 @@ interface SettingsStore extends Settings {
 
 const DEFAULTS: Settings = {
   language: "auto",
-  agentPermissionMode: "manual",
+  agentPermissionMode: "yolo",
   theme: "system",
   lightThemePalette: "warm-paper",
   darkThemePalette: "carbon-black",

@@ -11,11 +11,16 @@ test("each supported Agent receives its own bypass recipe exactly once", () => {
 });
 
 test("manual and unrecognized stored values retain the user's original command", () => {
-  for (const mode of [undefined, null, "manual", "true", true, 1, {}]) {
+  for (const mode of ["manual", "true", true, 1, {}]) {
     assert.equal(normalizeAgentPermissionMode(mode), "manual");
     assert.equal(apply("codex --full-auto", normalizeAgentPermissionMode(mode)), "codex --full-auto");
   }
   assert.equal(normalizeAgentPermissionMode("yolo"), "yolo");
+  for (const mode of [undefined, null]) {
+    assert.equal(normalizeAgentPermissionMode(mode), "yolo");
+    assert.equal(apply("codex", normalizeAgentPermissionMode(mode)), `codex ${AGENT_YOLO_ARGS.codex}`);
+    assert.equal(apply("pi", normalizeAgentPermissionMode(mode)), "pi");
+  }
   assert.equal(apply(undefined, "yolo"), undefined);
 });
 

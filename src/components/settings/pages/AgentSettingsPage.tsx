@@ -3,7 +3,7 @@ import { SegmentedControl } from "@mantine/core";
 import { toast } from "sonner";
 import { CliToolIcon } from "../../CliToolIcon";
 import { CLI_TOOL_DESCRIPTORS } from "../../../lib/cliTools";
-import { AGENT_YOLO_ARGS, applyAgentLaunchPermissions, type AgentPermissionMode } from "../../../lib/agentLaunchPermissions";
+import { applyAgentLaunchPermissions, type AgentPermissionMode } from "../../../lib/agentLaunchPermissions";
 import { useI18n } from "../../../lib/i18n";
 import { useSettingsStore } from "../../../stores/settingsStore";
 import { useInstalledCliTools } from "../../../hooks/useInstalledCliTools";
@@ -15,7 +15,7 @@ export function AgentSettingsPage() {
   const [saving, setSaving] = useState(false);
   const { t } = useI18n();
   const { commands, status, refresh } = useInstalledCliTools({ shell });
-  const tools = CLI_TOOL_DESCRIPTORS.filter(tool => commands.includes(tool.command) && AGENT_YOLO_ARGS[tool.id]);
+  const tools = CLI_TOOL_DESCRIPTORS.filter(tool => commands.includes(tool.command));
 
   const changeMode = async (value: string) => {
     setSaving(true);

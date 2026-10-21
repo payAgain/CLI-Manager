@@ -75,6 +75,7 @@ function skipEnvironment(tokens: CommandToken[], start: number): number {
 }
 
 export function normalizeAgentPermissionMode(value: unknown): AgentPermissionMode {
+  if (value == null) return "yolo";
   return value === "yolo" ? "yolo" : "manual";
 }
 
