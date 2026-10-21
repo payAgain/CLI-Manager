@@ -98,6 +98,7 @@ pub(crate) fn identify_agent(name: &str, command: &[String]) -> Option<&'static 
         ("/@anthropic-ai/claude-code/", "Claude"),
         ("/@openai/codex/", "Codex"),
         ("/@google/gemini-cli/", "Gemini"),
+        ("/@earendil-works/pi-coding-agent/", "Pi"),
         ("/@mariozechner/pi-coding-agent/", "Pi"),
         ("/@vibe-kit/grok-cli/", "Grok"),
     ] {
@@ -149,6 +150,35 @@ mod tests {
                 vec!["node", "--require", "/tmp/codex", "/project/main.js"],
             ),
             ("node", vec!["node", "/project/codex/main.js"]),
+        ] {
+            assert_eq!(recognize(name, &args), None, "{args:?}");
+        }
+    }
+
+    #[test]
+    fn pi_recognizes_current_and_legacy_packages_across_launchers() {
+        for package in ["@earendil-works", "@mariozechner"] {
+            let windows = format!(r"E:\dev-cache\npm-global\node_modules\{package}\pi-coding-agent\dist\bundle\cli.js");
+            assert_eq!(recognize("node.exe", &["node.exe", &windows]), Some("Pi"));
+            let unix = format!("/opt/npm/node_modules/{package}/pi-coding-agent/dist/cli.js");
+            assert_eq!(recognize("node", &["node", &unix]), Some("Pi"));
+            assert_eq!(recognize("bun", &["bun", "run", &unix]), Some("Pi"));
+            assert_eq!(recognize("deno", &["deno", "run", "--allow-all", &unix]), Some("Pi"));
+        }
+        assert_eq!(recognize("pi.exe", &[]), Some("Pi"));
+    }
+
+    #[test]
+    fn pi_package_text_and_unrelated_packages_are_not_agent_identities() {
+        let script = "/npm/@earendil-works/pi-coding-agent/dist/bundle/cli.js";
+        for (name, args) in [
+            ("node", vec!["node", "--eval", script]),
+            ("node", vec!["node", "--require", script, "/project/main.js"]),
+            ("bash", vec!["bash", "-c", script]),
+            ("node", vec!["node", "/project/main.js", script]),
+            ("node", vec!["node", "/project/pi/server.js"]),
+            ("node", vec!["node", "/npm/@earendil-works/pi-coding-agent-tools/cli.js"]),
+            ("node", vec!["node", "/npm/@someone/pi-coding-agent/cli.js"]),
         ] {
             assert_eq!(recognize(name, &args), None, "{args:?}");
         }

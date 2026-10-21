@@ -22,6 +22,20 @@ test("manual Agent detection overrides project configuration without changing th
   assert.equal(acceptsAgentHook(bound, { source: "claude" }), false);
 });
 
+test("manual Pi discovery updates workspace identity and accepts its exact-session Hook", () => {
+  const pi = { ...codex, tool: "pi", cliSessionId: "pi-session" };
+  const shell = { id: "pane-pi", startupCmd: "", isAgentSession: false, runtimeAgent: null };
+  const bound = applyAgentDetection(shell, detection(pi));
+  assert.deepEqual(resolveAgentTerminalMetadata(bound, { cli_tool: "claude" }), { isAgentSession: true, cliTool: "pi" });
+  assert.equal(bound.cliSessionId, "pi-session");
+  assert.equal(bound.startupCmd, "");
+  assert.equal(acceptsAgentHook(bound, { source: "pi", agentRunId: pi.runId }), true);
+  assert.equal(acceptsAgentHook(bound, { source: "claude" }), false);
+  const exited = applyAgentDetection(bound, detection(null, 101000));
+  assert.deepEqual(resolveAgentTerminalMetadata(exited, { cli_tool: "claude" }), { isAgentSession: false, cliTool: undefined });
+  assert.equal(exited.cliSessionId, undefined);
+});
+
 test("Agent exit clears session bindings and restores a regular shell despite a configured Agent", () => {
   const running = { ...applyAgentDetection({ id: "a" }, detection(codex)), cliSessionId: "old", cliReasoningEffort: "high" };
   const exited = applyAgentDetection(running, detection(null, 101000));

@@ -433,6 +433,35 @@ mod tests {
     }
 
     #[test]
+    fn pi_packages_own_their_tool_children_without_crossing_terminal_roots() {
+        let mut current = process(21, 20, "node.exe", 40);
+        current.command = vec!["node.exe".into(),
+            r"E:\dev-cache\npm-global\node_modules\@earendil-works\pi-coding-agent\dist\bundle\cli.js".into()];
+        let mut legacy = process(31, 30, "node", 60);
+        legacy.command = vec!["node".into(),
+            "/npm/@mariozechner/pi-coding-agent/dist/cli.js".into()];
+        let snapshot = aggregate(&[
+            process(1, 0, "cli-manager.exe", 1),
+            process(10, 1, "cli-manager.exe", 2),
+            process(20, 10, "pwsh.exe", 3), current,
+            process(22, 21, "pi.exe", 10),
+            process(23, 22, "rg.exe", 5),
+            process(30, 10, "pwsh.exe", 4), legacy,
+            process(32, 31, "node.exe", 7),
+        ], 1, Some(10), &[session("current", Some(20)), session("legacy", Some(30))], true);
+        for (index, pid, bytes, count) in [(0, 21, 55, 3), (1, 31, 67, 2)] {
+            let terminal = &snapshot.terminals[index];
+            assert_eq!(terminal.agents.len(), 1);
+            assert_eq!(terminal.agents[0].name, "Pi");
+            assert_eq!(terminal.agents[0].pid, pid);
+            assert_eq!(terminal.agents[0].memory_bytes, bytes);
+            assert_eq!(terminal.agents[0].process_count, count);
+            assert_eq!(terminal.other_bytes, 0);
+        }
+        assert_eq!(snapshot.total_bytes, 132);
+    }
+
+    #[test]
     fn counts_owned_launchd_webkit_services_without_claiming_other_apps() {
         let mut content = process(100, 1, "com.apple.WebKit.WebContent", 200);
         content.app_webview = true;

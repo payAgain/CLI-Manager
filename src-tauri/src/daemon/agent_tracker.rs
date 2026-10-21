@@ -244,6 +244,23 @@ mod tests {
         assert!(!tracker.belongs_to(31, 20));
     }
     #[test]
+    fn pi_package_discovery_binds_only_its_own_pane_and_clears_on_exit() {
+        let mut tracker = tracker();
+        let tool = identify_agent("node.exe", &[
+            "node.exe".into(),
+            "E:/dev-cache/npm-global/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js".into(),
+        ]).map(str::to_ascii_lowercase);
+        tracker.processes.get_mut(&21).unwrap().tool = tool;
+        let agent = tracker.discover(&meta(), 1, 100).unwrap().unwrap();
+        assert_eq!(agent.tool, "pi");
+        assert_eq!(agent.pid, 21);
+        let mut other_pane = meta();
+        other_pane.root_pid = Some(30);
+        assert_eq!(tracker.discover(&other_pane, 1, 100).unwrap().unwrap().tool, "gemini");
+        tracker.processes.retain(|id, _| ![21, 22, 23].contains(id));
+        assert_eq!(tracker.discover(&meta(), 1, 200), Some(None));
+    }
+    #[test]
     fn background_and_suspended_agents_do_not_bind() {
         let mut tracker = tracker();
         for id in [21, 22, 23] {
