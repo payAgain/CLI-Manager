@@ -1,4 +1,4 @@
-import { useMemo, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useI18n, type TranslationKey } from "../lib/i18n";
 import { useBackgroundOperationStore, type BackgroundOperation } from "../stores/backgroundOperationStore";
@@ -8,8 +8,7 @@ import { useSshAgentIntegrationStore } from "../stores/sshAgentIntegrationStore"
 import { useSshHostStore } from "../stores/sshHostStore";
 import { useTerminalStore, type TabNotificationState } from "../stores/terminalStore";
 import { ConfirmDialog } from "./ConfirmDialog";
-import { Activity, AlertTriangle, Check, Copy, Layers, RefreshCw, X } from "./icons";
-import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
+import { Activity, AlertTriangle, Check, Copy, RefreshCw, X } from "./icons";
 
 export interface BackgroundTaskMeta {
   sessionId: string;
@@ -27,8 +26,7 @@ export interface BackgroundTaskMeta {
 interface Props {
   tasks: BackgroundTaskMeta[];
   onRefresh: () => Promise<void>;
-  showText: boolean;
-  popoverStyle?: CSSProperties;
+  onRestored?: () => void;
 }
 
 type BackgroundTaskDisplayStatus = "running" | "attention" | "done" | "failed";
@@ -95,9 +93,14 @@ function resolveTaskStatus(task: BackgroundTaskMeta): BackgroundTaskDisplayStatu
   return task.alive ? "running" : "done";
 }
 
-export function BackgroundTasksPanel({ tasks, onRefresh, showText, popoverStyle }: Props) {
+export function BackgroundTasksPanel({ tasks, onRefresh, onRestored }: Props) {
   const { t, language } = useI18n();
-  const [open, setOpen] = useState(false);
+  const mounted = useRef(false);
+  useEffect(() => {
+    mounted.current = true;
+    void onRefresh();
+    return () => { mounted.current = false; };
+  }, [onRefresh]);
   const [discardIntent, setDiscardIntent] = useState<BackgroundTaskMeta | null>(null);
   const [discardPending, setDiscardPending] = useState(false);
   const persistedSessions = useSessionStore((state) => state.sessions);
@@ -135,7 +138,7 @@ export function BackgroundTasksPanel({ tasks, onRefresh, showText, popoverStyle 
         await onRefresh();
         return;
       }
-      setOpen(false);
+      if (mounted.current) onRestored?.();
     } catch (err) {
       toast.error(t("terminal.backgroundTasks.restoreFailed"), { description: String(err) });
     }
@@ -176,31 +179,20 @@ export function BackgroundTasksPanel({ tasks, onRefresh, showText, popoverStyle 
   };
 
   return (
-    <Popover open={open} onOpenChange={(nextOpen) => {
-      setOpen(nextOpen);
-      if (nextOpen) void onRefresh();
-    }}>
-      <PopoverTrigger asChild>
-        <button
-          className="ui-focus-ring ui-icon-action ui-action-background-tasks"
-          data-active={open ? "true" : "false"}
-          data-has-tasks={hasAnyTask ? "true" : "false"}
-          aria-label={t("terminal.backgroundTasks.title")}
-        >
-          <Layers size={14} strokeWidth={1.8} />
-          {showText && <span>{t("terminal.backgroundTasks.shortTitle")}</span>}
-        </button>
-      </PopoverTrigger>
-      <PopoverContent id="background-tasks-panel" side="left" align="start" className="w-96 p-0" style={popoverStyle}>
+    <>
+      <section id="background-tasks-panel" className="background-tasks-panel flex h-full min-h-0 flex-col">
         <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-2">
           <div className="text-xs font-semibold text-text-primary">{t("terminal.backgroundTasks.title")}</div>
-          {hasFinishedOperation && (
-            <button className="background-tasks-panel__action ui-flat-action px-2 py-1 text-[10px]" onClick={clearFinished}>
-              {t("backgroundOperations.clearFinished")}
-            </button>
-          )}
+          <div className="flex items-center gap-1">
+            <button className="ui-focus-ring ui-icon-action" onClick={() => void onRefresh()} aria-label={t("common.refresh")}><RefreshCw size={13} /></button>
+            {hasFinishedOperation && (
+              <button className="background-tasks-panel__action ui-flat-action px-2 py-1 text-[10px]" onClick={clearFinished}>
+                {t("backgroundOperations.clearFinished")}
+              </button>
+            )}
+          </div>
         </div>
-        <div className="background-tasks-panel__list">
+        <div className="background-tasks-panel__list min-h-0 flex-1">
           {!hasAnyTask ? (
             <div className="background-tasks-panel__empty flex min-h-32 flex-col items-center justify-center gap-1 rounded-lg px-4 py-6 text-center">
               <div className="text-xs font-medium text-text-primary">
@@ -304,7 +296,7 @@ export function BackgroundTasksPanel({ tasks, onRefresh, showText, popoverStyle 
             );
           })}
 
-          {rows.length > 0 && (
+          {rows.length > 0 && (operationRows.length > 0 || agentRows.length > 0) && (
             <div className="mb-2 mt-3 px-1 text-[10px] font-semibold uppercase tracking-wide text-text-muted">
               {t("terminal.backgroundTasks.title")}
             </div>
@@ -361,7 +353,7 @@ export function BackgroundTasksPanel({ tasks, onRefresh, showText, popoverStyle 
             );
           })}
         </div>
-      </PopoverContent>
+      </section>
       <ConfirmDialog
         open={discardIntent !== null}
         title={discardIntentTerminalState
@@ -382,6 +374,6 @@ export function BackgroundTasksPanel({ tasks, onRefresh, showText, popoverStyle 
           if (!discardPending) setDiscardIntent(null);
         }}
       />
-    </Popover>
+    </>
   );
 }

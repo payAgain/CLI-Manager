@@ -4,7 +4,7 @@ import { createPortal } from "react-dom";
 import { useShallow } from "zustand/shallow";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
-import type { LucideIcon } from "lucide-react";
+import { Layers, type LucideIcon } from "lucide-react";
 import {
   DndContext,
   DragOverlay,
@@ -49,6 +49,8 @@ import { collectWorkspanSessionIds, type TerminalWorkspan } from "../stores/term
 import { SplitTerminalView } from "./SplitTerminalView";
 import { XTermTerminal } from "./XTermTerminal";
 import { CommandTemplatePanel } from "./CommandTemplatePanel";
+import { useBackgroundOperationStore } from "../stores/backgroundOperationStore";
+import { useSshAgentIntegrationStore } from "../stores/sshAgentIntegrationStore";
 import { BackgroundTasksPanel, type BackgroundTaskMeta } from "./BackgroundTasksPanel";
 import {
   ResizableTerminalPanelFrame,
@@ -2530,6 +2532,7 @@ export function TerminalTabs({
   const [gitOpen, setGitOpen] = useState(false);
   const [replayOpen, setReplayOpen] = useState(false);
   const [filesOpen, setFilesOpen] = useState(false);
+  const [auxiliaryPanelTab, setAuxiliaryPanelTab] = useState<"backgroundTasks" | null>(null);
   const [finishTarget, setFinishTarget] = useState<{ project: Project; worktree: WorktreeRecord } | null>(null);
   const [discardTarget, setDiscardTarget] = useState<{ project: Project; worktree: WorktreeRecord } | null>(null);
   const [activeToolbarDragId, setActiveToolbarDragId] = useState<string | null>(null);
@@ -2894,10 +2897,6 @@ export function TerminalTabs({
         } as CSSProperties,
     [terminalSidePanelSkin, visibleSessions.length]
   );
-  const terminalPopoverStyle = useMemo(
-    () => ({ ...terminalWellStyle, ...terminalActionSidebarStyle }),
-    [terminalActionSidebarStyle, terminalWellStyle]
-  );
   const visibleSidePanelTabs = useMemo(
     () => TERMINAL_SIDE_PANEL_TAB_ORDER.filter((tab) => {
       if (tab === "git") return terminalToolbarVisibility.gitChanges && panelGitSupported;
@@ -2933,6 +2932,7 @@ export function TerminalTabs({
     setGitOpen(false);
     setReplayOpen(false);
     setFilesOpen(false);
+    setAuxiliaryPanelTab(null);
   }, [historyOpen, terminalSidePanelSingleOpen]);
 
   useEffect(() => {
@@ -3084,6 +3084,7 @@ export function TerminalTabs({
       setGitOpen(false);
       setReplayOpen(false);
       setFilesOpen(false);
+      setAuxiliaryPanelTab(null);
     }
     setActiveWorkspaceTab("history");
     void openHistory({
@@ -3318,6 +3319,7 @@ export function TerminalTabs({
         setGitOpen(false);
         setReplayOpen(false);
         setFilesOpen(false);
+        setAuxiliaryPanelTab(null);
       }
       setStatsOpen(true);
     }
@@ -3347,6 +3349,7 @@ export function TerminalTabs({
         setStatsOpen(false);
         setReplayOpen(false);
         setFilesOpen(false);
+        setAuxiliaryPanelTab(null);
       }
       setGitOpen(true);
     }
@@ -3376,6 +3379,7 @@ export function TerminalTabs({
         setStatsOpen(false);
         setGitOpen(false);
         setFilesOpen(false);
+        setAuxiliaryPanelTab(null);
       }
       setReplayOpen(true);
     }
@@ -3422,6 +3426,7 @@ export function TerminalTabs({
       setStatsOpen(false);
       setGitOpen(false);
       setReplayOpen(false);
+      setAuxiliaryPanelTab(null);
     }
     setFilesOpen(true);
     return true;
@@ -3466,27 +3471,32 @@ export function TerminalTabs({
     if (sidePanelMerged) return;
     const enforce = () => {
       if (!terminalSidePanelSingleOpen && window.innerWidth >= 1100) return;
-      const openPanels = [statsOpen, gitOpen, replayOpen, filesOpen].filter(Boolean).length;
+      const openPanels = [statsOpen, gitOpen, replayOpen, filesOpen, auxiliaryPanelTab !== null].filter(Boolean).length;
       if (openPanels <= 1) return;
       if (statsOpen) {
         setGitOpen(false);
         setReplayOpen(false);
         setFilesOpen(false);
+        setAuxiliaryPanelTab(null);
         return;
       }
       if (gitOpen) {
         setReplayOpen(false);
         setFilesOpen(false);
+        setAuxiliaryPanelTab(null);
         return;
       }
       if (replayOpen) {
         setFilesOpen(false);
+        setAuxiliaryPanelTab(null);
+        return;
       }
+      if (filesOpen) setAuxiliaryPanelTab(null);
     };
     enforce();
     window.addEventListener("resize", enforce);
     return () => window.removeEventListener("resize", enforce);
-  }, [filesOpen, gitOpen, replayOpen, sidePanelMerged, statsOpen, terminalSidePanelSingleOpen]);
+  }, [auxiliaryPanelTab, filesOpen, gitOpen, replayOpen, sidePanelMerged, statsOpen, terminalSidePanelSingleOpen]);
 
   useEffect(() => {
     if (!filesPanelActive) return;
@@ -3518,6 +3528,7 @@ export function TerminalTabs({
       setGitOpen(false);
       setReplayOpen(false);
       setFilesOpen(false);
+      setAuxiliaryPanelTab(null);
     }
     const project = activeSession?.projectId ? projects.find((item) => item.id === activeSession.projectId) : undefined;
     if (rejectUnsupportedCapability(project, "history")) return;
@@ -3798,10 +3809,34 @@ export function TerminalTabs({
     return () => window.clearInterval(timer);
   }, [refreshBackgroundTasks]);
 
+  const activeAuxiliaryPanel = sidePanelMerged
+    ? sidePanelOpen && (sidePanelTab === "backgroundTasks") ? sidePanelTab : null
+    : auxiliaryPanelTab;
+
+  const closeAuxiliaryPanel = useCallback(() => {
+    if (sidePanelMerged) setSidePanelOpen(false);
+    else setAuxiliaryPanelTab(null);
+  }, [sidePanelMerged]);
+
+  const toggleAuxiliaryPanel = useCallback((tab: "backgroundTasks") => {
+    if (activeAuxiliaryPanel === tab) { closeAuxiliaryPanel(); return; }
+    if (terminalSidePanelSingleOpen) { closeHistory(); setActiveWorkspaceTab("terminal"); }
+    if (sidePanelMerged) { setSidePanelTab(tab); setSidePanelOpen(true); }
+    else {
+      if (terminalSidePanelSingleOpen || window.innerWidth < 1100) {
+        setStatsOpen(false); setGitOpen(false); setReplayOpen(false); setFilesOpen(false);
+      }
+      setAuxiliaryPanelTab(tab);
+    }
+  }, [activeAuxiliaryPanel, closeAuxiliaryPanel, closeHistory, sidePanelMerged, terminalSidePanelSingleOpen]);
+
   const backgroundTasks = useMemo(() => {
     const openIds = new Set(sessions.map((session) => session.id));
     return daemonTasks.filter((task) => !openIds.has(task.sessionId));
   }, [daemonTasks, sessions]);
+  const hasBackgroundOperations = useBackgroundOperationStore((state) => Object.keys(state.operations).length > 0);
+  const hasAgentInstallJobs = useSshAgentIntegrationStore((state) => Object.keys(state.agentInstallJobs).length > 0);
+  const hasBackgroundTasks = backgroundTasks.length > 0 || hasBackgroundOperations || hasAgentInstallJobs;
 
   const handleToggleGlobalFullscreen = useCallback(() => {
     if (activeFullscreenPaneId) {
@@ -3921,12 +3956,12 @@ export function TerminalTabs({
         </button>
       ),
       backgroundTasks: (
-        <BackgroundTasksPanel
-          tasks={backgroundTasks}
-          onRefresh={refreshBackgroundTasks}
-          showText={terminalToolbarVisibility.showText}
-          popoverStyle={terminalPopoverStyle}
-        />
+        <button className="ui-focus-ring ui-icon-action ui-action-background-tasks" onClick={() => toggleAuxiliaryPanel("backgroundTasks")}
+          data-active={activeAuxiliaryPanel === "backgroundTasks"} data-has-tasks={hasBackgroundTasks}
+          aria-pressed={activeAuxiliaryPanel === "backgroundTasks"} aria-label={t("terminal.backgroundTasks.title")}>
+          <Layers size={14} strokeWidth={1.8} />
+          {terminalToolbarVisibility.showText && <span>{t("terminal.backgroundTasks.shortTitle")}</span>}
+        </button>
       ),
     };
 
@@ -3991,7 +4026,9 @@ export function TerminalTabs({
     );
   }, [
     activeToolbarDragId,
-    backgroundTasks,
+    activeAuxiliaryPanel,
+    toggleAuxiliaryPanel,
+    hasBackgroundTasks,
     fullscreen,
     filePanelProject,
     filesPanelActive,
@@ -4021,7 +4058,6 @@ export function TerminalTabs({
     terminalToolbarOrder,
     terminalToolbarVisibility,
     terminalActionSidebarStyle,
-    terminalPopoverStyle,
     toolbarSensors,
   ]);
 
@@ -4559,9 +4595,16 @@ export function TerminalTabs({
               projectPath={sidePanelProjectPath}
               projectId={panelSession?.projectId}
               filesPanelContent={<FileExplorerSidebar mode="panel" onClosePanel={closeFilesPanel} />}
+              auxiliaryPanelContent={sidePanelTab === "backgroundTasks"
+                ? <BackgroundTasksPanel tasks={backgroundTasks} onRefresh={refreshBackgroundTasks} onRestored={closeAuxiliaryPanel} />
+                : null}
             />
           ) : (
             <>
+              {auxiliaryPanelTab && <ResizableTerminalPanelFrame widthKey="merged" defaultWidth={TERMINAL_PANEL_WIDTH_DEFAULTS.merged}
+                resizeLabel={t("terminal.panel.resizeSideLabel")} resizeTitle={t("terminal.panel.resizeSideTitle")}>
+                <BackgroundTasksPanel tasks={backgroundTasks} onRefresh={refreshBackgroundTasks} onRestored={closeAuxiliaryPanel} />
+              </ResizableTerminalPanelFrame>}
               {statsOpen && panelCapabilities.statistics && (
                 <ResizableTerminalPanelFrame
                   widthKey="stats"

@@ -160,7 +160,6 @@
 }
 
 .background-tasks-panel__list {
-  max-height: calc((84px + 8px) * 3 + 8px);
   overflow-y: auto;
   padding: 8px;
   scrollbar-width: none;
