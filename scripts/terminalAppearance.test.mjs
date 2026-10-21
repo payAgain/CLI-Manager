@@ -3,6 +3,9 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 import ts from "typescript";
+import { createRequire } from "node:module";
+
+const { Terminal } = createRequire(import.meta.url)("@xterm/xterm");
 
 function load(path) {
   const exports = {};
@@ -68,6 +71,47 @@ test("shared auto resolution follows light/dark appearance; independent themes s
   assert.equal(resolveTerminalThemeId("forestNightDark", "light"), "forestNightDark");
   assert.equal(resolveTerminalThemeId("auto", "dark", "warm-paper", "github-dark"), "githubDark");
   assert.equal(withTerminalTextColor(getTerminalTheme("auto", "dark"), "#abcdef").foreground, "#abcdef");
+});
+
+// Execute the production appearance effect against a real xterm buffer. Only
+// browser renderer/layout callbacks are stubbed in this headless test.
+const terminalSource = readFileSync(new URL("../src/components/XTermTerminal.tsx", import.meta.url), "utf8");
+const terminalAst = ts.createSourceFile("XTermTerminal.tsx", terminalSource, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+let appearanceEffect;
+function findAppearanceEffect(node) {
+  if (ts.isCallExpression(node) && node.expression.getText(terminalAst) === "useEffect"
+    && node.arguments[0]?.getText(terminalAst).includes("terminal.options.theme =")) appearanceEffect = node.arguments[0];
+  ts.forEachChild(node, findAppearanceEffect);
+}
+findAppearanceEffect(terminalAst);
+assert.ok(appearanceEffect, "production appearance update must exist");
+const appearanceCallback = ts.transpileModule(`const applyAppearance = ${appearanceEffect.getText(terminalAst)};`, {
+  compilerOptions: { target: ts.ScriptTarget.ES2022 },
+}).outputText;
+
+for (const visible of [true, false]) test(`theme-only updates request a full repaint without resetting ${visible ? "visible" : "hidden"} terminal state`, async t => {
+  const terminal = new Terminal({ cols: 80, rows: 12, allowProposedApi: true, fontSize: 14, fontFamily: "monospace", scrollback: 9000 });
+  t.after(() => terminal.dispose());
+  await new Promise(resolve => terminal.write("Keep this output 中文\r\n\x1b[?1049hAlternate TUI", resolve));
+  const before = { type: terminal.buffer.active.type, text: terminal.buffer.active.getLine(0).translateToString(), x: terminal.buffer.active.cursorX };
+  const calls = { atlas: 0, normalized: 0, invalidated: 0, fit: [] };
+  const environment = {
+    terminalRef: { current: terminal }, withTerminalTextColor, getTerminalTheme,
+    terminalThemeName: "auto", resolvedTheme: "dark", lightThemePalette: "warm-paper", darkThemePalette: "carbon-black", terminalTextColor: "",
+    getTerminalMinimumContrastRatio: () => 1, isTransparent: false, applyTransparency: theme => theme,
+    background: { overlayDarken: 0 }, withVisibleSelectionTheme: theme => theme, searchOpen: false,
+    syncWebglRenderer: () => false, fontSize: 14, effectiveFontFamily: "monospace", effectiveTerminalScrollbackRows: 9000,
+    isVisibleRef: { current: visible }, clearWebglTextureAtlas: () => calls.atlas++,
+    tuiColorSync: { normalize: () => calls.normalized++, schedule() {} },
+    markViewportRefreshNeeded: () => calls.invalidated++, scheduleFit: (...args) => calls.fit.push(args),
+  };
+  new Function(...Object.keys(environment), appearanceCallback + "\napplyAppearance();")(...Object.values(environment));
+  assert.equal(terminal.options.theme.background, getTerminalTheme("auto", "dark").background);
+  assert.equal(calls.invalidated, 1);
+  assert.deepEqual(calls.fit, [[true, true]], "same-size/same-renderer changes still request a complete refresh");
+  assert.equal(calls.atlas, Number(visible));
+  assert.equal(calls.normalized, Number(visible), "hidden buffers avoid rendering work until visible");
+  assert.deepEqual({ type: terminal.buffer.active.type, text: terminal.buffer.active.getLine(0).translateToString(), x: terminal.buffer.active.cursorX }, before);
 });
 
 const luminance = hex => {

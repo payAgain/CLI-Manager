@@ -51,6 +51,7 @@ import {
   type CloseBehavior,
   type ExitWithRunningTasksBehavior,
   type TerminalSessionRestoreMode,
+  type TerminalThemeMode,
   type TerminalSettingsSectionKey,
   type UnsplitBehavior,
 } from "../../../stores/settingsStore";
@@ -71,7 +72,7 @@ import {
 const SWATCH_KEYS = ["background", "foreground", "red", "green", "blue", "cyan"] as const;
 const TERMINAL_FONT_FALLBACK = "monospace";
 const HEX_COLOR_PATTERN = /^#[0-9a-fA-F]{6}$/;
-type TerminalThemeLibraryMode = "light" | "dark" | "system";
+type TerminalThemeLibraryMode = "light" | "dark";
 type PaneMarkerPreviewColorKey = "doneColor" | "failedColor" | "attentionColor";
 
 const PANE_MARKER_PREVIEW_COLOR_OPTIONS = [
@@ -255,10 +256,6 @@ function clampFontSize(value: number) {
 function clampTerminalScrollbackRows(value: number) {
   if (!Number.isFinite(value)) return TERMINAL_SCROLLBACK_ROWS_DEFAULT;
   return Math.min(TERMINAL_SCROLLBACK_ROWS_MAX, Math.max(TERMINAL_SCROLLBACK_ROWS_MIN, Math.round(value)));
-}
-
-function getFirstTerminalThemeIdByTone(tone: "light" | "dark") {
-  return TERMINAL_THEME_PRESETS.find((preset) => preset.tone === tone)?.id ?? TERMINAL_THEME_PRESETS[0]?.id;
 }
 
 function CollapsibleSettingsSection({
@@ -548,10 +545,6 @@ export function ThemeSettingsPage() {
 
   const effectiveThemeName = terminalThemeMode === "system" ? "auto" : terminalThemeName;
 
-  const autoThemeId = useMemo(
-    () => resolveTerminalThemeId("auto", resolvedTheme, lightThemePalette, darkThemePalette),
-    [darkThemePalette, lightThemePalette, resolvedTheme]
-  );
   const selectedResolvedThemeId = useMemo(
     () => resolveTerminalThemeId(effectiveThemeName, resolvedTheme, lightThemePalette, darkThemePalette),
     [darkThemePalette, effectiveThemeName, lightThemePalette, resolvedTheme]
@@ -560,22 +553,17 @@ export function ThemeSettingsPage() {
     () => TERMINAL_THEME_PRESETS.find((item) => item.id === selectedResolvedThemeId) ?? null,
     [selectedResolvedThemeId]
   );
-  const themeLibraryMode: TerminalThemeLibraryMode =
-    terminalThemeMode === "system" || terminalThemeName === "auto"
-      ? "system"
-      : selectedPreset?.tone === "light"
-        ? "light"
-        : "dark";
+  const [themeLibraryMode, setThemeLibraryMode] = useState<TerminalThemeLibraryMode>(selectedPreset?.tone === "light" ? "light" : "dark");
+  useEffect(() => {
+    setThemeLibraryMode(selectedPreset?.tone === "light" ? "light" : "dark");
+  }, [selectedResolvedThemeId, selectedPreset?.tone]);
 
   const filtered = useMemo(() => {
     const keyword = query.trim().toLowerCase();
-    const scoped =
-      themeLibraryMode === "system"
-        ? TERMINAL_THEME_PRESETS.filter((preset) => preset.id === autoThemeId)
-        : TERMINAL_THEME_PRESETS.filter((preset) => preset.tone === themeLibraryMode);
+    const scoped = TERMINAL_THEME_PRESETS.filter((preset) => preset.tone === themeLibraryMode);
     if (!keyword) return scoped;
     return scoped.filter((preset) => `${preset.name} ${preset.labelKey ? t(preset.labelKey) : ""}`.toLowerCase().includes(keyword));
-  }, [autoThemeId, query, themeLibraryMode, t]);
+  }, [query, themeLibraryMode, t]);
 
   const groupedThemes = useMemo(
     () =>
@@ -602,7 +590,6 @@ export function ThemeSettingsPage() {
     () => [
       { value: "light" as const, label: t("settings.options.theme.light") },
       { value: "dark" as const, label: t("settings.options.theme.dark") },
-      { value: "system" as const, label: t("settings.options.theme.system") },
     ],
     [t]
   );
@@ -610,18 +597,6 @@ export function ThemeSettingsPage() {
   const selectIndependentTerminalTheme = async (themeName: string) => {
     await update("terminalThemeName", themeName);
     await setTerminalThemeMode("independent");
-  };
-
-  const handleThemeLibraryModeChange = (value: TerminalThemeLibraryMode) => {
-    if (value === "system") {
-      void setTerminalThemeMode("system");
-      return;
-    }
-    const nextThemeName =
-      terminalThemeMode !== "system" && terminalThemeName !== "auto" && selectedPreset?.tone === value
-        ? selectedPreset.id
-        : getFirstTerminalThemeIdByTone(value);
-    if (nextThemeName) void selectIndependentTerminalTheme(nextThemeName);
   };
 
   const fontFamilyOptions = useMemo(
@@ -913,6 +888,21 @@ export function ThemeSettingsPage() {
 
   return (
     <Stack gap="md">
+      <section className="ui-surface-card">
+        <SettingsField label={t("settings.terminal.themeMode")} description={t("settings.terminal.themeModeDescription")}>
+          <Select<TerminalThemeMode>
+            value={terminalThemeMode}
+            onChange={(value) => { if (value) void setTerminalThemeMode(value); }}
+            data={[
+              { value: "system", label: t("settings.terminal.themeMode.followApp") },
+              { value: "independent", label: t("settings.terminal.themeMode.independent") },
+            ]}
+            allowDeselect={false}
+            size="xs"
+          />
+        </SettingsField>
+        <Text size="xs" c="var(--text-muted)">{t("settings.terminal.currentTheme", { theme: selectedTheme.label })}</Text>
+      </section>
       <section className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_320px] xl:items-start">
         <Stack gap="md" className="min-w-0 xl:col-start-1 xl:row-start-1">
         <CollapsibleSettingsSection
@@ -1476,12 +1466,13 @@ export function ThemeSettingsPage() {
           <Stack gap="md">
             <SegmentedControl<TerminalThemeLibraryMode>
               value={themeLibraryMode}
-              onChange={handleThemeLibraryModeChange}
+              onChange={setThemeLibraryMode}
               data={themeLibraryOptions}
               color="cliPrimary"
               fullWidth
-              aria-label={text("终端主题分组", "Terminal theme group")}
+              aria-label={t("settings.terminal.themeCategory")}
             />
+            <Text size="xs" c="var(--text-muted)">{t("settings.terminal.themeCategoryHint")}</Text>
             <Group align="flex-end" justify="space-between" gap="md">
               <TextInput
                 value={query}

@@ -824,16 +824,18 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
       terminal.options.fontSize = fontSize;
       terminal.options.fontFamily = effectiveFontFamily;
     }
-    if (sizeChanged || weightChanged || rendererChanged) {
-      scheduleFit(true);
-    }
     if (terminal.options.scrollback !== effectiveTerminalScrollbackRows) {
       terminal.options.scrollback = effectiveTerminalScrollbackRows;
     }
     if (isVisibleRef.current) {
+      if (!rendererChanged) clearWebglTextureAtlas();
       tuiColorSync.normalize(terminal);
       tuiColorSync.schedule(terminal);
     }
+    // Theme-only changes can keep the same grid and renderer. Invalidate the
+    // whole viewport too; hidden panes retain this work until they are visible.
+    markViewportRefreshNeeded();
+    scheduleFit(true, true);
   }, [fontSize, effectiveFontFamily, effectiveTerminalScrollbackRows, resolvedTheme, terminalThemeName, terminalTextColor, terminalTuiUserColor, terminalTuiAssistantColor, lightThemePalette, darkThemePalette, isTransparent, background.overlayDarken, lowMemoryMode, disableHardwareAcceleration, linuxGraphicsDisableWebgl, searchOpen, tuiColorSync]);
 
   // Hidden terminals stay attached and continue parsing output. Visibility only
