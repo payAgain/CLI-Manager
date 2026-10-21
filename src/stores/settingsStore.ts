@@ -312,7 +312,7 @@ export interface Settings {
   unsplitBehavior: UnsplitBehavior;
   terminalToolbarVisibility: TerminalToolbarVisibilitySettings;
   terminalToolbarOrder: string[];
-  /** 是否把实时统计与 Git 变更合并为带 Tab 的单一侧边面板；关闭后两者可并排独立显示。 */
+  /** 是否共享一个终端侧栏并通过顶部工具栏切换；关闭后支持独立面板。 */
   terminalSidePanelMerged: boolean;
   /** 是否限制终端辅助侧边面板同一时间只打开一个。 */
   terminalSidePanelSingleOpen: boolean;

@@ -3460,28 +3460,6 @@ export function TerminalTabs({
     return () => window.removeEventListener(TERMINAL_FILE_NAVIGATION_REQUEST_EVENT, handleTerminalFileNavigation);
   }, [openFileEditorPane, openFilesPanelForProject, projectById, projects, revealFilePath, sessions, t, worktrees]);
 
-  const handleSidePanelTabChange = useCallback((tab: TerminalSidePanelTab) => {
-    const project = panelSession?.projectId ? projectById.get(panelSession.projectId) : null;
-    if (tab === "stats") {
-      if (rejectUnsupportedCapability(project, "statistics")) return;
-      void ensureStatsPanelAllowed().then((allowed) => {
-        if (allowed) setSidePanelTab("stats");
-      });
-      return;
-    }
-    if (tab === "files") {
-      if (!filePanelProject) return;
-      if (rejectUnsupportedCapability(filePanelProject, "files")) return;
-      void syncFilePanelProject(filePanelProject).then((allowed) => {
-        if (allowed) setSidePanelTab("files");
-      });
-      return;
-    }
-    if (tab === "git" && project?.environment_type !== "ssh" && rejectUnsupportedCapability(project, "git")) return;
-    if (tab === "replay" && rejectUnsupportedCapability(project, "history")) return;
-    setSidePanelTab(tab);
-  }, [ensureStatsPanelAllowed, filePanelProject, panelSession, projectById, rejectUnsupportedCapability, syncFilePanelProject]);
-
   // 响应式约束：非合并模式下两个面板各占固定宽度，窗口过窄时会挤压终端。
   // 窗口 < 1100px 时退化为单面板，并随窗口缩小持续生效。
   useEffect(() => {
@@ -4580,9 +4558,7 @@ export function TerminalTabs({
               activeSessionId={panelSessionId}
               projectPath={sidePanelProjectPath}
               projectId={panelSession?.projectId}
-              filesTabDisabled={!filePanelProject}
               filesPanelContent={<FileExplorerSidebar mode="panel" onClosePanel={closeFilesPanel} />}
-              onTabChange={handleSidePanelTabChange}
             />
           ) : (
             <>
