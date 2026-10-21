@@ -122,7 +122,6 @@ const TERMINAL_TOOLBAR_OPTIONS: { key: TerminalToolbarOptionKey; labelKey: Trans
   { key: "files", labelKey: "settings.general.toolbar.files" },
   { key: "stats", labelKey: "settings.general.toolbar.stats" },
   { key: "gitChanges", labelKey: "settings.general.toolbar.gitChanges" },
-  { key: "systemResources", labelKey: "settings.general.toolbar.systemResources" },
   { key: "backgroundTasks", labelKey: "settings.general.toolbar.backgroundTasks" },
 ];
 
@@ -191,7 +190,6 @@ export function SidebarSettingsPage() {
   const systemResourceCardVisibility = useSettingsStore((s) => s.systemResourceCardVisibility);
   const systemResourceCardOrder = useSettingsStore((s) => s.systemResourceCardOrder);
   const terminalToolbarVisibility = useSettingsStore((s) => s.terminalToolbarVisibility);
-  const systemResourceMonitoringEnabled = useSettingsStore((s) => s.systemResourceMonitoringEnabled);
   const update = useSettingsStore((s) => s.update);
 
   const visibleCardCount = TERMINAL_STATS_CARD_KEYS.filter((key) => terminalStatsCardVisibility[key]).length;
@@ -394,29 +392,6 @@ export function SidebarSettingsPage() {
                   terminalSidePanelSingleOpen
                     ? t("settings.general.disableSingleSidePanel")
                     : t("settings.general.enableSingleSidePanel")
-                }
-              />
-            </Group>
-          </Card>
-
-          <Card className="border border-border bg-surface-container-lowest" p="sm" radius="lg">
-            <Group justify="space-between" align="center" gap="md" wrap="nowrap">
-              <Box>
-                <Text size="xs" c="var(--on-surface-variant)">
-                  {t("settings.sidebar.systemResources")}
-                </Text>
-                <Text mt={4} size="xs" lh={1.55} c="var(--text-muted)">
-                  {t("settings.sidebar.systemResourcesDescription")}
-                </Text>
-              </Box>
-              <Switch
-                color="cliPrimary"
-                checked={systemResourceMonitoringEnabled}
-                onChange={(event) => void update("systemResourceMonitoringEnabled", event.currentTarget.checked)}
-                aria-label={
-                  systemResourceMonitoringEnabled
-                    ? t("settings.sidebar.disableSystemResources")
-                    : t("settings.sidebar.enableSystemResources")
                 }
               />
             </Group>

@@ -33,11 +33,13 @@ import {
   panelColorTint,
 } from "../stats/termStatsUi";
 import { TerminalPanelHeader } from "./TerminalPanelHeader";
+import { ResourceCardSettings } from "./ResourceCardSettings";
 
 interface SystemResourcesPanelProps {
   open: boolean;
   visible?: boolean;
   embedded?: boolean;
+  dashboard?: boolean;
 }
 
 const PANEL_ACCENT = TERM_PANEL.green;
@@ -383,7 +385,7 @@ function SystemCard({ snapshot }: { snapshot: SystemResourceSnapshot }) {
   return (
     <ResourceCard
       icon={<Server size={15} />}
-      title={t("systemResources.ip")}
+      title={t("systemResources.system")}
       accent={MODULE_TITLE_COLOR}
       right={snapshot.ipAddress ? (
         <button
@@ -406,7 +408,7 @@ function SystemCard({ snapshot }: { snapshot: SystemResourceSnapshot }) {
           threads: snapshot.cpu.logicalProcessorCount,
         })}</StatusPill>
       </div>
-      <div className="mt-3 grid grid-cols-2 gap-x-3 gap-y-1">
+      <div className="mt-3 grid gap-x-3 gap-y-1" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 220px), 1fr))" }}>
         <MetricLine label={t("systemResources.host")} value={snapshot.hostName ?? "-"} />
         <MetricLine label={t("systemResources.uptime")} value={formatUptime(snapshot.uptimeSeconds)} />
       </div>
@@ -846,7 +848,7 @@ function ProcessCard({ snapshot }: { snapshot: SystemResourceSnapshot }) {
   );
 }
 
-export function SystemResourcesPanel({ open, visible = true, embedded = false }: SystemResourcesPanelProps) {
+export function SystemResourcesPanel({ open, visible = true, embedded = false, dashboard = false }: SystemResourcesPanelProps) {
   const { t } = useI18n();
   const panelActive = open && visible;
   const cardVisibility = useSettingsStore((s) => s.systemResourceCardVisibility);
@@ -918,7 +920,7 @@ export function SystemResourcesPanel({ open, visible = true, embedded = false }:
 
   return (
     <Container
-      className={containerClassName}
+      className={`${containerClassName}${dashboard ? " ui-resource-dashboard" : ""}`}
       style={{
         backgroundColor: TERM_PANEL.bg,
         ...PANEL_SCROLLBAR_STYLE,
@@ -952,17 +954,21 @@ export function SystemResourcesPanel({ open, visible = true, embedded = false }:
         )}
       />
 
+      {dashboard && <ResourceCardSettings />}
+
       <div
-        className="ui-thin-scroll flex min-h-0 flex-1 flex-col gap-2.5 overflow-y-auto p-2"
+        className={`ui-thin-scroll min-h-0 flex-1 overflow-y-auto p-2 ${dashboard ? "ui-resource-dashboard-cards" : "flex flex-col gap-2.5"}`}
       >
 
-      {loading && !snapshot ? (
+      {orderedCards.length === 0 ? (
+        <EmptyHint text={t("resources.cardsEmpty")} />
+      ) : loading && !snapshot ? (
         <EmptyHint text={t("common.loading")} />
       ) : error && !snapshot ? (
         <EmptyHint text={t("systemResources.loadFailed")} />
       ) : snapshot ? (
         <>
-          {orderedCards.map(renderCard)}
+          {orderedCards.map((key) => dashboard ? <div key={key} data-resource-card={key}>{renderCard(key)}</div> : renderCard(key))}
 
           {error ? (
             <div

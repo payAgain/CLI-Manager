@@ -4548,14 +4548,6 @@
   animation: none;
 }
 
-.ui-terminal-action-cat-slot {
-  display: flex;
-  width: 100%;
-  justify-content: center;
-  margin-top: auto;
-  padding-top: 6px;
-}
-
 .ui-terminal-global-chrome {
   background-color: var(--surface-container-low);
   color: var(--on-surface);
