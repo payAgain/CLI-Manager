@@ -431,7 +431,13 @@ fn derive_transcript_path_from_parent(
     let parent = normalize_explicit_transcript_path(parent_transcript_path, wsl_distro_name);
     validate_explicit_transcript_path(&parent)?;
 
-    let parent = PathBuf::from(parent);
+    // Parse the Linux portion of WSL paths using the same rules on every host.
+    let wsl_parent = crate::wsl::parse_wsl_unc_path(&parent);
+    let parent = PathBuf::from(
+        wsl_parent
+            .as_ref()
+            .map_or(parent.as_str(), |(_, linux)| linux.as_str()),
+    );
     if !parent
         .extension()
         .and_then(|extension| extension.to_str())
@@ -449,6 +455,11 @@ fn derive_transcript_path_from_parent(
         .join(format!("agent-{agent_id}.jsonl"))
         .to_string_lossy()
         .to_string();
+    let child = if let Some((distro, _)) = wsl_parent {
+        crate::wsl::linux_to_unc_wsl_path(&child.replace('\\', "/"), &distro)
+    } else {
+        child
+    };
     validate_explicit_transcript_path(&child)?;
     Ok(child)
 }
@@ -1322,20 +1333,53 @@ mod tests {
 
     #[test]
     fn resolve_converts_linux_parent_transcript_to_wsl_child_path() {
-        let got = resolve_transcript_path(
-            None,
-            Some("/home/me/.claude/projects/p/sess-1.jsonl".to_string()),
-            Some("/home/me/project/.claude/worktrees/agent-a".to_string()),
-            Some("sess-1".to_string()),
-            Some("a".to_string()),
-            Some("Ubuntu-22.04".to_string()),
-        )
-        .unwrap();
+        for parent in [
+            "/home/me/.claude/projects/p/sess-1.jsonl",
+            r"\\wsl.localhost\Ubuntu-22.04\home\me\.claude\projects\p\sess-1.jsonl",
+            r"\\wsl$\Ubuntu-22.04\home\me\.claude\projects\p\sess-1.jsonl",
+            r"\\?\UNC\wsl.localhost\Ubuntu-22.04\home\me\.claude\projects\p\sess-1.jsonl",
+        ] {
+            let got = resolve_transcript_path(
+                None,
+                Some(parent.to_string()),
+                Some("/home/me/project/.claude/worktrees/agent-a".to_string()),
+                Some("sess-1".to_string()),
+                Some("a".to_string()),
+                Some("Ubuntu-22.04".to_string()),
+            )
+            .unwrap();
 
-        assert_eq!(
-            got,
-            r"\\wsl.localhost\Ubuntu-22.04\home\me\.claude\projects\p\sess-1\subagents\agent-a.jsonl"
-        );
+            assert_eq!(
+                got,
+                r"\\wsl.localhost\Ubuntu-22.04\home\me\.claude\projects\p\sess-1\subagents\agent-a.jsonl",
+                "{parent}"
+            );
+        }
+    }
+
+    #[test]
+    fn wsl_parent_transcripts_keep_session_and_scope_validation() {
+        for (parent, expected_error) in [
+            (
+                r"\\wsl.localhost\Ubuntu\home\me\.claude\projects\p\other-session.jsonl",
+                "parent_transcript_session_mismatch",
+            ),
+            (
+                r"\\wsl.localhost\Ubuntu\home\me\.claude\projects\p\sess-1.txt",
+                "parent_transcript_not_jsonl",
+            ),
+            (
+                r"\\wsl.localhost\Ubuntu\home\me\.claude\projects\..\sess-1.jsonl",
+                "transcript_path_outside_allowed_roots",
+            ),
+        ] {
+            assert_eq!(
+                derive_transcript_path_from_parent(parent.to_string(), "sess-1", "a", None)
+                    .unwrap_err(),
+                expected_error,
+                "{parent}"
+            );
+        }
     }
 
     #[test]

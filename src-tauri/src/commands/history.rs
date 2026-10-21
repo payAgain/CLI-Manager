@@ -6034,7 +6034,7 @@ fn cursor_project_slug_from_path(path: &str) -> String {
         .replace(':', "")
         .replace(['\\', '/'], "-")
         .trim_matches('-')
-        .to_string()
+        .to_lowercase()
 }
 
 fn cursor_metadata_from_path(path: &Path) -> Option<CursorSessionMetadata> {
@@ -12736,6 +12736,34 @@ mod tests {
         assert_eq!(hit.fingerprint.size, 42);
         assert_eq!(hit.fingerprint.updated_at, 1_719_234_567_250);
         assert_eq!(hit.fingerprint.created_at, 1_719_234_567_250);
+    }
+
+    #[test]
+    fn cursor_project_matching_handles_paths_from_each_environment() {
+        for (path, project_key) in [
+            (r"F:\github\CLI-Manager", "f-github-cli-manager"),
+            ("F:/github/CLI-Manager/", "f-github-cli-manager"),
+            ("/home/me/CLI-Manager", "home-me-cli-manager"),
+            (
+                r"\\wsl.localhost\Ubuntu\home\me\CLI-Manager",
+                "home-me-cli-manager",
+            ),
+        ] {
+            let file_ref = SessionFileRef {
+                source: "cursor".to_string(),
+                project_key: project_key.to_string(),
+                path: PathBuf::from("dummy.jsonl"),
+            };
+            assert!(
+                session_matches_project_path(&file_ref, &normalize_history_path(path)),
+                "{path}"
+            );
+        }
+        #[cfg(not(target_os = "windows"))]
+        assert_eq!(
+            normalize_history_path("/home/me/CLI-Manager"),
+            "/home/me/CLI-Manager"
+        );
     }
 
     #[test]

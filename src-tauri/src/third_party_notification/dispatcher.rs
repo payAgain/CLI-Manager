@@ -263,12 +263,14 @@ fn message_from_job(job: HookNotificationJob) -> Option<HookNotificationMessage>
         .filter(|name| !name.trim().is_empty())
         .map(str::to_string)
         .or_else(|| {
-            job.cwd
-                .as_deref()
-                .and_then(|cwd| Path::new(cwd).file_name())
-                .and_then(|name| name.to_str())
-                .filter(|name| !name.trim().is_empty())
-                .map(str::to_string)
+            job.cwd.as_deref().and_then(|cwd| {
+                let normalized = cwd.replace('\\', "/");
+                Path::new(&normalized)
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .filter(|name| !name.trim().is_empty())
+                    .map(str::to_string)
+            })
         })
         .unwrap_or_else(|| "Unknown Project".to_string());
     let time = local_time_text(job.timestamp.as_deref());
@@ -360,21 +362,31 @@ mod tests {
 
     #[test]
     fn message_uses_cwd_basename_only() {
-        let message = message_from_job(HookNotificationJob {
-            source: "codex".to_string(),
-            event: "Stop".to_string(),
-            cwd: Some("C:\\work\\secret\\demo".to_string()),
-            project: None,
-            timestamp: Some("2026-07-14T10:00:00Z".to_string()),
-        })
-        .unwrap();
-        assert_eq!(message.project, "demo");
-        assert!(!message.body.contains("secret"));
-        assert!(!message.body.contains("UTC"));
-        assert!(message.body.contains("✅"));
-        assert!(message.body.contains("📌 内容：Codex - demo 执行完毕"));
-        assert!(message.body.contains("🏷️ 类型：✅ 已完成"));
-        assert!(message.body.ends_with("📌 内容：Codex - demo 执行完毕"));
+        for cwd in [
+            r"C:\work\secret\demo",
+            r"C:\\work\\secret\\demo",
+            r"C:\work\secret\demo\",
+            r"\\server\share\secret\demo",
+            r"\\wsl.localhost\Ubuntu\home\secret\demo",
+            "/home/secret/demo/",
+            "/home/secret/demo/.",
+        ] {
+            let message = message_from_job(HookNotificationJob {
+                source: "codex".to_string(),
+                event: "Stop".to_string(),
+                cwd: Some(cwd.to_string()),
+                project: None,
+                timestamp: Some("2026-07-14T10:00:00Z".to_string()),
+            })
+            .unwrap();
+            assert_eq!(message.project, "demo", "{cwd}");
+            assert!(!message.body.contains("secret"));
+            assert!(!message.body.contains("UTC"));
+            assert!(message.body.contains("✅"));
+            assert!(message.body.contains("📌 内容：Codex - demo 执行完毕"));
+            assert!(message.body.contains("🏷️ 类型：✅ 已完成"));
+            assert!(message.body.ends_with("📌 内容：Codex - demo 执行完毕"));
+        }
     }
 
     #[test]
