@@ -372,6 +372,33 @@ fn validate_explicit_transcript_path(path: &str) -> Result<(), String> {
     }
 }
 
+fn validate_child_transcript_path(
+    path: &str,
+    session_id: Option<&str>,
+    agent_id: Option<&str>,
+) -> Result<(), String> {
+    match validate_explicit_transcript_path(path) {
+        Err(error) if error == "transcript_path_outside_allowed_roots" => {
+            // Custom CODEX_HOME paths are accepted only for the exact child
+            // rollout identified by the Hook, never for arbitrary JSON files.
+            let candidate = Path::new(path);
+            if !candidate.is_absolute() || has_current_or_parent_component(candidate)
+                || !candidate.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("jsonl")) {
+                return Err(error);
+            }
+            if let (Some(parent), Some(child), Some((actual_child, actual_parent))) =
+                (session_id, agent_id, codex_rollout_identity(candidate))
+            {
+                if child == actual_child && parent == actual_parent {
+                    return Ok(());
+                }
+            }
+            Err(error)
+        }
+        result => result,
+    }
+}
+
 fn cwd_for_wsl_slug(cwd: &str) -> String {
     if is_linux_absolute_path(cwd) {
         return cwd.trim().to_string();
@@ -782,7 +809,7 @@ fn list_codex_rollout_candidates(root: &Path, agent_id: &str) -> Vec<PathBuf> {
     list_native_codex_rollout_candidates(root, agent_id)
 }
 
-fn codex_rollout_parent_thread_id(path: &Path) -> Option<String> {
+fn codex_rollout_identity(path: &Path) -> Option<(String, String)> {
     let path_text = path.to_string_lossy();
     let file = match File::open(path) {
         Ok(file) => file,
@@ -846,7 +873,7 @@ fn codex_rollout_parent_thread_id(path: &Path) -> Option<String> {
         parent_thread_id,
         payload.get("thread_id").and_then(Value::as_str)
     );
-    parent_thread_id
+    Some((trimmed_str(payload.get("id").and_then(Value::as_str))?, parent_thread_id?))
 }
 
 /// 解析转录路径：优先显式子路径，其次由父 transcript 定位，最后回退 cwd 推导。
@@ -865,11 +892,11 @@ fn resolve_transcript_path(
                     "[subagent_transcript] resolving explicit linux transcript path with distro={distro}"
                 );
                 let resolved = normalize_explicit_transcript_path(explicit, Some(&distro));
-                validate_explicit_transcript_path(&resolved)?;
+                validate_child_transcript_path(&resolved, session_id.as_deref(), agent_id.as_deref())?;
                 return Ok(resolved);
             }
             let resolved = normalize_explicit_transcript_path(explicit, None);
-            validate_explicit_transcript_path(&resolved)?;
+            validate_child_transcript_path(&resolved, session_id.as_deref(), agent_id.as_deref())?;
             return Ok(resolved);
         }
         debug!(
@@ -878,7 +905,7 @@ fn resolve_transcript_path(
             is_linux_absolute_path(&explicit)
         );
         let resolved = normalize_explicit_transcript_path(explicit, wsl_distro_name.as_deref());
-        validate_explicit_transcript_path(&resolved)?;
+        validate_child_transcript_path(&resolved, session_id.as_deref(), agent_id.as_deref())?;
         return Ok(resolved);
     }
 
@@ -1057,14 +1084,15 @@ pub async fn codex_subagent_transcript_discover(
         candidates.len()
     );
     for candidate in candidates {
-        let parent_thread_id = codex_rollout_parent_thread_id(&candidate);
+        let identity = codex_rollout_identity(&candidate);
+        let parent_thread_id = identity.as_ref().map(|(_, parent)| parent);
         debug!(
             "[subagent_transcript:codex] inspect rollout candidate: agentId={} path={} parentThreadId={:?}",
             agent_id,
             candidate.to_string_lossy(),
             parent_thread_id
         );
-        if parent_thread_id.as_deref() == Some(parent_session_id.as_str()) {
+        if identity.as_ref().is_some_and(|(child, parent)| child == &agent_id && parent == &parent_session_id) {
             debug!(
                 "[subagent_transcript:codex] rollout matched: agentId={} path={}",
                 agent_id,
@@ -1417,8 +1445,15 @@ mod tests {
             parent_id.into(), "child-thread".into(), Some(root.join("wrong-config").to_string_lossy().into_owned()),
             None, Some(parent.to_string_lossy().into_owned()),
         );
-        assert_eq!(discover("parent-thread").await.unwrap().map(PathBuf::from), Some(child));
+        assert_eq!(discover("parent-thread").await.unwrap().map(PathBuf::from), Some(child.clone()));
         assert_eq!(discover("another-parent").await.unwrap(), None);
+        let resolve = |parent_id: &str, child_id: &str| resolve_transcript_path(
+            Some(child.to_string_lossy().into_owned()), None, None,
+            Some(parent_id.into()), Some(child_id.into()), None,
+        );
+        assert_eq!(resolve("parent-thread", "child-thread").map(PathBuf::from), Ok(child.clone()));
+        assert_eq!(resolve("another-parent", "child-thread").unwrap_err(), "transcript_path_outside_allowed_roots");
+        assert_eq!(resolve("parent-thread", "another-child").unwrap_err(), "transcript_path_outside_allowed_roots");
         fs::remove_dir_all(&root).unwrap();
     }
 
