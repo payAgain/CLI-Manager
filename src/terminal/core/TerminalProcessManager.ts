@@ -62,6 +62,13 @@ export interface TerminalOutputDelivery {
   commit: (charCount: number) => void;
 }
 
+/** Same-process display state; never used to seed a newly created PTY. */
+export interface TerminalDisplaySnapshot {
+  cols: number;
+  rows: number;
+  serializedState: string;
+}
+
 interface QueuedOutputFrame {
   frame: TerminalBinaryFrame;
   committed: boolean;
@@ -107,6 +114,17 @@ export interface TerminalProcessDiagnosticsSnapshot {
 export class TerminalProcessManager {
   private readonly outputStates = new Map<string, TerminalOutputState>();
   private readonly processTraits = new Map<string, TerminalProcessTraits>();
+  private readonly displaySnapshots = new Map<string, TerminalDisplaySnapshot>();
+
+  saveDisplaySnapshot(sessionId: string, snapshot: TerminalDisplaySnapshot): void {
+    this.displaySnapshots.set(sessionId, snapshot);
+  }
+
+  takeDisplaySnapshot(sessionId: string): TerminalDisplaySnapshot | undefined {
+    const snapshot = this.displaySnapshots.get(sessionId);
+    this.displaySnapshots.delete(sessionId);
+    return snapshot;
+  }
 
   getAgentDetection(sessionId: string): AgentDetection | undefined { return ptyHostSocket.getAgentDetection(sessionId); }
   subscribeAgentDetection(listener: (sessionId: string, detection: AgentDetection) => void): () => void {
@@ -119,6 +137,7 @@ export class TerminalProcessManager {
       try {
         if (prepared.daemonRestarted) {
           ptyHostSocket.resetAfterDaemonRestart();
+          this.displaySnapshots.clear();
         }
         const traits = await ptyHostSocket.create(
           sessionId,
@@ -180,6 +199,7 @@ export class TerminalProcessManager {
     return ptyHostSocket.closeAll().finally(() => {
       [...this.outputStates.keys()].forEach((sessionId) => this.clearOutputState(sessionId));
       this.processTraits.clear();
+      this.displaySnapshots.clear();
     });
   }
 
@@ -369,6 +389,7 @@ export class TerminalProcessManager {
   }
 
   private clearOutputState(sessionId: string): void {
+    this.displaySnapshots.delete(sessionId);
     const state = this.outputStates.get(sessionId);
     state?.socketUnlisten?.();
     this.outputStates.delete(sessionId);

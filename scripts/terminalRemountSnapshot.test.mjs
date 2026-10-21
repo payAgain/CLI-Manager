@@ -9,7 +9,7 @@ const source = readFileSync(
 
 test("terminal remount snapshots the buffer during layout cleanup", () => {
   assert.match(source, /useLayoutEffect\(\(\) => \(\) => \{[\s\S]*?snapshotBeforeUnmountRef\.current\?\.\(\);[\s\S]*?snapshotBeforeUnmountRef\.current = null;/);
-  assert.match(source, /const finishInitialDisplayRestore = \(\) => \{[\s\S]*?snapshotBeforeUnmountRef\.current = \(\) => \{[\s\S]*?updateSessionTerminalSnapshot\(sessionId, serializeSnapshot\(\)\)[\s\S]*?markInitialDisplayReady\(\);/);
+  assert.match(source, /const finishInitialDisplayRestore = \(\) => \{[\s\S]*?snapshotBeforeUnmountRef\.current = \(\) => \{[\s\S]*?saveDisplaySnapshot\(sessionId, \{[\s\S]*?cols: terminal\.cols, rows: terminal\.rows, serializedState,[\s\S]*?updateSessionTerminalSnapshot\(sessionId, serializedState\)[\s\S]*?markInitialDisplayReady\(\);/);
   assert.equal(source.match(/snapshotBeforeUnmountRef\.current = \(\) =>/g)?.length, 1);
 });
 
@@ -21,10 +21,15 @@ test("PTY output subscription waits for display restore and remains cancellable"
   assert.match(source, /if \(attachOutputTimer !== null\) \{[\s\S]*?window\.clearTimeout\(attachOutputTimer\);[\s\S]*?ptyOutput\?\.dispose\(\);/);
 });
 
-test("restored shell snapshots fit the current pane and leave a clean output line", () => {
-  assert.match(source, /initialDisplayRestoreRaf = window\.requestAnimationFrame\(\(\) => \{[\s\S]*?fitAddon\.proposeDimensions\(\)[\s\S]*?terminal\.resize\(dimensions\.cols, dimensions\.rows\);/);
+test("recreated shells archive historical pictures before starting a fresh screen", () => {
+  assert.match(source, /else if \(initialTerminalOutput\) \{[\s\S]*?initialDisplayRestoreRaf = window\.requestAnimationFrame\(\(\) => \{[\s\S]*?fitAddon\.proposeDimensions\(\)[\s\S]*?restoreDisplaySnapshot\(\{[\s\S]*?cols: restoreSize\.cols,[\s\S]*?rows: restoreSize\.rows,/);
   assert.match(source, /const restoredCursor = shouldHideCodexCursor\(terminal\) \? "\\x1b\[\?25l" : "\\x1b\[\?25h"/);
-  assert.match(source, /const restoredOutput = displayTransformOutputRef\.current\(initialTerminalOutput\);[\s\S]*?writeTerminalReplay\(terminal, `\$\{restoredOutput\}\\x1b\[\?6l\\x1b\[r\\x1b\[0m\$\{restoredCursor\}\\x1b\[999B\\r\\n`/);
-  assert.match(source, /writeTerminalReplay\([\s\S]*?writeDeferredStartup\(\);[\s\S]*?finishInitialDisplayRestore\(\);/);
+  assert.match(source, /const restoredOutput = displayTransformOutputRef\.current\(initialTerminalOutput\);[\s\S]*?serializedState: createTerminalScrollbackReplay\(restoredOutput, restoreSize\.rows\) \+ restoredCursor/);
+  assert.match(source, /restoreDisplaySnapshot\([\s\S]*?writeDeferredStartup\(\);[\s\S]*?finishInitialDisplayRestore\(\);/);
   assert.match(source, /if \(initialDisplayRestoreRaf !== null\) \{[\s\S]*?window\.cancelAnimationFrame\(initialDisplayRestoreRaf\);/);
+});
+
+test("live remount bypasses the historical clean-line suffix", () => {
+  assert.match(source, /const liveDisplaySnapshot = terminalProcessManager\.takeDisplaySnapshot\(sessionId\);/);
+  assert.match(source, /if \(liveDisplaySnapshot\) \{[^}]*restoreDisplaySnapshot\(liveDisplaySnapshot, finishInitialDisplayRestore\);\s*\} else if \(initialTerminalOutput\)/);
 });

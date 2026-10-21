@@ -89,6 +89,16 @@ function find(node, type) {
 }
 const settle = () => new Promise(resolve => setImmediate(resolve));
 const answer = content => ({ messages: [{ role: 'assistant', content }] });
+const markdownSourceModule = {};
+const markdownSourceText = readFileSync(new URL('../src/lib/terminalMarkdownSource.ts', import.meta.url), 'utf8');
+const markdownSourceAst = ts.createSourceFile('terminalMarkdownSource.ts', markdownSourceText, ts.ScriptTarget.Latest, true);
+runInNewContext(ts.transpileModule(markdownSourceAst.statements.filter(node => !ts.isImportDeclaration(node)).map(node => node.getText(markdownSourceAst)).join('\n'), {
+  compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+}).outputText, {
+  exports: markdownSourceModule,
+  runtimeAgentTool: () => undefined,
+  resolveCliToolHistorySourceId: value => value || null,
+});
 
 function fixture({ props = {}, setup, dependencies = {} } = {}) {
   const requests = [], closes = [], listeners = new Map();
@@ -108,6 +118,7 @@ function fixture({ props = {}, setup, dependencies = {} } = {}) {
     useI18n: () => ({ language: 'en-US', t: key => key }),
     isLightTerminalTheme: () => false,
     runtimeAgentTool: () => undefined,
+    resolveTerminalMarkdownSource: markdownSourceModule.resolveTerminalMarkdownSource,
     useTerminalStore: selector => selector(state),
     useProjectStore: selector => selector(projects),
     useWorktreeStore: selector => selector(worktrees),

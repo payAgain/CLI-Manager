@@ -78,6 +78,21 @@ function frame(sequence, text) {
   };
 }
 
+test("same-process snapshots are consumed once and stay isolated by session", async () => {
+  const manager = new TerminalProcessManager();
+  const snapshot = { cols: 178, rows: 36, serializedState: "prompt" };
+  manager.saveDisplaySnapshot("project-a", snapshot);
+  manager.saveDisplaySnapshot("project-b", { ...snapshot, serializedState: "other prompt" });
+  assert.equal(manager.takeDisplaySnapshot("fresh-shell"), undefined);
+  assert.deepEqual(manager.takeDisplaySnapshot("project-a"), snapshot);
+  assert.equal(manager.takeDisplaySnapshot("project-a"), undefined);
+  await manager.close("project-b");
+  assert.equal(manager.takeDisplaySnapshot("project-b"), undefined);
+  manager.saveDisplaySnapshot("project-c", snapshot);
+  await manager.closeAll();
+  assert.equal(manager.takeDisplaySnapshot("project-c"), undefined);
+});
+
 test("uncommitted output is redelivered after display remount and ACKed once", async () => {
   const manager = new TerminalProcessManager();
   const firstDeliveries = [];

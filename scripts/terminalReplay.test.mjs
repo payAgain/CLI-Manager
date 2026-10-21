@@ -8,6 +8,7 @@ import { createRequire } from "node:module";
 import ts from "typescript";
 
 const { Terminal: RealTerminal } = createRequire(import.meta.url)("@xterm/xterm");
+const { SerializeAddon } = createRequire(import.meta.url)("@xterm/addon-serialize");
 
 const tempDir = mkdtempSync(join(tmpdir(), "cli-manager-terminal-replay-"));
 process.on("exit", () => rmSync(tempDir, { recursive: true, force: true }));
@@ -21,6 +22,12 @@ globalThis.requestAnimationFrame = (callback) => {
   return id;
 };
 globalThis.cancelAnimationFrame = (id) => rafCallbacks.delete(id);
+const windowListeners = new Map();
+globalThis.addEventListener = (name, callback) => {
+  if (!windowListeners.has(name)) windowListeners.set(name, new Set());
+  windowListeners.get(name).add(callback);
+};
+globalThis.removeEventListener = (name, callback) => windowListeners.get(name)?.delete(callback);
 globalThis.ResizeObserver = class {
   observe() {}
   disconnect() {}
@@ -38,9 +45,11 @@ function flushAnimationFrames() {
 
 writeFileSync(join(tempDir, "react.mjs"), "export const useRef = (value) => ({ current: value });\n");
 writeFileSync(join(tempDir, "webgl.mjs"), `
+export const instances = [];
 export class WebglAddon {
+  constructor() { this.disposed = false; instances.push(this); }
   onContextLoss() {}
-  dispose() {}
+  dispose() { this.disposed = true; }
   clearTextureAtlas() {}
 }
 `);
@@ -58,6 +67,9 @@ writeFileSync(join(tempDir, "logger.mjs"), "export function logError() {} export
 writeFileSync(join(tempDir, "snapshot.mjs"), "export function markTerminalSnapshotDirty() {}\n");
 writeFileSync(join(tempDir, "resize.mjs"), `
 export function shouldDebounceTerminalResize() { return false; }
+export function isValidTerminalSize(cols, rows) {
+  return Number.isInteger(cols) && cols >= 40 && Number.isInteger(rows) && rows >= 8;
+}
 export const cancelCalls = [];
 export class TerminalResizeDebouncer {
   constructor(_visible, _terminal, resizeBoth) { this.resizeBoth = resizeBoth; }
@@ -138,6 +150,7 @@ const { useTerminalDisplay } = await import(pathToFileURL(modulePath).href);
 const managerStub = await import(pathToFileURL(join(tempDir, "manager.mjs")).href);
 const resizeStub = await import(pathToFileURL(join(tempDir, "resize.mjs")).href);
 const visibilityStub = await import(pathToFileURL(join(tempDir, "visibility.mjs")).href);
+const webglStub = await import(pathToFileURL(join(tempDir, "webgl.mjs")).href);
 
 class FakeTerminal {
   constructor(events) {
@@ -226,7 +239,7 @@ class FakeTerminal {
 
 function createDisplay(
   proposedDimensions = { cols: 120, rows: 30 },
-  { sessionId = "session-1", isVisible = true, terminalFactory = events => new FakeTerminal(events) } = {},
+  { sessionId = "session-1", isVisible = true, rendererEnabled = false, ownerDocument, terminalFactory = events => new FakeTerminal(events) } = {},
 ) {
   visibilityStub.resetVisibility();
   const events = [];
@@ -234,6 +247,7 @@ function createDisplay(
   const container = {
     offsetWidth: 1200,
     offsetHeight: 600,
+    ownerDocument,
     addEventListener() {},
     removeEventListener() {},
   };
@@ -247,8 +261,8 @@ function createDisplay(
     isVisibleRef,
     isComposingRef: { current: false },
     lowMemoryMode: false,
-    disableHardwareAcceleration: true,
-    linuxGraphicsDisableWebgl: true,
+    disableHardwareAcceleration: !rendererEnabled,
+    linuxGraphicsDisableWebgl: !rendererEnabled,
     isTransparentRef: { current: false },
     normalizeOutputRef: { current: (text) => text },
     transformOutputRef: { current: (text) => text },
@@ -258,6 +272,81 @@ function createDisplay(
   const detachViewport = display.attachViewport(terminal);
   return { display, terminal, terminalRef, isVisibleRef, container, events, detachViewport };
 }
+
+function withRendererTimers(run) {
+  const originalSet = window.setTimeout, originalClear = window.clearTimeout;
+  const timers = new Map(); let nextId = 1;
+  window.setTimeout = (callback, delay) => { const id = nextId++; timers.set(id, { callback, delay }); return id; };
+  window.clearTimeout = id => timers.delete(id);
+  try { run(timers); } finally { window.setTimeout = originalSet; window.clearTimeout = originalClear; }
+}
+
+test("normal mode releases an idle hidden renderer and recreates it without changing the terminal buffer", () => {
+  withRendererTimers(timers => {
+    const h = createDisplay(undefined, { rendererEnabled: true });
+    const buffer = h.terminal.buffer;
+    assert.equal(h.display.syncWebglRenderer(h.terminal, {}), true);
+    const original = webglStub.instances.at(-1);
+    h.isVisibleRef.current = false;
+    h.display.scheduleHiddenWebglDispose(false);
+    assert.equal([...timers.values()][0].delay, 30_000);
+    h.display.clearHiddenWebglDisposeTimer();
+    assert.equal(timers.size, 0, "a quick switch back cancels disposal");
+    assert.equal(original.disposed, false);
+    h.display.scheduleHiddenWebglDispose(false);
+    [...timers.values()][0].callback();
+    assert.equal(original.disposed, true);
+    assert.equal(h.terminal.buffer, buffer);
+    assert.deepEqual(h.events, []);
+    h.isVisibleRef.current = true;
+    assert.equal(h.display.syncWebglRenderer(h.terminal, {}), true);
+    assert.notEqual(webglStub.instances.at(-1), original);
+    h.display.disposeWebglRenderer();
+    h.detachViewport();
+  });
+});
+
+test("low memory mode uses 10 seconds and an already visible pane is never disposed", () => {
+  withRendererTimers(timers => {
+    const h = createDisplay(undefined, { rendererEnabled: true });
+    h.display.syncWebglRenderer(h.terminal, {});
+    const original = webglStub.instances.at(-1);
+    h.isVisibleRef.current = false;
+    h.display.scheduleHiddenWebglDispose(true);
+    assert.equal([...timers.values()][0].delay, 10_000);
+    h.isVisibleRef.current = true;
+    [...timers.values()][0].callback();
+    assert.equal(original.disposed, false);
+    h.display.disposeWebglRenderer();
+    h.detachViewport();
+  });
+});
+
+test("minimize or tray hiding releases the visible pane renderer, foreground restores it and removes listeners on detach", () => {
+  withRendererTimers(timers => {
+    const listeners = new Map();
+    const ownerDocument = {
+      visibilityState: "visible",
+      addEventListener(name, listener) { listeners.set(name, listener); },
+      removeEventListener(name) { listeners.delete(name); },
+    };
+    const h = createDisplay(undefined, { rendererEnabled: true, ownerDocument });
+    h.display.syncWebglRenderer(h.terminal, {});
+    const original = webglStub.instances.at(-1);
+    ownerDocument.visibilityState = "hidden";
+    listeners.get("visibilitychange")();
+    [...timers.values()][0].callback();
+    assert.equal(original.disposed, true);
+    ownerDocument.visibilityState = "visible";
+    listeners.get("visibilitychange")();
+    assert.equal(webglStub.instances.at(-1).disposed, false);
+    assert.notEqual(webglStub.instances.at(-1), original);
+    flushAnimationFrames();
+    h.display.disposeWebglRenderer();
+    h.detachViewport();
+    assert.equal(listeners.size, 0);
+  });
+});
 
 test("project restoration keeps its full repaint when ResizeObserver also requests a fit", () => {
   const { display, terminal, detachViewport } = createDisplay();
@@ -321,6 +410,28 @@ test("explicit viewport refresh repaints the full grid when dimensions are uncha
 
   assert.deepEqual(visibilityStub.refreshCalls, [[0, 29]]);
   detachViewport();
+});
+
+test("native maximize and foreground events refit and repaint without a container notification", () => {
+  managerStub.resetManager();
+  const dimensions = { cols: 80, rows: 24 };
+  const h = createDisplay(dimensions);
+  dimensions.cols = 180;
+  dimensions.rows = 45;
+  windowListeners.get("resize").forEach(callback => callback());
+  flushAnimationFrames();
+  assert.equal(h.terminal.cols, 180);
+  assert.equal(h.terminal.rows, 45);
+  assert.deepEqual(visibilityStub.refreshCalls, [[0, 44]]);
+  assert.deepEqual(managerStub.resizeCalls, [{ sessionId: "session-1", cols: 180, rows: 45 }]);
+
+  windowListeners.get("focus").forEach(callback => callback());
+  flushAnimationFrames();
+  assert.deepEqual(visibilityStub.refreshCalls, [[0, 44], [0, 44]]);
+  assert.equal(managerStub.resizeCalls.length, 1, "unchanged host dimensions are not sent again");
+  h.detachViewport();
+  assert.equal(windowListeners.get("resize").size, 0);
+  assert.equal(windowListeners.get("focus").size, 0);
 });
 
 test("consecutive fit frames keep the live horizontal resize cadence pending", () => {
@@ -484,6 +595,79 @@ function delivery(frameValue, commits) {
   };
 }
 
+test("live display remount keeps the prompt and ConPTY input on the same row", async () => {
+  const prompt = "PS E:\\Work\\CLI-Manager> ";
+  const options = { cols: 178, rows: 36, allowProposedApi: true, windowsPty: { backend: "conpty" } };
+  let terminal = new RealTerminal(options);
+  await new Promise(resolve => terminal.write(prompt + "\x1b[?1004h", resolve));
+  for (let index = 0; index < 3; index++) {
+    const serializer = new SerializeAddon();
+    terminal.loadAddon(serializer);
+    const snapshot = { cols: terminal.cols, rows: terminal.rows, serializedState: serializer.serialize() };
+    terminal.dispose();
+    const h = createDisplay({ cols: 178, rows: 36 }, {
+      terminalFactory: () => new RealTerminal({ ...options, cols: 80, rows: 24 }),
+    });
+    terminal = h.terminal;
+    await new Promise(resolve => h.display.restoreDisplaySnapshot(snapshot, resolve));
+    // Captured from the user's pwsh: it addresses the first row, column 25.
+    await new Promise(resolve => terminal.write(
+      "\x1b[?25l\x1b[1;25H\x1b[0m\x1b[97m1112\x1b[39;49m\x1b[0m\x1b[1;29H\x1b[?25h", resolve,
+    ));
+    assert.equal(terminal.buffer.active.getLine(0).translateToString(true), prompt + "1112");
+    assert.equal(terminal.buffer.active.baseY, 0);
+    assert.equal(terminal.buffer.active.cursorY, 0);
+    assert.equal(terminal.buffer.active.cursorX, 28);
+    assert.equal(terminal.buffer.active.getLine(1).translateToString(true), "");
+    h.detachViewport();
+  }
+  terminal.dispose();
+});
+
+test("snapshot restoration holds geometry and host resize until parsing finishes, including hidden panes", async () => {
+  managerStub.resetManager();
+  const h = createDisplay({ cols: 192, rows: 48 });
+  let committed = false;
+  h.display.restoreDisplaySnapshot({ cols: 178, rows: 36, serializedState: "snapshot" }, () => { committed = true; });
+  h.display.scheduleFit(true, true);
+  flushAnimationFrames();
+  assert.deepEqual([h.terminal.cols, h.terminal.rows], [178, 36]);
+  assert.deepEqual(managerStub.resizeCalls, []);
+  assert.equal(h.terminal.options.disableStdin, true);
+  h.isVisibleRef.current = false;
+  h.display.suspendViewport();
+  await h.terminal.finishNextWrite();
+  assert.equal(committed, true);
+  assert.equal(h.terminal.options.disableStdin, false);
+  assert.deepEqual(managerStub.resizeCalls, []);
+  h.isVisibleRef.current = true;
+  h.display.scheduleFit(true, true);
+  flushAnimationFrames();
+  assert.deepEqual([h.terminal.cols, h.terminal.rows], [192, 48]);
+  assert.deepEqual(managerStub.resizeCalls, [{ sessionId: "session-1", cols: 192, rows: 48 }]);
+  h.detachViewport();
+});
+
+test("live TUI remount preserves alternate screen and cursor coordinates", async () => {
+  const original = new RealTerminal({ cols: 100, rows: 30, allowProposedApi: true });
+  const serializer = new SerializeAddon();
+  original.loadAddon(serializer);
+  await new Promise(resolve => original.write("shell history\x1b[?1049h\x1b[4;8HTUI\x1b[10;12H", resolve));
+  const snapshot = { cols: original.cols, rows: original.rows, serializedState: serializer.serialize() };
+  original.dispose();
+  const h = createDisplay({ cols: 100, rows: 30 }, {
+    terminalFactory: () => new RealTerminal({ cols: 80, rows: 24, allowProposedApi: true }),
+  });
+  await new Promise(resolve => h.display.restoreDisplaySnapshot(snapshot, resolve));
+  assert.equal(h.terminal.buffer.active.type, "alternate");
+  assert.equal(h.terminal.buffer.active.getLine(3).translateToString(true), "       TUI");
+  assert.deepEqual([h.terminal.buffer.active.cursorX, h.terminal.buffer.active.cursorY], [11, 9]);
+  await new Promise(resolve => h.terminal.write("\x1b[?1049l", resolve));
+  assert.equal(h.terminal.buffer.active.getLine(0).translateToString(true), "shell history");
+  h.detachViewport();
+  h.terminal.dispose();
+});
+
 test("initial replay fits the current container before releasing buffered live output", async () => {
   managerStub.resetManager();
   const { display, terminal, events, detachViewport } = createDisplay();
@@ -521,6 +705,85 @@ test("initial replay fits the current container before releasing buffered live o
   assert.deepEqual(commits, [{ sequence: 3, charCount: 4 }]);
   output.dispose();
   detachViewport();
+});
+
+test("maximizing during an asynchronous replay keeps replay geometry until the PTY can follow", async () => {
+  managerStub.resetManager();
+  const dimensions = { cols: 100, rows: 25 };
+  const h = createDisplay(dimensions);
+  const output = h.display.attachPtyOutput({ waitForReplay: true });
+  await output.ready;
+  const replayPromise = output.completeReplay([frame(1, "prompt", 80, 24, true)]);
+  await Promise.resolve();
+
+  dimensions.cols = 180;
+  dimensions.rows = 45;
+  h.display.scheduleFit(true, true);
+  flushAnimationFrames();
+  assert.equal(h.terminal.cols, 80, "the pending historical write must use its recorded width");
+  assert.equal(h.terminal.rows, 24);
+  assert.deepEqual(managerStub.resizeCalls, []);
+
+  await h.terminal.finishNextWrite();
+  await replayPromise;
+  flushAnimationFrames();
+  assert.equal(h.terminal.cols, 180);
+  assert.equal(h.terminal.rows, 45);
+  assert.deepEqual(managerStub.resizeCalls, [{ sessionId: "session-1", cols: 180, rows: 45 }]);
+  output.dispose();
+  h.detachViewport();
+});
+
+test("replay ending at the visible grid still synchronizes the PTY dimensions", async () => {
+  managerStub.resetManager();
+  const h = createDisplay({ cols: 180, rows: 45 });
+  const output = h.display.attachPtyOutput({ waitForReplay: true });
+  await output.ready;
+  const replayPromise = output.completeReplay([frame(1, "prompt", 180, 45, true)]);
+  await h.terminal.finishNextWrite();
+  await replayPromise;
+  assert.deepEqual(managerStub.resizeCalls, [{ sessionId: "session-1", cols: 180, rows: 45 }]);
+  output.dispose();
+  h.detachViewport();
+});
+
+test("real xterm finishes its async historical parser before applying the maximized grid", async () => {
+  managerStub.resetManager();
+  const dimensions = { cols: 80, rows: 24 };
+  const h = createDisplay(dimensions, {
+    terminalFactory: () => new RealTerminal({ cols: 80, rows: 24, allowProposedApi: true }),
+  });
+  let releaseParser;
+  let parserStarted = false;
+  h.terminal.parser.registerOscHandler(777, () => {
+    parserStarted = true;
+    return new Promise(resolve => { releaseParser = () => resolve(true); });
+  });
+  const output = h.display.attachPtyOutput({ waitForReplay: true });
+  await output.ready;
+  const replayPromise = output.completeReplay([
+    frame(1, "\x1b]777;pause\x07PS E:\\Work\\CLI-Manager> ", 80, 24, true),
+  ]);
+  for (let i = 0; i < 100 && !parserStarted; i++) await new Promise(resolve => setTimeout(resolve, 5));
+  assert.equal(parserStarted, true);
+  dimensions.cols = 180;
+  dimensions.rows = 45;
+  windowListeners.get("resize").forEach(callback => callback());
+  flushAnimationFrames();
+  assert.equal(h.terminal.cols, 80);
+  assert.equal(h.terminal.options.disableStdin, true);
+
+  releaseParser();
+  await replayPromise;
+  flushAnimationFrames();
+  assert.equal(h.terminal.cols, 180);
+  assert.equal(h.terminal.rows, 45);
+  assert.equal(h.terminal.buffer.active.getLine(0).translateToString(true), "PS E:\\Work\\CLI-Manager> ");
+  assert.equal(h.terminal.options.disableStdin, false);
+  assert.deepEqual(managerStub.resizeCalls, [{ sessionId: "session-1", cols: 180, rows: 45 }]);
+  output.dispose();
+  h.detachViewport();
+  h.terminal.dispose();
 });
 
 test("actual initial daemon replay cannot send historical query responses into the attached PTY", async t => {

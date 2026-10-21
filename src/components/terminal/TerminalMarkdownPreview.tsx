@@ -1,11 +1,10 @@
-import { runtimeAgentTool } from "../../lib/terminalAgent";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type WheelEvent as ReactWheelEvent } from "react";
 import * as SelectPrimitive from "@radix-ui/react-select";
 import type { ITheme } from "@xterm/xterm";
 import { invoke } from "@tauri-apps/api/core";
 import { useI18n, type AppLanguage } from "../../lib/i18n";
-import type { HistoryMessage, HistorySessionDetail, HistorySource, Project, TerminalSession } from "../../lib/types";
-import { resolveCliToolHistorySourceId } from "../../lib/cliTools";
+import type { HistoryMessage, HistorySessionDetail } from "../../lib/types";
+import { resolveTerminalMarkdownSource } from "../../lib/terminalMarkdownSource";
 import { formatTime } from "../history/historyViewUtils";
 import { isLightTerminalTheme } from "../../lib/terminalThemes";
 import { resolveTerminalProjectPath } from "../../lib/terminalOscPath";
@@ -21,19 +20,11 @@ import { Check, ChevronDown } from "lucide-react";
 import { FileText, RefreshCw, X } from "../icons";
 import { SessionTranscriptContent } from "../history/SessionTranscriptContent";
 
-const PREVIEW_SOURCES = new Set<HistorySource>(["claude", "codex"]);
 const LOCAL_RETRY_DELAYS_MS = [0, 180, 420];
 type PreviewError = "noSession" | "loadFailed";
 
 function wait(milliseconds: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
-}
-
-function inferSourceFromText(value: string): "claude" | "codex" | null {
-  const normalized = value.toLowerCase();
-  if (/\bclaude\b/u.test(normalized)) return "claude";
-  if (/\bcodex\b/u.test(normalized)) return "codex";
-  return null;
 }
 
 function terminalThemeColor(value: string | undefined, fallback: string): string {
@@ -73,33 +64,6 @@ function buildTerminalMarkdownPreviewStyle(theme: ITheme): CSSProperties {
     "--ui-scrollbar-thumb": "color-mix(in srgb, var(--term-panel-fg) 28%, transparent)",
     "--ui-scrollbar-track": "color-mix(in srgb, var(--term-panel-bg) 94%, var(--term-panel-fg) 6%)",
   } as CSSProperties;
-}
-
-export function resolveTerminalMarkdownSource(
-  session: TerminalSession | null | undefined,
-  project: Project | null | undefined,
-): "claude" | "codex" | null {
-  if (!session && !project) return null;
-  if (session && runtimeAgentTool(session) !== undefined) {
-    const source = resolveCliToolHistorySourceId(runtimeAgentTool(session));
-    return source === "claude" || source === "codex" ? source : null;
-  }
-  const explicitSource = [session?.cliTool, project?.cli_tool]
-    .map((value) => resolveCliToolHistorySourceId(value))
-    .find((value): value is "claude" | "codex" => value === "claude" || value === "codex");
-  if (explicitSource) return explicitSource;
-
-  const inferredSource = inferSourceFromText(
-    `${session?.startupCmd ?? ""} ${session?.title ?? ""} ${project?.cli_tool ?? ""}`,
-  );
-  return inferredSource && PREVIEW_SOURCES.has(inferredSource) ? inferredSource : null;
-}
-
-export function isTerminalMarkdownPreviewSupported(
-  session: TerminalSession | null | undefined,
-  project: Project | null | undefined,
-): boolean {
-  return resolveTerminalMarkdownSource(session, project) !== null;
 }
 
 interface MarkdownPreviewMessage {

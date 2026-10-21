@@ -58,7 +58,7 @@ import {
   type TerminalSidePanelTab,
 } from "./terminal/TerminalSidePanel";
 import { WorktreeFinishDialog } from "./worktree/WorktreeFinishDialog";
-import { FileExplorerSidebar } from "./files/FileExplorerSidebar";
+import { FileExplorerSidebar } from "./files/LazyFileExplorerSidebar";
 import { openWindowsTerminal } from "../lib/externalTerminal";
 import { normalizeDirectCodexStartupCommand, resolveProjectStartupCommand } from "../lib/projectStartupCommand";
 import { projectSupportsCapability, resolveProjectCapabilities, type ProjectCapability } from "../lib/projectCapabilities";
@@ -4400,7 +4400,7 @@ export function TerminalTabs({
           style={{ display: historyActive ? "none" : "flex", right: historyOpen && !historyActive ? "min(var(--history-dock-width), 100%)" : 0 }}
         >
           <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-            {visibleWorkspanLayouts.length > 0 ? (
+            {mountedWorkspanLayouts.length > 0 ? (
               <DndContext
                 sensors={sensors}
                 collisionDetection={terminalTabCollisionDetection}
@@ -4409,7 +4409,7 @@ export function TerminalTabs({
                 onDragCancel={clearDragState}
                 onDragEnd={handleDragEnd}
               >
-                {workspanEnabled && workspanTabHost && createPortal(
+                {workspanEnabled && visibleWorkspanLayouts.length > 0 && workspanTabHost && createPortal(
                   <div
                     ref={workspanTabBarRef}
                     className="ui-terminal-pane-chrome ui-workspan-tabbar relative flex h-9 shrink-0 items-center px-1"
@@ -4619,7 +4619,10 @@ export function TerminalTabs({
                   )}
                   </div>, workspanTabHost
                 )}
-                <div className="relative min-h-0 flex-1 overflow-hidden">
+                <div
+                  className="relative min-h-0 flex-1 overflow-hidden"
+                  style={{ display: visibleWorkspanLayouts.length > 0 ? undefined : "none" }}
+                >
                   {mountedWorkspanLayouts.map((layout) => {
                     const layoutVisible = Boolean(layout.visiblePaneTree)
                       && layout.workspan.id === effectiveActiveWorkspanId;

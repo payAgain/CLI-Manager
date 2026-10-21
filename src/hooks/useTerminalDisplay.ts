@@ -8,11 +8,12 @@ import { isLightTerminalTheme } from "../lib/terminalThemes";
 import { logError, logWarn } from "../lib/logger";
 import { markTerminalSnapshotDirty } from "../lib/sessionSnapshotPersistence";
 import { resetTerminalMouseProtocol, writeTerminalReplay } from "../lib/terminalReplayWriter";
-import { TerminalResizeDebouncer } from "../terminal/browser/TerminalResizeDebouncer";
+import { isValidTerminalSize, TerminalResizeDebouncer } from "../terminal/browser/TerminalResizeDebouncer";
 import { TerminalResizeRenderBarrier } from "../terminal/browser/TerminalResizeRenderBarrier";
 import {
   terminalProcessManager,
   type TerminalOutputDelivery,
+  type TerminalDisplaySnapshot,
 } from "../terminal/core/TerminalProcessManager";
 import type { TerminalBinaryFrame } from "../terminal/transport/PtyHostSocket";
 import {
@@ -22,9 +23,8 @@ import {
 } from "../stores/settingsStore";
 import { useTerminalStore } from "../stores/terminalStore";
 
-const MIN_TERMINAL_COLS = 40;
-const MIN_TERMINAL_ROWS = 8;
-const HIDDEN_WEBGL_DISPOSE_DELAY_MS = 10_000;
+const HIDDEN_WEBGL_DISPOSE_DELAY_MS = 30_000;
+const LOW_MEMORY_WEBGL_DISPOSE_DELAY_MS = 10_000;
 const PTY_LIVE_WRITE_BATCH_BYTES = 64 * 1024;
 const PTY_VISIBLE_WRITE_BURST = 3;
 
@@ -130,7 +130,7 @@ interface UseTerminalDisplayOptions {
 
 export interface UseTerminalDisplayResult {
   syncWebglRenderer: (terminal: Terminal, theme: ITheme) => boolean;
-  scheduleHiddenWebglDispose: (enabled: boolean) => void;
+  scheduleHiddenWebglDispose: (lowMemoryMode?: boolean) => void;
   clearHiddenWebglDisposeTimer: () => void;
   clearWebglTextureAtlas: () => void;
   disposeWebglRenderer: () => boolean;
@@ -138,6 +138,7 @@ export interface UseTerminalDisplayResult {
   scheduleViewportRefresh: () => void;
   markViewportRefreshNeeded: () => void;
   enqueueActiveWrite: (text: string, onCommitted?: () => void) => void;
+  restoreDisplaySnapshot: (snapshot: TerminalDisplaySnapshot, onCommitted: () => void) => void;
   attachPtyOutput: (options?: { waitForReplay?: boolean }) => {
     ready: Promise<void>;
     completeReplay: (replay: TerminalBinaryFrame[]) => Promise<boolean>;
@@ -157,6 +158,7 @@ export function useTerminalDisplay({
   fitAddonRef,
   isVisibleRef,
   isComposingRef,
+  lowMemoryMode,
   disableHardwareAcceleration,
   linuxGraphicsDisableWebgl,
   isTransparentRef,
@@ -183,6 +185,11 @@ export function useTerminalDisplay({
   const viewportRestoreRafRef = useRef<number | null>(null);
   const pendingViewportRestoreRef = useRef<PendingViewportRestore | null>(null);
   const forwardPtyResizeRef = useRef(true);
+  const lastPtySizeRef = useRef<string | null>(null);
+  const rendererOptionsRef = useRef({ disableHardwareAcceleration, linuxGraphicsDisableWebgl, lowMemoryMode });
+  rendererOptionsRef.current = { disableHardwareAcceleration, linuxGraphicsDisableWebgl, lowMemoryMode };
+  const isRendererVisible = () => isVisibleRef.current
+    && containerRef.current?.ownerDocument?.visibilityState !== "hidden";
 
   const cancelPendingViewportRestore = () => {
     if (viewportRestoreRafRef.current !== null) {
@@ -230,8 +237,8 @@ export function useTerminalDisplay({
   };
 
   const canUseWebglRenderer = (theme: ITheme) => (
-    !disableHardwareAcceleration
-    && !linuxGraphicsDisableWebgl
+    !rendererOptionsRef.current.disableHardwareAcceleration
+    && !rendererOptionsRef.current.linuxGraphicsDisableWebgl
     && !webglContextLostRef.current
     && !isTransparentRef.current
     && !isLightTerminalTheme(theme)
@@ -257,7 +264,7 @@ export function useTerminalDisplay({
     if (!canUseWebglRenderer(theme)) {
       return disposeWebglRenderer();
     }
-    if (!isVisibleRef.current) return false;
+    if (!isRendererVisible()) return false;
     if (webglAddonRef.current) return false;
     try {
       const addon = createWebglAddon();
@@ -269,17 +276,17 @@ export function useTerminalDisplay({
     }
   };
 
-  const scheduleHiddenWebglDispose = (enabled: boolean) => {
+  const scheduleHiddenWebglDispose = (lowMemory = false) => {
     clearHiddenWebglDisposeTimer();
-    if (!enabled || !webglAddonRef.current) return;
+    if (!webglAddonRef.current) return;
     webglDisposeTimerRef.current = window.setTimeout(() => {
       webglDisposeTimerRef.current = null;
-      if (isVisibleRef.current) return;
+      if (isRendererVisible()) return;
       if (disposeWebglRenderer()) {
         needsViewportRefreshRef.current = true;
         onViewportRefreshNeeded?.();
       }
-    }, HIDDEN_WEBGL_DISPOSE_DELAY_MS);
+    }, lowMemory ? LOW_MEMORY_WEBGL_DISPOSE_DELAY_MS : HIDDEN_WEBGL_DISPOSE_DELAY_MS);
   };
 
   const clearWebglTextureAtlas = () => {
@@ -299,6 +306,27 @@ export function useTerminalDisplay({
       handleTerminalWriteCommitted(terminal);
       onCommitted?.();
     });
+  };
+
+  const restoreDisplaySnapshot = (snapshot: TerminalDisplaySnapshot, onCommitted: () => void) => {
+    const terminal = terminalRef.current;
+    if (!terminal) return;
+    // Keep snapshot cursor coordinates tied to their original grid until the
+    // asynchronous parser has finished, including while the pane is hidden.
+    forwardPtyResizeRef.current = false;
+    lastPtySizeRef.current = null;
+    try {
+      terminal.resize(snapshot.cols, snapshot.rows);
+      writeTerminalReplay(terminal, snapshot.serializedState, () => {
+        if (terminalRef.current !== terminal) return;
+        forwardPtyResizeRef.current = true;
+        fitWhenStable(true);
+        onCommitted();
+      });
+    } catch (error) {
+      forwardPtyResizeRef.current = true;
+      throw error;
+    }
   };
 
   const attachPtyOutput = (options: { waitForReplay?: boolean } = {}) => {
@@ -352,6 +380,7 @@ export function useTerminalDisplay({
         }
       } else {
         forwardPtyResizeRef.current = false;
+        lastPtySizeRef.current = null;
         if (
           first.cols > 0
           && first.rows > 0
@@ -441,6 +470,7 @@ export function useTerminalDisplay({
       const terminal = terminalRef.current;
       if (!terminal) return false;
       forwardPtyResizeRef.current = false;
+      lastPtySizeRef.current = null;
       try {
         for (const entry of replay) {
           if (cancelled || terminalRef.current !== terminal) return false;
@@ -487,24 +517,31 @@ export function useTerminalDisplay({
     return { ready, completeReplay, dispose };
   };
 
+  const syncPtySize = (terminal: Terminal) => {
+    const { cols, rows } = terminal;
+    if (!forwardPtyResizeRef.current || !isVisibleRef.current || !isValidTerminalSize(cols, rows)) return;
+    const pixelWidth = terminal.dimensions?.css.canvas.width;
+    const pixelHeight = terminal.dimensions?.css.canvas.height;
+    const sizeKey = `${cols}:${rows}:${pixelWidth ?? 0}:${pixelHeight ?? 0}`;
+    if (lastPtySizeRef.current === sizeKey) return;
+    lastPtySizeRef.current = sizeKey;
+    terminalProcessManager.resize(
+      sessionId,
+      cols,
+      rows,
+      pixelWidth ? Math.round(pixelWidth) : undefined,
+      pixelHeight ? Math.round(pixelHeight) : undefined,
+    ).catch((err) => {
+      if (lastPtySizeRef.current === sizeKey) lastPtySizeRef.current = null;
+      logError("PTY resize failed in terminal display", { sessionId, cols, rows, err });
+    });
+  };
+
   const attachViewport = (terminal: Terminal) => {
     const container = containerRef.current;
     if (!container) return () => {};
-    const resizeDisposable = terminal.onResize(({ cols, rows }) => {
-      if (!forwardPtyResizeRef.current) return;
-      if (cols < MIN_TERMINAL_COLS || rows < MIN_TERMINAL_ROWS) return;
-      const pixelWidth = terminal.dimensions?.css.canvas.width;
-      const pixelHeight = terminal.dimensions?.css.canvas.height;
-      terminalProcessManager.resize(
-        sessionId,
-        cols,
-        rows,
-        pixelWidth ? Math.round(pixelWidth) : undefined,
-        pixelHeight ? Math.round(pixelHeight) : undefined,
-      ).catch((err) => {
-        logError("PTY resize failed in terminal display", { sessionId, cols, rows, err });
-      });
-    });
+    lastPtySizeRef.current = null;
+    const resizeDisposable = terminal.onResize(() => syncPtySize(terminal));
     const wheelListenerOptions = { passive: false, capture: true } as const;
     const onWheel = (event: WheelEvent) => {
       if (!event.ctrlKey) return;
@@ -532,12 +569,34 @@ export function useTerminalDisplay({
       resizeRenderBarrierRef.current?.noteContainerResize();
       scheduleFit();
     });
+    // Native maximize/restore and foreground transitions can invalidate the
+    // renderer even when the final grid or observed container size is unchanged.
+    const onWindowLayout = () => scheduleFit(true, true);
+    const ownerDocument = container.ownerDocument;
+    const onDocumentVisibility = () => {
+      if (ownerDocument.visibilityState === "hidden") {
+        scheduleHiddenWebglDispose(rendererOptionsRef.current.lowMemoryMode);
+      } else if (isVisibleRef.current) {
+        clearHiddenWebglDisposeTimer();
+        syncWebglRenderer(terminal, terminal.options.theme ?? {});
+        scheduleFit(true, true);
+      }
+    };
+    ownerDocument?.addEventListener("visibilitychange", onDocumentVisibility);
+    window.addEventListener("resize", onWindowLayout);
+    window.addEventListener("focus", onWindowLayout);
     container.addEventListener("wheel", onWheel, wheelListenerOptions);
     resizeObserver.observe(container);
     return () => {
       resizeDisposable.dispose();
       container.removeEventListener("wheel", onWheel, wheelListenerOptions);
       resizeObserver.disconnect();
+      window.removeEventListener("resize", onWindowLayout);
+      window.removeEventListener("focus", onWindowLayout);
+      ownerDocument?.removeEventListener("visibilitychange", onDocumentVisibility);
+      clearHiddenWebglDisposeTimer();
+      lastObservedSizeRef.current = null;
+      lastPtySizeRef.current = null;
       resizeDebouncerRef.current?.dispose();
       resizeDebouncerRef.current = null;
       resizeRenderBarrierRef.current?.dispose();
@@ -552,6 +611,7 @@ export function useTerminalDisplay({
     ptyPendingChunksRef.current = [];
     ptyWriteInProgressRef.current = false;
     forwardPtyResizeRef.current = true;
+    lastPtySizeRef.current = null;
     outputDiagnosticsRef?.current?.reset();
   };
 
@@ -629,12 +689,17 @@ export function useTerminalDisplay({
     const fitAddon = fitAddonRef.current;
     const terminal = terminalRef.current;
     if (!container || !fitAddon || !terminal) return;
-    if (!isVisibleRef.current || isComposingRef.current) return;
+    // Historical escape sequences and cursor positions must be parsed with
+    // their recorded geometry. Refit once the entire replay has committed.
+    if (!forwardPtyResizeRef.current || !isVisibleRef.current || isComposingRef.current) return;
     if (container.offsetWidth <= 0 || container.offsetHeight <= 0) return;
 
     const dims = fitAddon.proposeDimensions();
-    if (!dims || dims.cols < MIN_TERMINAL_COLS || dims.rows < MIN_TERMINAL_ROWS) return;
+    if (!dims || !isValidTerminalSize(dims.cols, dims.rows)) return;
     getResizeDebouncer().resize(dims.cols, dims.rows, immediateResize);
+    // Replay can already end at these dimensions without firing onResize.
+    // Synchronize the host explicitly, including after a failed resize request.
+    syncPtySize(terminal);
     if (forceViewportRefresh || needsViewportRefreshRef.current) {
       refreshTerminalViewport(terminal);
       needsViewportRefreshRef.current = false;
@@ -709,6 +774,7 @@ export function useTerminalDisplay({
     scheduleViewportRefresh,
     markViewportRefreshNeeded,
     enqueueActiveWrite,
+    restoreDisplaySnapshot,
     attachPtyOutput,
     attachViewport,
     resetOutputState,

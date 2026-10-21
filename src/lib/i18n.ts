@@ -1,4 +1,4 @@
-import OpenCC from "opencc-js";
+import OpenCC from "opencc-js/cn2t";
 import { useMemo } from "react";
 import { useSettingsStore, type LanguagePreference } from "../stores/settingsStore";
 
@@ -48,7 +48,7 @@ export function isChineseLanguage(language: AppLanguage): boolean {
 }
 
 export function convertChineseForLanguage(language: AppLanguage, text: string): string {
-  return language === "zh-TW" ? zhTwConverter(text) : text;
+  return language === "zh-TW" ? getZhTwConverter()(text) : text;
 }
 
 export function pickByLanguage<T>(language: AppLanguage, zh: T, en: T): T {
@@ -1494,7 +1494,7 @@ const zh = {
   "settings.general.disableWorkspanDevelopment": "关闭 Workspan开发",
   "settings.general.enableWorkspanDevelopment": "开启 Workspan开发",
   "settings.general.lowMemoryMode": "低内存模式",
-  "settings.general.lowMemoryModeDescription": "开启后，后台终端隐藏超过 10 秒会释放 WebGL/GPU 渲染资源；切回终端时可能出现轻微重绘，但不会重启终端或丢失内容。",
+  "settings.general.lowMemoryModeDescription": "后台终端默认在隐藏 30 秒后释放 WebGL/GPU 渲染资源；开启后缩短为 10 秒。切回时重新绘制，不会重启终端或丢失内容。",
   "settings.general.disableLowMemoryMode": "关闭低内存模式",
   "settings.general.enableLowMemoryMode": "开启低内存模式",
   "settings.general.disableHardwareAcceleration": "禁用硬件加速",
@@ -3968,7 +3968,7 @@ const en: Record<keyof typeof zh, string> = {
   "settings.general.disableWorkspanDevelopment": "Disable Workspan Development",
   "settings.general.enableWorkspanDevelopment": "Enable Workspan Development",
   "settings.general.lowMemoryMode": "Low Memory Mode",
-  "settings.general.lowMemoryModeDescription": "When enabled, hidden terminals release WebGL/GPU renderer resources after 10 seconds. Switching back may lightly repaint, but the terminal process and scrollback stay intact.",
+  "settings.general.lowMemoryModeDescription": "Hidden terminals release WebGL/GPU renderer resources after 30 seconds by default, or 10 seconds in Low Memory Mode. Returning redraws the terminal while preserving its process and scrollback.",
   "settings.general.disableLowMemoryMode": "Disable low memory mode",
   "settings.general.enableLowMemoryMode": "Enable low memory mode",
   "settings.general.disableHardwareAcceleration": "Disable Hardware Acceleration",
@@ -4846,7 +4846,12 @@ const en: Record<keyof typeof zh, string> = {
   "git.smartCheckout.conflictHint": "The target branch was switched successfully, but applying the stash caused conflicts. There is no merge/rebase state to abort here; resolve the conflicts first, and check `git status` plus `git stash list` in the terminal if needed.",
 };
 
-const zhTwConverter = OpenCC.Converter({ from: "cn", to: "tw" });
+let zhTwConverter: ReturnType<typeof OpenCC.Converter> | undefined;
+function getZhTwConverter() {
+  // OpenCC builds a large phrase trie. Simplified Chinese and English never
+  // need it; keep conversion synchronous when Traditional Chinese is selected.
+  return zhTwConverter ??= OpenCC.Converter({ from: "cn", to: "tw" });
+}
 const zhTwOverrides: Partial<Record<keyof typeof zh, string>> = {
 };
 
@@ -4854,17 +4859,18 @@ function buildTraditionalChineseDictionary(
   base: typeof zh,
   overrides: Partial<Record<keyof typeof zh, string>>
 ): Record<keyof typeof zh, string> {
+  const convert = getZhTwConverter();
   const converted = Object.fromEntries(
-    Object.entries(base).map(([key, value]) => [key, zhTwConverter(value)])
+    Object.entries(base).map(([key, value]) => [key, convert(value)])
   ) as Record<keyof typeof zh, string>;
   return { ...converted, ...overrides };
 }
 
-const zhTw = buildTraditionalChineseDictionary(zh, zhTwOverrides);
+let zhTw: Record<keyof typeof zh, string> | undefined;
 
 const dictionaries = {
   "zh-CN": zh,
-  "zh-TW": zhTw,
+  get "zh-TW"() { return zhTw ??= buildTraditionalChineseDictionary(zh, zhTwOverrides); },
   "en-US": en,
 };
 

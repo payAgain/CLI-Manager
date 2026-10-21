@@ -45,7 +45,7 @@ import { ProjectTree } from "./ProjectTree";
 import { BatchShellDialog } from "./BatchShellDialog";
 import { SidebarFooter } from "./SidebarFooter";
 import { groupSyncedExternalSessions } from "../../lib/externalSessionGrouping";
-import { FileExplorerSidebar } from "../files/FileExplorerSidebar";
+import { FileExplorerSidebar } from "../files/LazyFileExplorerSidebar";
 import {
   Check,
   CircleStop,

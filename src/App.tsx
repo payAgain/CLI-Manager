@@ -316,8 +316,6 @@ function runDeferredStartupTasks(): void {
   deferredStartupTasksStarted = true;
 
   window.setTimeout(() => {
-    window.setTimeout(preloadSettingsModal, 250);
-
     void (async () => {
       await useProjectStore.getState().refreshProjectDiagnostics().catch((err) => {
         logWarn("Failed to refresh deferred project diagnostics", err);

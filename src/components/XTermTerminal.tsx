@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import {
   Terminal,
   type IBufferRange,
@@ -46,7 +46,8 @@ import { useTerminalContextMenu } from "../hooks/useTerminalContextMenu";
 import { useTerminalOsc } from "../hooks/useTerminalOsc";
 import { useTerminalDisplay } from "../hooks/useTerminalDisplay";
 import { useTerminalInput } from "../hooks/useTerminalInput";
-import { trackTerminalMouseProtocol, writeTerminalReplay } from "../lib/terminalReplayWriter";
+import { trackTerminalMouseProtocol } from "../lib/terminalReplayWriter";
+import { createTerminalScrollbackReplay } from "../lib/terminalScrollback";
 import { copyTextToClipboard } from "../lib/systemClipboard";
 import { hasCodexTuiViewport } from "../lib/terminalTuiDisplay";
 import { createTerminalTuiColorSyncController } from "../lib/terminalTuiColorSync";
@@ -68,10 +69,7 @@ import {
   Eye,
   EyeOff,
 } from "./icons";
-import {
-  isTerminalMarkdownPreviewSupported,
-  TerminalMarkdownPreview,
-} from "./terminal/TerminalMarkdownPreview";
+import { isTerminalMarkdownPreviewSupported } from "../lib/terminalMarkdownSource";
 import {
   createTerminalCliContext,
   isCodexTerminalContext,
@@ -82,6 +80,7 @@ import {
   type PiTerminalCompatibility,
 } from "../terminal/browser/TerminalPiCompatibility";
 import { shouldReflowTerminalCursorLine } from "../terminal/browser/TerminalReflowPolicy";
+import { isValidTerminalSize } from "../terminal/browser/TerminalResizeDebouncer";
 import { terminalProcessManager } from "../terminal/core/TerminalProcessManager";
 import type { TerminalProcessTraits } from "../terminal/transport/PtyHostSocket";
 import {
@@ -90,6 +89,9 @@ import {
   type LightThemePalette,
   type DarkThemePalette,
 } from "../stores/settingsStore";
+
+const TerminalMarkdownPreview = lazy(() => import("./terminal/TerminalMarkdownPreview")
+  .then((module) => ({ default: module.TerminalMarkdownPreview })));
 
 const SEARCH_HIGHLIGHT_LIMIT = 1000;
 const IMAGE_ADDON_PIXEL_LIMIT = 4 * 1024 * 1024;
@@ -445,6 +447,7 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
   const [linuxGraphicsConstrained, setLinuxGraphicsConstrained] = useState(false);
   const [linuxGraphicsDisableWebgl, setLinuxGraphicsDisableWebgl] = useState(false);
   const [markdownPreviewOpen, setMarkdownPreviewOpen] = useState(false);
+  const [markdownPreviewEverOpened, setMarkdownPreviewEverOpened] = useState(false);
   const [markdownPreviewRatio, setMarkdownPreviewRatio] = useState(0.5);
   const markdownPreviewDragCleanupRef = useRef<(() => void) | null>(null);
   const { menuState, menuRef, openMenu, closeContextMenu } = useTerminalContextMenu();
@@ -567,8 +570,8 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
 
   useEffect(() => {
     if (!markdownPreviewOpen) return;
-    const frame = window.requestAnimationFrame(() => fitAddonRef.current?.fit());
-    return () => window.cancelAnimationFrame(frame);
+    setMarkdownPreviewEverOpened(true);
+    scheduleFit(true);
   }, [markdownPreviewOpen, markdownPreviewRatio]);
 
   const handleMarkdownPreviewResizeStart = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
@@ -653,6 +656,7 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
     scheduleViewportRefresh,
     markViewportRefreshNeeded,
     enqueueActiveWrite,
+    restoreDisplaySnapshot,
     attachPtyOutput,
     attachViewport,
     resetOutputState,
@@ -1212,6 +1216,7 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
     scheduleFit(true);
     const sessionSnapshot = useTerminalStore.getState().sessions.find((item) => item.id === sessionId);
     const initialTerminalOutput = sessionSnapshot?.initialTerminalOutput;
+    const liveDisplaySnapshot = terminalProcessManager.takeDisplaySnapshot(sessionId);
     const writeDeferredStartup = () => {
       if (!sessionSnapshot?.deferStartupUntilInitialOutput || !sessionSnapshot.startupCmd) return;
       terminalProcessManager.write(
@@ -1234,7 +1239,13 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
         if (terminalRef.current !== terminal) return;
         snapshotBeforeUnmountRef.current = () => {
           try {
-            useTerminalStore.getState().updateSessionTerminalSnapshot(sessionId, serializeSnapshot());
+            const store = useTerminalStore.getState();
+            if (!store.sessions.some((item) => item.id === sessionId)) return;
+            const serializedState = serializeSnapshot();
+            terminalProcessManager.saveDisplaySnapshot(sessionId, {
+              cols: terminal.cols, rows: terminal.rows, serializedState,
+            });
+            store.updateSessionTerminalSnapshot(sessionId, serializedState);
           } catch (err) {
             logError("Failed to snapshot terminal buffer before dispose", { sessionId, err });
           }
@@ -1243,25 +1254,32 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
       });
     };
     let initialDisplayRestoreRaf: number | null = null;
-    if (initialTerminalOutput) {
-      // The serialized shell snapshot contains cursor coordinates from the old
-      // terminal geometry. Fit first, then end on a clean line so output from
-      // the recreated PTY cannot overwrite restored text at that stale cursor.
+    if (liveDisplaySnapshot) {
+      // The PTY is still running: retain its cursor and screen origin exactly.
+      // A synthetic newline here moves the prompt into scrollback while the
+      // shell continues addressing input relative to the original first row.
+      restoreDisplaySnapshot(liveDisplaySnapshot, finishInitialDisplayRestore);
+    } else if (initialTerminalOutput) {
+      // Historical pictures belong in scrollback. The recreated PTY starts at
+      // row 1, so its viewport and absolute cursor addresses must start there too.
       initialDisplayRestoreRaf = window.requestAnimationFrame(() => {
         initialDisplayRestoreRaf = null;
         if (terminalRef.current !== terminal) return;
         const dimensions = fitAddon.proposeDimensions();
-        if (
+        const restoreSize = (
           dimensions
-          && dimensions.cols > 0
-          && dimensions.rows > 0
-          && (terminal.cols !== dimensions.cols || terminal.rows !== dimensions.rows)
-        ) {
-          terminal.resize(dimensions.cols, dimensions.rows);
-        }
+          && isVisibleRef.current
+          && (containerRef.current?.offsetWidth ?? 0) > 0
+          && (containerRef.current?.offsetHeight ?? 0) > 0
+          && isValidTerminalSize(dimensions.cols, dimensions.rows)
+        ) ? dimensions : terminal;
         const restoredOutput = displayTransformOutputRef.current(initialTerminalOutput);
         const restoredCursor = shouldHideCodexCursor(terminal) ? "\x1b[?25l" : "\x1b[?25h";
-        writeTerminalReplay(terminal, `${restoredOutput}\x1b[?6l\x1b[r\x1b[0m${restoredCursor}\x1b[999B\r\n`, () => {
+        restoreDisplaySnapshot({
+          cols: restoreSize.cols,
+          rows: restoreSize.rows,
+          serializedState: createTerminalScrollbackReplay(restoredOutput, restoreSize.rows) + restoredCursor,
+        }, () => {
           if (terminalRef.current !== terminal) return;
           terminal.scrollToBottom();
           refreshTerminalViewport(terminal);
@@ -1861,13 +1879,15 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
           className="absolute inset-y-0 right-0 min-w-0 overflow-hidden"
           style={{ width: markdownPreviewOpen ? `${markdownPreviewPanelPercent}%` : "0%", pointerEvents: markdownPreviewOpen ? "auto" : "none" }}
         >
-          <TerminalMarkdownPreview
-            sessionId={sessionId}
-            open={markdownPreviewOpen}
-            isVisible={isVisible}
-            onClose={() => setMarkdownPreviewOpen(false)}
-            terminalTheme={terminalTheme}
-          />
+          <Suspense fallback={null}>
+            {(markdownPreviewOpen || markdownPreviewEverOpened) && <TerminalMarkdownPreview
+              sessionId={sessionId}
+              open={markdownPreviewOpen}
+              isVisible={isVisible}
+              onClose={() => setMarkdownPreviewOpen(false)}
+              terminalTheme={terminalTheme}
+            />}
+          </Suspense>
         </div>
       </div>
 

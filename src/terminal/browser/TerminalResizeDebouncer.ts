@@ -5,6 +5,14 @@
 
 import type { Terminal } from "@xterm/xterm";
 
+export const MIN_TERMINAL_COLS = 40;
+export const MIN_TERMINAL_ROWS = 8;
+
+export const isValidTerminalSize = (cols: number, rows: number): boolean => (
+  Number.isInteger(cols) && cols >= MIN_TERMINAL_COLS
+  && Number.isInteger(rows) && rows >= MIN_TERMINAL_ROWS
+);
+
 const START_DEBOUNCING_THRESHOLD = 200;
 const HORIZONTAL_RESIZE_INTERVAL_MS = 34;
 const HIDDEN_RESIZE_IDLE_TIMEOUT_MS = 100;

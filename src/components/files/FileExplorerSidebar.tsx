@@ -50,7 +50,7 @@ import { ChevronRight, Copy, EyeOff, File, FileCode, Folder, FolderOpen, FolderP
 import { TERM } from "../stats/termStatsUi";
 import { TerminalPanelHeader } from "../terminal/TerminalPanelHeader";
 
-interface FileExplorerSidebarProps {
+export interface FileExplorerSidebarProps {
   mode?: "sidebar" | "panel";
   onClosePanel?: () => void;
   onBackToProjects?: () => void;
