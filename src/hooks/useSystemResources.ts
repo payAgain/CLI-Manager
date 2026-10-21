@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, isTauri } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { createVisibleResourcePoller } from "../lib/visibleResourcePolling";
 
 export interface SystemResourceSnapshot {
   ipAddress: string | null;
@@ -99,47 +101,52 @@ export function useSystemResources(
   const [history, setHistory] = useState<SystemResourceSnapshot[]>(() => cached?.history ?? []);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const inFlightRef = useRef(false);
+  const refreshRef = useRef<(showLoading?: boolean) => Promise<void>>(async () => {});
   const historyRef = useRef(history);
-
-  const refresh = useCallback(async (showLoading = false) => {
-    if (!enabled || inFlightRef.current) return;
-    inFlightRef.current = true;
-    if (showLoading) setLoading(true);
-    try {
-      const payload = typeof options === "boolean" ? { fullDetail: options } : { options };
-      const result = await invoke<SystemResourceSnapshot>("system_resources_get_snapshot", payload);
-      const nextHistory = appendHistory(historyRef.current, result);
-      historyRef.current = nextHistory;
-      if (runtimeCacheKey) {
-        systemResourceRuntimeCache.set(runtimeCacheKey, { snapshot: result, history: nextHistory });
-      }
-      setSnapshot(result);
-      setHistory(nextHistory);
-      setError(null);
-    } catch (err) {
-      setError(String(err));
-    } finally {
-      inFlightRef.current = false;
-      if (showLoading) setLoading(false);
-    }
-  }, [enabled, options, runtimeCacheKey]);
+  const refresh = useCallback((showLoading = false) => refreshRef.current(showLoading), []);
 
   useEffect(() => {
     if (!enabled) {
-      // 面板切走时只停止轮询，保留 snapshot/history，切回后继续追加
       setLoading(false);
       setError(null);
       return;
     }
-
-    void refresh(true);
-    const timer = window.setInterval(() => {
-      void refresh(false);
-    }, intervalMs);
-
-    return () => window.clearInterval(timer);
-  }, [enabled, intervalMs, refresh]);
+    const poller = createVisibleResourcePoller({
+      isVisible: async () => {
+        if (document.visibilityState === "hidden") return false;
+        if (!isTauri()) return true;
+        const appWindow = getCurrentWindow();
+        const [visible, minimized] = await Promise.all([appWindow.isVisible(), appWindow.isMinimized()]);
+        return visible && !minimized;
+      },
+      read: () => invoke<SystemResourceSnapshot>("system_resources_get_snapshot", typeof options === "boolean" ? { fullDetail: options } : { options }),
+      onSnapshot: (result) => {
+        const nextHistory = appendHistory(historyRef.current, result);
+        historyRef.current = nextHistory;
+        if (runtimeCacheKey) systemResourceRuntimeCache.set(runtimeCacheKey, { snapshot: result, history: nextHistory });
+        setSnapshot(result);
+        setHistory(nextHistory);
+        setError(null);
+      },
+      onError: (err) => setError(String(err)),
+      onLoading: setLoading,
+    });
+    refreshRef.current = poller.refresh;
+    void poller.refresh(true);
+    const timer = window.setInterval(() => void poller.refresh(), intervalMs);
+    const onVisible = () => { void poller.refresh(); };
+    document.addEventListener("visibilitychange", onVisible);
+    const unlisten = isTauri() ? getCurrentWindow().onFocusChanged(({ payload }) => {
+      if (payload) onVisible();
+    }).catch(() => () => {}) : Promise.resolve(() => {});
+    return () => {
+      poller.dispose();
+      refreshRef.current = async () => {};
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+      void unlisten.then((stop) => stop());
+    };
+  }, [enabled, intervalMs, options, runtimeCacheKey]);
 
   return { snapshot, history, loading, error, refresh };
 }
