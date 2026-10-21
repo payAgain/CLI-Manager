@@ -4,7 +4,7 @@ import { createPortal } from "react-dom";
 import { useShallow } from "zustand/shallow";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
-import { Layers, type LucideIcon } from "lucide-react";
+import { Bot, Layers, type LucideIcon } from "lucide-react";
 import {
   DndContext,
   DragOverlay,
@@ -133,6 +133,10 @@ const FileEditorPane = lazy(() =>
 
 const SubagentTranscriptView = lazy(() =>
   import("./terminal/SubagentTranscriptView").then((module) => ({ default: module.SubagentTranscriptView }))
+);
+
+const SubagentBrowserPanel = lazy(() =>
+  import("./terminal/SubagentBrowserPanel").then((module) => ({ default: module.SubagentBrowserPanel }))
 );
 
 const SessionReplayPanel = lazy(() =>
@@ -2532,7 +2536,7 @@ export function TerminalTabs({
   const [gitOpen, setGitOpen] = useState(false);
   const [replayOpen, setReplayOpen] = useState(false);
   const [filesOpen, setFilesOpen] = useState(false);
-  const [auxiliaryPanelTab, setAuxiliaryPanelTab] = useState<"backgroundTasks" | null>(null);
+  const [auxiliaryPanelTab, setAuxiliaryPanelTab] = useState<"backgroundTasks" | "subagents" | null>(null);
   const [finishTarget, setFinishTarget] = useState<{ project: Project; worktree: WorktreeRecord } | null>(null);
   const [discardTarget, setDiscardTarget] = useState<{ project: Project; worktree: WorktreeRecord } | null>(null);
   const [activeToolbarDragId, setActiveToolbarDragId] = useState<string | null>(null);
@@ -3810,7 +3814,7 @@ export function TerminalTabs({
   }, [refreshBackgroundTasks]);
 
   const activeAuxiliaryPanel = sidePanelMerged
-    ? sidePanelOpen && (sidePanelTab === "backgroundTasks") ? sidePanelTab : null
+    ? sidePanelOpen && (sidePanelTab === "backgroundTasks" || sidePanelTab === "subagents") ? sidePanelTab : null
     : auxiliaryPanelTab;
 
   const closeAuxiliaryPanel = useCallback(() => {
@@ -3818,7 +3822,7 @@ export function TerminalTabs({
     else setAuxiliaryPanelTab(null);
   }, [sidePanelMerged]);
 
-  const toggleAuxiliaryPanel = useCallback((tab: "backgroundTasks") => {
+  const toggleAuxiliaryPanel = useCallback((tab: "backgroundTasks" | "subagents") => {
     if (activeAuxiliaryPanel === tab) { closeAuxiliaryPanel(); return; }
     if (terminalSidePanelSingleOpen) { closeHistory(); setActiveWorkspaceTab("terminal"); }
     if (sidePanelMerged) { setSidePanelTab(tab); setSidePanelOpen(true); }
@@ -3861,6 +3865,7 @@ export function TerminalTabs({
             : t("terminal.toolbar.openFilesPanel"),
       stats: statsPanelActive ? t("terminal.toolbar.closeStatsPanel") : t("terminal.toolbar.openStatsPanel"),
       backgroundTasks: t("terminal.backgroundTasks.title"),
+      subagents: t("terminal.subagents.title"),
     };
     const buttonMap: Record<string, ReactNode> = {
       new: (
@@ -3953,6 +3958,13 @@ export function TerminalTabs({
           aria-pressed={statsPanelActive}
         >
           <BarChart3 size={13} strokeWidth={1.8} />
+        </button>
+      ),
+      subagents: (
+        <button className="ui-focus-ring ui-icon-action ui-action-subagents" onClick={() => toggleAuxiliaryPanel("subagents")}
+          data-active={activeAuxiliaryPanel === "subagents"} aria-pressed={activeAuxiliaryPanel === "subagents"}
+          aria-label={t("terminal.subagents.title")}><Bot size={14} />
+          {terminalToolbarVisibility.showText && <span>{t("terminal.subagents.title")}</span>}
         </button>
       ),
       backgroundTasks: (
@@ -4597,13 +4609,15 @@ export function TerminalTabs({
               filesPanelContent={<FileExplorerSidebar mode="panel" onClosePanel={closeFilesPanel} />}
               auxiliaryPanelContent={sidePanelTab === "backgroundTasks"
                 ? <BackgroundTasksPanel tasks={backgroundTasks} onRefresh={refreshBackgroundTasks} onRestored={closeAuxiliaryPanel} />
-                : null}
+                : sidePanelTab === "subagents" ? <Suspense fallback={null}><SubagentBrowserPanel session={panelSession} project={panelProject} /></Suspense> : null}
             />
           ) : (
             <>
               {auxiliaryPanelTab && <ResizableTerminalPanelFrame widthKey="merged" defaultWidth={TERMINAL_PANEL_WIDTH_DEFAULTS.merged}
                 resizeLabel={t("terminal.panel.resizeSideLabel")} resizeTitle={t("terminal.panel.resizeSideTitle")}>
-                <BackgroundTasksPanel tasks={backgroundTasks} onRefresh={refreshBackgroundTasks} onRestored={closeAuxiliaryPanel} />
+                {auxiliaryPanelTab === "backgroundTasks"
+                  ? <BackgroundTasksPanel tasks={backgroundTasks} onRefresh={refreshBackgroundTasks} onRestored={closeAuxiliaryPanel} />
+                  : <Suspense fallback={null}><SubagentBrowserPanel session={panelSession} project={panelProject} /></Suspense>}
               </ResizableTerminalPanelFrame>}
               {statsOpen && panelCapabilities.statistics && (
                 <ResizableTerminalPanelFrame

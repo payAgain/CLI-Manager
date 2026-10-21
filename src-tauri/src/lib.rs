@@ -1104,6 +1104,7 @@ pub fn run() {
             commands::subagent_transcript::subagent_transcript_unsubscribe,
             commands::subagent_transcript::subagent_transcript_discover,
             commands::subagent_transcript::codex_subagent_transcript_discover,
+            commands::subagent_transcript::subagent_transcript_list,
             commands::system_notification::is_wsl,
             commands::system_notification::send_notification_via_windows,
             commands::system_notification::send_interactive_system_notification,

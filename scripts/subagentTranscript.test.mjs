@@ -177,18 +177,23 @@ const storeSource = readFileSync(new URL("../src/stores/terminalStore.ts", impor
 const ast = ts.createSourceFile("terminalStore.ts", storeSource, ts.ScriptTarget.Latest, true);
 const actions = {};
 let mirrorDeclaration;
+const openHelpers = [];
+const openHelperNames = ["resolveHookWslDistroName", "normalizePathForCompare", "isSameTranscriptPath", "hashString", "createSubagentPaneId", "buildSubagentTitle", "resolveSubagentTranscriptSource", "shouldUpgradeSubagentSource", "mergeSubagentSource", "shouldSubscribeSubagentSource", "shouldAttemptDerivedChildTranscript", "findSubagentSessionId"];
 function visit(node) {
   if (ts.isPropertyAssignment(node) && ts.isIdentifier(node.name)
-    && ["appendSubagentTranscript", "finishSubagentTranscript", "collapseSubagentTranscript", "setActive"].includes(node.name.text)) {
+    && ["openSubagentTranscript", "appendSubagentTranscript", "finishSubagentTranscript", "collapseSubagentTranscript", "setActive"].includes(node.name.text)) {
     actions[node.name.text] = node.initializer.getText(ast);
   }
   if (ts.isFunctionDeclaration(node) && node.name?.text === "buildWorkspanMirror") mirrorDeclaration = node.getText(ast);
+  if (ts.isFunctionDeclaration(node) && openHelperNames.includes(node.name?.text)) openHelpers.push(node.getText(ast));
   ts.forEachChild(node, visit);
 }
 visit(ast);
 function harness(autoClose = true) {
   const timers = new Map();
-  const settings = { hookPopupAutoCloseEnabled: autoClose, hookPopupAutoCloseSeconds: 10 };
+  const settings = { hookPopupAutoCloseEnabled: autoClose, hookPopupAutoCloseSeconds: 10, hookSubagentSplitViewEnabled: false };
+  const ipc = [];
+  let paneSeq = 0;
   const owner = {
     id: "workspan", customTitle: null,
     paneTree: {
@@ -217,25 +222,65 @@ function harness(autoClose = true) {
     subagentFoldTimers: new Map(), subagentDiscoveryTimers: new Map(),
     setTimeout: callback => { timers.set(++timerId, callback); return timerId; },
     clearTimeout: id => timers.delete(id), clearInterval() {},
-    findSubagentSessionId: (sessions, payload) => sessions.find(item => item.subagent?.parentSessionId === payload.tabId && item.subagent?.agentId === payload.agentId)?.id,
+    inferWslDistroFromCwd: () => null,
+    resolveSubagentConfigDir: () => null,
+    translateCurrent: () => "Subagent",
+    useProjectStore: { getState: () => ({ projects: [] }) },
+    useSessionStore: { getState: () => ({ saveSessions: async () => {} }) },
+    invoke: async (command, args) => {
+      ipc.push({ command, args });
+      return { path: args.transcriptPath, initialContent: lines(...fork(), event("task_complete", { turn_id: "child-turn" })).replaceAll('"child"', JSON.stringify(args.agentId)) };
+    },
     useSettingsStore: { getState: () => settings }, useTerminalStore: { getState: () => state },
-    stopSubagentTranscriptRetry() {}, logInfo() {}, logWarn() {}, debugConsoleWarn() {},
+    stopSubagentTranscriptRetry() {}, logInfo() {}, logWarn() {}, logError() {}, debugConsoleWarn() {},
     findWorkspanBySession: workspan.findWorkspanBySession,
     updateTerminalWorkspan: workspan.updateTerminalWorkspan,
     syncTerminalWorkspanLayout: workspan.syncTerminalWorkspanLayout,
     findPaneLeafBySession: paneTree.findPaneLeafBySession,
+    addSessionToPaneTree: paneTree.addSessionToPaneTree,
+    splitPaneLeaf: paneTree.splitPaneLeaf,
+    createPaneId: () => `new-pane-${++paneSeq}`,
     moveSessionToPaneTree: paneTree.moveSessionToPane,
     setPaneActiveSession: paneTree.setPaneActiveSession,
     scheduleSaveActiveId() {}, persistWorkspanState() {},
     SUBAGENT_TRANSCRIPT_MAX_CHARS: 4 * 1024 * 1024,
   };
-  const code = ts.transpileModule([mirrorDeclaration, ...Object.entries(actions).map(([name, value]) => `const ${name} = ${value};`)].join("\n"), {
+  const code = ts.transpileModule([mirrorDeclaration, ...openHelpers, ...Object.entries(actions).map(([name, value]) => `const ${name} = ${value};`)].join("\n"), {
     compilerOptions: { module: ts.ModuleKind.None, target: ts.ScriptTarget.ES2022 },
   }).outputText;
-  const resolved = new Function(...Object.keys(environment), `${code}\nreturn {appendSubagentTranscript, finishSubagentTranscript, collapseSubagentTranscript, setActive};`)(...Object.values(environment));
+  const resolved = new Function(...Object.keys(environment), `${code}\nreturn {openSubagentTranscript, appendSubagentTranscript, finishSubagentTranscript, collapseSubagentTranscript, setActive};`)(...Object.values(environment));
   Object.assign(state, resolved);
-  return { state, settings, timers };
+  return { state, settings, timers, ipc };
 }
+
+test("manual browsing opens a completed child with auto-split disabled and keeps the result focused", async () => {
+  const { state, ipc, timers } = harness();
+  const payload = { tabId: "parent", source: "codex", event: "SubagentStop", sessionId: "main", agentId: "restored-child", agentTranscriptPath: "/custom/sessions/rollout-restored-child.jsonl" };
+  await state.openSubagentTranscript(payload);
+  assert.equal(state.sessions.length, 2, "Hook auto-open remains disabled");
+  await state.openSubagentTranscript(payload, { manual: true, configDir: "/custom" });
+  const child = state.sessions.find(item => item.subagent?.agentId === "restored-child");
+  assert.ok(child);
+  assert.equal(state.activeSessionId, child.id);
+  assert.equal(state.subagentTranscripts[child.id].status, "completed");
+  assert.equal(state.subagentTranscripts[child.id].ended, true);
+  assert.equal(ipc[0].args.configDir, "/custom");
+  for (const callback of timers.values()) callback();
+  assert.equal(state.activeSessionId, child.id);
+  assert.equal(parseSubagentTranscript(state.subagentTranscripts[child.id].content, 1, undefined, "restored-child").messages.at(-1).text, "Own answer");
+  await state.openSubagentTranscript(payload, { manual: true, configDir: "/custom" });
+  assert.equal(state.sessions.length, 3, "opening again reuses this parent's child");
+  assert.equal(ipc.length, 2, "manual refresh retries an existing subscription");
+});
+
+test("the same child ID restored under different parents does not adopt another parent's pane", async () => {
+  const { state } = harness();
+  state.sessions.push({ id: "other-parent", title: "Other", kind: "pty" });
+  state.workspans[0].paneTree = paneTree.addSessionToPaneTree(state.workspans[0].paneTree, "parent-pane", "other-parent", () => "unused").tree;
+  await state.openSubagentTranscript({ tabId: "other-parent", source: "codex", event: "SubagentStop", sessionId: "other-main", agentId: "child", agentTranscriptPath: "/custom/sessions/rollout-child.jsonl" }, { manual: true, configDir: "/custom" });
+  assert.equal(state.sessions.filter(item => item.subagent?.agentId === "child").length, 2);
+  assert.equal(state.sessions.find(item => item.id === state.activeSessionId).subagent.parentSessionId, "other-parent");
+});
 
 test("store updates run independently of visibility and preserves an interrupted child status", () => {
   const { state, timers } = harness(false);

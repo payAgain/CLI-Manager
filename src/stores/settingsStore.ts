@@ -193,6 +193,7 @@ export interface TerminalToolbarVisibilitySettings {
   stats: boolean;
   gitChanges: boolean;
   backgroundTasks: boolean;
+  subagents: boolean;
   showText: boolean;
 }
 
@@ -446,9 +447,10 @@ const DEFAULTS: Settings = {
     stats: true,
     gitChanges: true,
     backgroundTasks: true,
+    subagents: true,
     showText: false,
   },
-  terminalToolbarOrder: ["new", "templates", "fullscreen", "sessionHistory", "replay", "files", "gitChanges", "stats", "backgroundTasks"],
+  terminalToolbarOrder: ["new", "templates", "fullscreen", "sessionHistory", "replay", "files", "gitChanges", "stats", "subagents", "backgroundTasks"],
   terminalSidePanelMerged: true,
   terminalSidePanelSingleOpen: true,
   terminalSidePanelSkin: "terminal",
@@ -673,6 +675,7 @@ export function migrateTerminalToolbarVisibility(value: unknown): TerminalToolba
     stats: typeof raw.stats === "boolean" ? raw.stats : defaults.stats,
     gitChanges: typeof raw.gitChanges === "boolean" ? raw.gitChanges : defaults.gitChanges,
     backgroundTasks: typeof raw.backgroundTasks === "boolean" ? raw.backgroundTasks : defaults.backgroundTasks,
+    subagents: typeof raw.subagents === "boolean" ? raw.subagents : defaults.subagents,
     showText: typeof raw.showText === "boolean" ? raw.showText : defaults.showText,
   };
 }

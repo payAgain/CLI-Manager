@@ -682,6 +682,47 @@ export async function fetchRemoteProjectSessionSummaries(
   };
 }
 
+export async function fetchRemoteSubagentSessions(project: Project, parentSessionId: string, expectedSourceInstanceId?: string) {
+  const initial = await buildSshAgentHistoryContext(project);
+  initial.consumerId += `:subagents:${parentSessionId}:${crypto.randomUUID()}`;
+  initial.projectPaths = [];
+  try {
+    let context = await syncRemoteHistoryContext(initial, { reset: true, limit: 500, forceRefresh: true });
+    while (context.hasMore) {
+      const next = await syncRemoteHistoryContext(context, { limit: 500 });
+      if (next.hasMore && next.cursor === context.cursor) throw new Error("history_remote_sync_stalled");
+      context = next;
+    }
+    if (expectedSourceInstanceId && context.sourceInstanceId !== expectedSourceInstanceId) throw new Error("history_remote_identity_mismatch");
+    const summaries: HistorySessionSummary[] = [];
+    if (context.sourceInstanceId) {
+      const limit = 1000;
+      for (let offset = 0; ; offset += limit) {
+        const raw = await invoke<unknown[]>("history_remote_list_cached", {
+          sourceInstanceId: context.sourceInstanceId, projectPath: null, query: null, limit, offset,
+        });
+        summaries.push(...raw.map(normalizeSummary).filter(item => item.subagent?.parent_session_id === parentSessionId));
+        if (raw.length < limit) break;
+      }
+    }
+    return { context, summaries };
+  } catch (error) {
+    await invoke("history_remote_close", { hostId: initial.hostId, consumerId: initial.consumerId }).catch(() => {});
+    throw error;
+  }
+}
+
+export async function fetchRemoteSubagentDetail(context: SshAgentHistoryContext, sessionId: string): Promise<HistorySessionDetail> {
+  const raw = await invoke<unknown>("history_remote_get_session", {
+    consumerId: context.consumerId, sshLaunch: context.launch, source: context.source,
+    configuredConfigRoot: context.configuredConfigRoot, projectPaths: context.projectPaths,
+    sourceInstanceId: context.sourceInstanceId, sourceSessionId: sessionId, remoteTranscriptRef: null,
+  });
+  const detail = normalizeDetail(raw);
+  if (detail.session_id !== sessionId || detail.session_ref?.sourceInstanceId !== context.sourceInstanceId) throw new Error("history_remote_identity_mismatch");
+  return detail;
+}
+
 function makeSessionKey(
   source: HistorySource,
   sessionId: string,

@@ -10,7 +10,7 @@
 //! 端 tail；目录发现走 `wsl.exe find`，绕过 Plan 9 目录枚举限制。
 
 use crate::shell_resolver::silent_command;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
@@ -301,11 +301,20 @@ fn normalize_explicit_transcript_path(path: String, wsl_distro_name: Option<&str
             );
             return unc;
         }
-        warn!(
-            "[subagent_transcript] explicit linux path without WSL distro, using raw path: {path}"
-        );
     }
     path
+}
+
+fn normalize_config_dir(path: String, distro: Option<&str>) -> String {
+    if let Some(distro) = distro {
+        if crate::wsl::parse_wsl_unc_path(&crate::wsl::normalize_wsl_unc_path(&path)).is_some() {
+            return crate::wsl::normalize_wsl_unc_path(&path);
+        }
+        if let Some(linux) = crate::wsl::windows_path_to_wsl(&path) {
+            return crate::wsl::linux_to_unc_wsl_path(&linux, distro);
+        }
+    }
+    normalize_explicit_transcript_path(path, distro)
 }
 
 fn has_current_or_parent_component(path: &Path) -> bool {
@@ -376,14 +385,24 @@ fn validate_child_transcript_path(
     path: &str,
     session_id: Option<&str>,
     agent_id: Option<&str>,
+    config_dir: Option<&str>,
 ) -> Result<(), String> {
     match validate_explicit_transcript_path(path) {
         Err(error) if error == "transcript_path_outside_allowed_roots" => {
+            if let (Some(config), Some(parent), Some(child)) = (config_dir, session_id, agent_id) {
+                if is_configured_claude_transcript(path, config, parent, Some(child)) {
+                    return Ok(());
+                }
+            }
             // Custom CODEX_HOME paths are accepted only for the exact child
             // rollout identified by the Hook, never for arbitrary JSON files.
             let candidate = Path::new(path);
-            if !candidate.is_absolute() || has_current_or_parent_component(candidate)
-                || !candidate.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("jsonl")) {
+            if !candidate.is_absolute()
+                || has_current_or_parent_component(candidate)
+                || !candidate
+                    .extension()
+                    .is_some_and(|ext| ext.eq_ignore_ascii_case("jsonl"))
+            {
                 return Err(error);
             }
             if let (Some(parent), Some(child), Some((actual_child, actual_parent))) =
@@ -396,6 +415,68 @@ fn validate_child_transcript_path(
             Err(error)
         }
         result => result,
+    }
+}
+
+/// A custom Claude installation only grants access to the selected session's
+/// normal transcript layout, rather than to arbitrary files below that root.
+fn is_configured_claude_transcript(
+    path: &str,
+    config_dir: &str,
+    session_id: &str,
+    agent_id: Option<&str>,
+) -> bool {
+    let path_wsl = crate::wsl::parse_wsl_unc_path(&crate::wsl::normalize_wsl_unc_path(path));
+    let config_wsl =
+        crate::wsl::parse_wsl_unc_path(&crate::wsl::normalize_wsl_unc_path(config_dir));
+    let (path, config, wsl) = match (path_wsl, config_wsl) {
+        (Some((distro, path)), Some((config_distro, config)))
+            if distro.eq_ignore_ascii_case(&config_distro) =>
+        {
+            (PathBuf::from(path), PathBuf::from(config), true)
+        }
+        (None, None) => (PathBuf::from(path), PathBuf::from(config_dir), false),
+        _ => return false,
+    };
+    // Linux paths are rooted without a drive prefix, even when this code runs
+    // on Windows. Never canonicalize them against the Windows host filesystem.
+    if (!wsl && (!path.is_absolute() || !config.is_absolute()))
+        || (wsl
+            && (!path.to_string_lossy().starts_with('/')
+                || !config.to_string_lossy().starts_with('/')))
+        || has_current_or_parent_component(&path)
+        || has_current_or_parent_component(&config)
+    {
+        return false;
+    }
+    let projects = config.join("projects");
+    let Ok(relative) = path.strip_prefix(&projects) else {
+        return false;
+    };
+    let parts: Vec<_> = relative.iter().map(|part| part.to_string_lossy()).collect();
+    let matches_layout = if let Some(agent) = agent_id {
+        parts.len() == 4
+            && parts[1] == session_id
+            && parts[2] == "subagents"
+            && parts[3] == format!("agent-{agent}.jsonl")
+    } else {
+        parts.len() == 2 && parts[1] == format!("{session_id}.jsonl")
+    };
+    if !matches_layout {
+        return false;
+    }
+    if wsl {
+        return true;
+    }
+    // Resolve existing symlinks as well; a child file cannot escape the chosen
+    // installation through a project directory or a file symlink.
+    let existing = path.ancestors().find(|ancestor| ancestor.exists());
+    match (
+        existing.and_then(|path| path.canonicalize().ok()),
+        config.canonicalize(),
+    ) {
+        (Some(path), Ok(config)) => path.starts_with(config),
+        _ => true, // Hook subscriptions can precede file creation.
     }
 }
 
@@ -427,9 +508,18 @@ fn derive_transcript_path_from_parent(
     session_id: &str,
     agent_id: &str,
     wsl_distro_name: Option<&str>,
+    config_dir: Option<&str>,
 ) -> Result<String, String> {
     let parent = normalize_explicit_transcript_path(parent_transcript_path, wsl_distro_name);
-    validate_explicit_transcript_path(&parent)?;
+    if let Err(error) = validate_explicit_transcript_path(&parent) {
+        if error != "transcript_path_outside_allowed_roots"
+            || !config_dir.is_some_and(|config| {
+                is_configured_claude_transcript(&parent, config, session_id, None)
+            })
+        {
+            return Err(error);
+        }
+    }
 
     // Parse the Linux portion of WSL paths using the same rules on every host.
     let wsl_parent = crate::wsl::parse_wsl_unc_path(&parent);
@@ -460,7 +550,7 @@ fn derive_transcript_path_from_parent(
     } else {
         child
     };
-    validate_explicit_transcript_path(&child)?;
+    validate_child_transcript_path(&child, Some(session_id), Some(agent_id), config_dir)?;
     Ok(child)
 }
 
@@ -616,8 +706,11 @@ fn resolve_native_codex_sessions_root(
 ) -> PathBuf {
     if let Some(path) = trimmed(parent_transcript_path).map(PathBuf::from) {
         if path.is_absolute() {
-            if let Some(root) = path.ancestors().skip(1).find(|ancestor|
-                ancestor.file_name().is_some_and(|name| name.eq_ignore_ascii_case("sessions"))) {
+            if let Some(root) = path.ancestors().skip(1).find(|ancestor| {
+                ancestor
+                    .file_name()
+                    .is_some_and(|name| name.eq_ignore_ascii_case("sessions"))
+            }) {
                 return root.to_path_buf();
             }
         }
@@ -697,7 +790,11 @@ fn resolve_wsl_codex_sessions_root(
 }
 
 fn list_native_codex_rollout_candidates(root: &Path, agent_id: &str) -> Vec<PathBuf> {
-    let expected_suffix = format!("-{agent_id}.jsonl");
+    let expected_suffix = if agent_id.is_empty() {
+        ".jsonl".to_string()
+    } else {
+        format!("-{agent_id}.jsonl")
+    };
     let mut out = Vec::new();
     let mut stack = vec![root.to_path_buf()];
     let mut scanned_dirs = 0usize;
@@ -718,11 +815,14 @@ fn list_native_codex_rollout_candidates(root: &Path, agent_id: &str) -> Vec<Path
         };
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.is_dir() {
+            let Ok(kind) = entry.file_type() else {
+                continue;
+            };
+            if kind.is_dir() {
                 stack.push(path);
                 continue;
             }
-            if !path.is_file() {
+            if !kind.is_file() {
                 continue;
             }
             scanned_files += 1;
@@ -752,7 +852,11 @@ fn list_wsl_codex_rollout_candidates(root: &Path, agent_id: &str) -> Vec<PathBuf
     let Some((distro, linux_root)) = crate::wsl::parse_wsl_unc_path(&root_str) else {
         return Vec::new();
     };
-    let pattern = format!("rollout-*-{agent_id}.jsonl");
+    let pattern = if agent_id.is_empty() {
+        "rollout-*.jsonl".to_string()
+    } else {
+        format!("rollout-*-{agent_id}.jsonl")
+    };
     let args = [
         "find",
         linux_root.as_str(),
@@ -876,7 +980,11 @@ fn codex_rollout_identity(path: &Path) -> Option<(String, String)> {
         );
         return None;
     };
-    let parent_thread_id = trimmed_str(payload.get("parent_thread_id").and_then(Value::as_str));
+    let parent_thread_id = trimmed_str(payload.get("parent_thread_id").and_then(Value::as_str))
+        .or_else(|| {
+            cli_manager_history_core::subagent::codex_subagent_metadata(&json)
+                .map(|metadata| metadata.parent_session_id)
+        });
     debug!(
         "[subagent_transcript:codex] inspect rollout session_meta: path={} payloadId={:?} parentThreadId={:?} threadId={:?}",
         path_text,
@@ -884,7 +992,10 @@ fn codex_rollout_identity(path: &Path) -> Option<(String, String)> {
         parent_thread_id,
         payload.get("thread_id").and_then(Value::as_str)
     );
-    Some((trimmed_str(payload.get("id").and_then(Value::as_str))?, parent_thread_id?))
+    Some((
+        trimmed_str(payload.get("id").and_then(Value::as_str))?,
+        parent_thread_id?,
+    ))
 }
 
 /// 解析转录路径：优先显式子路径，其次由父 transcript 定位，最后回退 cwd 推导。
@@ -895,7 +1006,17 @@ fn resolve_transcript_path(
     session_id: Option<String>,
     agent_id: Option<String>,
     wsl_distro_name: Option<String>,
+    config_dir: Option<String>,
 ) -> Result<String, String> {
+    let config_dir = trimmed(config_dir)
+        .or_else(|| {
+            if wsl_distro_name.is_none() {
+                trimmed(std::env::var("CLAUDE_CONFIG_DIR").ok())
+            } else {
+                None
+            }
+        })
+        .map(|path| normalize_config_dir(path, wsl_distro_name.as_deref()));
     if let Some(explicit) = trimmed(transcript_path) {
         if is_linux_absolute_path(&explicit) {
             if let Some(distro) = trimmed(wsl_distro_name) {
@@ -903,11 +1024,21 @@ fn resolve_transcript_path(
                     "[subagent_transcript] resolving explicit linux transcript path with distro={distro}"
                 );
                 let resolved = normalize_explicit_transcript_path(explicit, Some(&distro));
-                validate_child_transcript_path(&resolved, session_id.as_deref(), agent_id.as_deref())?;
+                validate_child_transcript_path(
+                    &resolved,
+                    session_id.as_deref(),
+                    agent_id.as_deref(),
+                    config_dir.as_deref(),
+                )?;
                 return Ok(resolved);
             }
             let resolved = normalize_explicit_transcript_path(explicit, None);
-            validate_child_transcript_path(&resolved, session_id.as_deref(), agent_id.as_deref())?;
+            validate_child_transcript_path(
+                &resolved,
+                session_id.as_deref(),
+                agent_id.as_deref(),
+                config_dir.as_deref(),
+            )?;
             return Ok(resolved);
         }
         debug!(
@@ -916,7 +1047,12 @@ fn resolve_transcript_path(
             is_linux_absolute_path(&explicit)
         );
         let resolved = normalize_explicit_transcript_path(explicit, wsl_distro_name.as_deref());
-        validate_child_transcript_path(&resolved, session_id.as_deref(), agent_id.as_deref())?;
+        validate_child_transcript_path(
+            &resolved,
+            session_id.as_deref(),
+            agent_id.as_deref(),
+            config_dir.as_deref(),
+        )?;
         return Ok(resolved);
     }
 
@@ -931,6 +1067,7 @@ fn resolve_transcript_path(
             &session_id,
             &agent_id,
             wsl_distro_name.as_deref(),
+            config_dir.as_deref(),
         );
     }
 
@@ -938,6 +1075,16 @@ fn resolve_transcript_path(
     let session_id = trimmed(session_id).ok_or_else(|| "missing_session_id".to_string())?;
     let agent_id = trimmed(agent_id).ok_or_else(|| "missing_agent_id".to_string())?;
     let resolved_wsl_distro = resolve_wsl_distro_name(Some(&cwd), wsl_distro_name);
+    if let Some(config) = config_dir.as_deref() {
+        let parent = locate_claude_parent(config, &cwd, &session_id)?;
+        return derive_transcript_path_from_parent(
+            parent,
+            &session_id,
+            &agent_id,
+            resolved_wsl_distro.as_deref(),
+            Some(config),
+        );
+    }
     if let Some(distro) = resolved_wsl_distro {
         debug!(
             "[subagent_transcript] resolving derived WSL transcript path: distro={distro} cwd={cwd} sessionId={session_id} agentId={agent_id}"
@@ -964,6 +1111,7 @@ pub async fn subagent_transcript_subscribe(
     session_id: Option<String>,
     agent_id: Option<String>,
     wsl_distro_name: Option<String>,
+    config_dir: Option<String>,
 ) -> Result<SubscribeResult, String> {
     if key.trim().is_empty() {
         return Err("missing_key".to_string());
@@ -975,6 +1123,7 @@ pub async fn subagent_transcript_subscribe(
         session_id,
         agent_id,
         wsl_distro_name,
+        config_dir,
     )?;
     debug!("[subagent_transcript] subscribe resolved path: key={key} path={path}");
     bridge.subscribe(app_handle, key, path)
@@ -1103,7 +1252,10 @@ pub async fn codex_subagent_transcript_discover(
             candidate.to_string_lossy(),
             parent_thread_id
         );
-        if identity.as_ref().is_some_and(|(child, parent)| child == &agent_id && parent == &parent_session_id) {
+        if identity
+            .as_ref()
+            .is_some_and(|(child, parent)| child == &agent_id && parent == &parent_session_id)
+        {
             debug!(
                 "[subagent_transcript:codex] rollout matched: agentId={} path={}",
                 agent_id,
@@ -1121,6 +1273,311 @@ pub async fn codex_subagent_transcript_discover(
     );
 
     Ok(None)
+}
+
+#[derive(Clone, Serialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct SubagentTranscriptRecord {
+    agent_id: String,
+    title: String,
+    transcript_path: String,
+    parent_transcript_path: Option<String>,
+}
+
+fn read_rollout_header(path: &Path) -> Option<Value> {
+    use std::io::BufRead;
+    let mut line = String::new();
+    std::io::BufReader::new(File::open(path).ok()?.take(TRANSCRIPT_READ_MAX_BYTES))
+        .read_line(&mut line)
+        .ok()?;
+    serde_json::from_str(&line).ok()
+}
+
+fn is_safe_session_id(id: &str) -> bool {
+    id.chars().next().is_some_and(|c| c.is_ascii_alphanumeric())
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "._-".contains(c))
+}
+
+fn locate_claude_parent(config: &str, cwd: &str, session_id: &str) -> Result<String, String> {
+    let wsl = crate::wsl::parse_wsl_unc_path(&crate::wsl::normalize_wsl_unc_path(config));
+    let projects = if let Some((_, linux)) = &wsl {
+        PathBuf::from(linux).join("projects")
+    } else {
+        PathBuf::from(config).join("projects")
+    };
+    let slug_cwd = if wsl.is_some() {
+        cwd_for_wsl_slug(cwd)
+    } else {
+        cwd.to_string()
+    };
+    let expected = projects
+        .join(slug_for_cwd(&slug_cwd))
+        .join(format!("{session_id}.jsonl"));
+    let parent = if let Some((distro, _)) = &wsl {
+        // Paths remain positional arguments, and an absent installation/session
+        // is an empty list rather than a failed shell command.
+        let (stdout, _) = wsl_command_text(
+            distro,
+            &[
+                "sh",
+                "-c",
+                r#"if [ -d "$1" ]; then find "$1" -mindepth 2 -maxdepth 2 \( -name "$2.jsonl" -o -name "$2" \) -print; fi"#,
+                "cli-manager-subagents",
+                &projects.to_string_lossy().replace('\\', "/"),
+                session_id,
+            ],
+        )?;
+        let mut candidates: Vec<_> = stdout
+            .lines()
+            .filter(|line| !line.is_empty())
+            .map(|line| {
+                let path = PathBuf::from(line);
+                if path.file_name().is_some_and(|name| name == session_id) {
+                    PathBuf::from(format!("{line}.jsonl"))
+                } else {
+                    path
+                }
+            })
+            .collect();
+        candidates.sort();
+        candidates
+            .iter()
+            .find(|path| *path == &expected)
+            .cloned()
+            .or_else(|| candidates.into_iter().next())
+            .unwrap_or_else(|| expected.clone())
+    } else if expected.exists() || expected.with_extension("").join("subagents").is_dir() {
+        expected.clone()
+    } else {
+        // Restored Worktree sessions can have a different cwd from the one
+        // which created the parent transcript. Search only this installation.
+        let mut candidates = Vec::new();
+        if let Ok(entries) = fs::read_dir(&projects) {
+            for entry in entries
+                .flatten()
+                .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
+            {
+                let candidate = entry.path().join(format!("{session_id}.jsonl"));
+                if candidate.is_file() || candidate.with_extension("").join("subagents").is_dir() {
+                    candidates.push(candidate);
+                }
+            }
+        }
+        candidates.sort();
+        candidates
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| expected.clone())
+    };
+    Ok(if let Some((distro, _)) = wsl {
+        crate::wsl::linux_to_unc_wsl_path(&parent.to_string_lossy().replace('\\', "/"), &distro)
+    } else {
+        parent.to_string_lossy().into_owned()
+    })
+}
+
+fn list_subagent_records(
+    source: &str,
+    parent_session_id: &str,
+    cwd: &str,
+    config_dir: Option<String>,
+    parent_transcript_path: Option<String>,
+    wsl_distro_name: Option<String>,
+) -> Result<Vec<SubagentTranscriptRecord>, String> {
+    if !is_safe_session_id(parent_session_id) {
+        return Err("invalid_parent_session_id".to_string());
+    }
+    let distro = resolve_wsl_distro_name(
+        parent_transcript_path.as_deref().or(Some(cwd)),
+        wsl_distro_name,
+    )
+    .or_else(|| resolve_wsl_distro_name(config_dir.as_deref(), None));
+    if let (Some(distro), Some(config)) = (distro.as_deref(), config_dir.as_deref()) {
+        if let Some((configured_distro, _)) =
+            crate::wsl::parse_wsl_unc_path(&crate::wsl::normalize_wsl_unc_path(config))
+        {
+            if !distro.eq_ignore_ascii_case(&configured_distro) {
+                return Err("history_wsl_distro_mismatch".to_string());
+            }
+        }
+    }
+    if source == "codex" {
+        let root = if let Some(distro) = distro.as_deref() {
+            resolve_wsl_codex_sessions_root(config_dir, parent_transcript_path.clone(), distro)?
+        } else {
+            resolve_native_codex_sessions_root(config_dir, parent_transcript_path.clone())
+        };
+        let mut candidates = list_codex_rollout_candidates(&root, "");
+        candidates.sort();
+        let mut parent_path = None;
+        let mut records = Vec::new();
+        let mut seen = HashSet::new();
+        for path in candidates {
+            let Some(header) = read_rollout_header(&path) else {
+                continue;
+            };
+            if header.get("type").and_then(Value::as_str) != Some("session_meta") {
+                continue;
+            }
+            let Some(payload) = header.get("payload") else {
+                continue;
+            };
+            let Some(id) = payload
+                .get("id")
+                .and_then(Value::as_str)
+                .filter(|id| is_safe_session_id(id))
+            else {
+                continue;
+            };
+            if !path
+                .file_name()
+                .is_some_and(|name| name.to_string_lossy().ends_with(&format!("-{id}.jsonl")))
+            {
+                continue;
+            }
+            if id == parent_session_id {
+                parent_path = Some(path.to_string_lossy().into_owned());
+                continue;
+            }
+            let Some(metadata) =
+                cli_manager_history_core::subagent::codex_subagent_metadata(&header)
+            else {
+                continue;
+            };
+            if metadata.parent_session_id != parent_session_id || !seen.insert(id.to_string()) {
+                continue;
+            }
+            records.push(SubagentTranscriptRecord {
+                agent_id: id.to_string(),
+                title: metadata.nickname.unwrap_or_else(|| id.to_string()),
+                transcript_path: path.to_string_lossy().into_owned(),
+                parent_transcript_path: None,
+            });
+        }
+        for record in &mut records {
+            record.parent_transcript_path = parent_path.clone();
+        }
+        records.sort_by(|left, right| left.title.cmp(&right.title));
+        return Ok(records);
+    }
+    if source != "claude" {
+        return Ok(Vec::new());
+    }
+    let config = match trimmed(config_dir) {
+        Some(path) => normalize_config_dir(path, distro.as_deref()),
+        None => {
+            if let Some(distro) = distro.as_deref() {
+                crate::wsl::linux_to_unc_wsl_path(
+                    &format!("{}/.claude", wsl_home_dir(distro)?.trim_end_matches('/')),
+                    distro,
+                )
+            } else {
+                trimmed(std::env::var("CLAUDE_CONFIG_DIR").ok()).unwrap_or(
+                    home_dir()
+                        .ok_or("no_home_dir")?
+                        .join(".claude")
+                        .to_string_lossy()
+                        .into_owned(),
+                )
+            }
+        }
+    };
+    let parent = match parent_transcript_path {
+        Some(path) => normalize_explicit_transcript_path(path, distro.as_deref()),
+        None => locate_claude_parent(&config, cwd, parent_session_id)?,
+    };
+    let probe = derive_transcript_path_from_parent(
+        parent.clone(),
+        parent_session_id,
+        "probe",
+        distro.as_deref(),
+        Some(&config),
+    )?;
+    let normalized = probe.replace('\\', "/");
+    let directory = normalized
+        .rsplit_once('/')
+        .ok_or("invalid_transcript_path")?
+        .0;
+    let paths: Vec<String> = if let Some((distro, linux_dir)) =
+        crate::wsl::parse_wsl_unc_path(directory)
+    {
+        let (stdout, _) = wsl_command_text(
+            &distro,
+            &[
+                "sh",
+                "-c",
+                r#"if [ -d "$1" ]; then find "$1" -maxdepth 1 -type f -name 'agent-*.jsonl' -print; fi"#,
+                "cli-manager-subagents",
+                &linux_dir,
+            ],
+        )?;
+        stdout
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(|line| crate::wsl::linux_to_unc_wsl_path(line.trim(), &distro))
+            .collect()
+    } else {
+        match fs::read_dir(directory) {
+            Ok(entries) => entries
+                .flatten()
+                .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file()))
+                .map(|entry| entry.path().to_string_lossy().into_owned())
+                .collect(),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+            Err(error) => return Err(error.to_string()),
+        }
+    };
+    let mut records = Vec::new();
+    for path in paths {
+        let normalized = path.replace('\\', "/");
+        let Some(name) = normalized.rsplit('/').next() else {
+            continue;
+        };
+        let Some(id) = name
+            .strip_prefix("agent-")
+            .and_then(|name| name.strip_suffix(".jsonl"))
+        else {
+            continue;
+        };
+        if !is_safe_session_id(id) {
+            continue;
+        }
+        validate_child_transcript_path(&path, Some(parent_session_id), Some(id), Some(&config))?;
+        records.push(SubagentTranscriptRecord {
+            agent_id: id.to_string(),
+            title: id.to_string(),
+            transcript_path: path,
+            parent_transcript_path: Some(parent.clone()),
+        });
+    }
+    records.sort_by(|left, right| left.agent_id.cmp(&right.agent_id));
+    Ok(records)
+}
+
+/// On-demand browsing works without a new Hook and never reads SSH files locally.
+#[tauri::command]
+pub async fn subagent_transcript_list(
+    source: String,
+    parent_session_id: String,
+    cwd: String,
+    config_dir: Option<String>,
+    parent_transcript_path: Option<String>,
+    wsl_distro_name: Option<String>,
+) -> Result<Vec<SubagentTranscriptRecord>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        list_subagent_records(
+            &source,
+            parent_session_id.trim(),
+            &cwd,
+            config_dir,
+            parent_transcript_path,
+            wsl_distro_name,
+        )
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 fn discover_wsl_subagent_files(
@@ -1255,6 +1712,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
         .unwrap();
         assert_eq!(got, explicit.to_string_lossy());
@@ -1280,6 +1738,7 @@ mod tests {
             Some("sess-1".to_string()),
             Some("a99".to_string()),
             None,
+            None,
         )
         .unwrap();
 
@@ -1303,6 +1762,7 @@ mod tests {
             Some("sess-1".to_string()),
             Some("a".to_string()),
             None,
+            None,
         )
         .unwrap();
 
@@ -1325,6 +1785,7 @@ mod tests {
             Some("sess-1".to_string()),
             Some("a".to_string()),
             None,
+            None,
         )
         .unwrap_err();
 
@@ -1346,6 +1807,7 @@ mod tests {
                 Some("sess-1".to_string()),
                 Some("a".to_string()),
                 Some("Ubuntu-22.04".to_string()),
+                None,
             )
             .unwrap();
 
@@ -1374,7 +1836,7 @@ mod tests {
             ),
         ] {
             assert_eq!(
-                derive_transcript_path_from_parent(parent.to_string(), "sess-1", "a", None)
+                derive_transcript_path_from_parent(parent.to_string(), "sess-1", "a", None, None)
                     .unwrap_err(),
                 expected_error,
                 "{parent}"
@@ -1386,6 +1848,7 @@ mod tests {
     fn resolve_rejects_explicit_transcript_path_outside_allowed_roots() {
         let err = resolve_transcript_path(
             Some(r"C:\tmp\a.jsonl".to_string()),
+            None,
             None,
             None,
             None,
@@ -1408,6 +1871,7 @@ mod tests {
             None,
             None,
             Some("Ubuntu-22.04".to_string()),
+            None,
         )
         .unwrap();
         assert_eq!(
@@ -1428,6 +1892,7 @@ mod tests {
             .join("agent-a.jsonl");
         let got = resolve_transcript_path(
             Some(format!(" {} ", explicit.to_string_lossy())),
+            None,
             None,
             None,
             None,
@@ -1467,6 +1932,215 @@ mod tests {
     }
 
     #[test]
+    fn subagent_browser_lists_only_spawned_children_in_the_selected_installation() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("sessions").join("2026").join("10");
+        fs::create_dir_all(&root).unwrap();
+        let parent = root.join("rollout-main.jsonl");
+        fs::write(
+            &parent,
+            r#"{"type":"session_meta","payload":{"id":"main","source":"cli"}}"#,
+        )
+        .unwrap();
+        for (id, parent, spawned) in [
+            ("child", "main", true),
+            ("foreign", "other", true),
+            ("fork", "main", false),
+        ] {
+            let mut header = serde_json::json!({"type":"session_meta","payload":{"id":id,"parent_thread_id":parent,"agent_nickname":"Harvey","source":"cli"}});
+            if spawned {
+                header["payload"]["source"] = serde_json::json!({"subagent":{"thread_spawn":{"parent_thread_id":parent,"depth":1}}});
+            }
+            fs::write(
+                root.join(format!("rollout-{id}.jsonl")),
+                format!("{header}\n{{}}\n"),
+            )
+            .unwrap();
+        }
+        let listed = list_subagent_records(
+            "codex",
+            "main",
+            "/unrelated/worktree",
+            Some(dir.path().to_string_lossy().into_owned()),
+            Some(parent.to_string_lossy().into_owned()),
+            None,
+        )
+        .unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].agent_id, "child");
+        assert_eq!(listed[0].title, "Harvey");
+        assert_eq!(listed[0].parent_transcript_path.as_deref(), parent.to_str());
+        assert_eq!(
+            codex_rollout_identity(Path::new(&listed[0].transcript_path)),
+            Some(("child".into(), "main".into()))
+        );
+        let other = tempfile::tempdir().unwrap();
+        assert!(list_subagent_records(
+            "codex",
+            "main",
+            "",
+            Some(other.path().to_string_lossy().into_owned()),
+            None,
+            None
+        )
+        .unwrap()
+        .is_empty());
+    }
+
+    #[test]
+    fn subagent_browser_finds_claude_results_in_a_custom_config_without_hooks() {
+        let dir = tempfile::tempdir().unwrap();
+        let cwd = "/work/repo";
+        let child_dir = dir
+            .path()
+            .join("projects")
+            .join(slug_for_cwd(cwd))
+            .join("main")
+            .join("subagents");
+        fs::create_dir_all(&child_dir).unwrap();
+        fs::write(child_dir.join("agent-child.jsonl"), "{}\n").unwrap();
+        fs::write(child_dir.join("notes.txt"), "ignored").unwrap();
+        let records = list_subagent_records(
+            "claude",
+            "main",
+            cwd,
+            Some(dir.path().to_string_lossy().into_owned()),
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].agent_id, "child");
+        assert!(records[0].transcript_path.ends_with("agent-child.jsonl"));
+        let opened = resolve_transcript_path(
+            Some(records[0].transcript_path.clone()),
+            records[0].parent_transcript_path.clone(),
+            Some(cwd.into()),
+            Some("main".into()),
+            Some("child".into()),
+            None,
+            Some(dir.path().to_string_lossy().into_owned()),
+        )
+        .unwrap();
+        assert_eq!(opened, records[0].transcript_path);
+        assert!(resolve_transcript_path(
+            Some(opened.clone()),
+            None,
+            None,
+            Some("different".into()),
+            Some("child".into()),
+            None,
+            Some(dir.path().to_string_lossy().into_owned()),
+        )
+        .is_err());
+        // The restored PTY may start from a Worktree instead of the original cwd.
+        let worktree = list_subagent_records(
+            "claude",
+            "main",
+            "/work/repo/.claude/worktrees/a",
+            Some(dir.path().to_string_lossy().into_owned()),
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(worktree[0].transcript_path, opened);
+        assert!(list_subagent_records(
+            "claude",
+            "different",
+            cwd,
+            Some(dir.path().to_string_lossy().into_owned()),
+            None,
+            None
+        )
+        .unwrap()
+        .is_empty());
+    }
+
+    #[test]
+    fn subagent_browser_keeps_custom_wsl_paths_and_distribution_boundaries() {
+        let child =
+            r"\\wsl.localhost\Ubuntu\opt\claude-data\projects\p\main\subagents\agent-child.jsonl";
+        assert_eq!(
+            resolve_transcript_path(
+                Some(child.into()),
+                None,
+                None,
+                Some("main".into()),
+                Some("child".into()),
+                Some("Ubuntu".into()),
+                Some("/opt/claude-data".into())
+            )
+            .unwrap(),
+            child
+        );
+        assert!(!is_configured_claude_transcript(
+            child,
+            r"\\wsl.localhost\Debian\opt\claude-data",
+            "main",
+            Some("child")
+        ));
+        assert!(!is_configured_claude_transcript(
+            "/opt/claude-data/notes.jsonl",
+            "/opt/claude-data",
+            "main",
+            Some("child")
+        ));
+        assert!(list_subagent_records(
+            "claude",
+            "main",
+            r"\\wsl.localhost\Ubuntu\repo",
+            Some(r"\\wsl.localhost\Debian\opt\claude-data".into()),
+            None,
+            None
+        )
+        .is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn subagent_browser_does_not_follow_project_symlinks_outside_custom_root() {
+        let config = tempfile::tempdir().unwrap();
+        let foreign = tempfile::tempdir().unwrap();
+        fs::create_dir_all(config.path().join("projects")).unwrap();
+        fs::create_dir_all(foreign.path().join("main/subagents")).unwrap();
+        fs::write(
+            foreign.path().join("main/subagents/agent-child.jsonl"),
+            "{}\n",
+        )
+        .unwrap();
+        std::os::unix::fs::symlink(foreign.path(), config.path().join("projects/p")).unwrap();
+        assert!(!is_configured_claude_transcript(
+            &config
+                .path()
+                .join("projects/p/main/subagents/agent-child.jsonl")
+                .to_string_lossy(),
+            &config.path().to_string_lossy(),
+            "main",
+            Some("child")
+        ));
+        assert!(list_subagent_records(
+            "claude",
+            "main",
+            "different-worktree",
+            Some(config.path().to_string_lossy().into_owned()),
+            None,
+            None
+        )
+        .unwrap()
+        .is_empty());
+    }
+
+    #[test]
+    fn subagent_browser_rejects_parent_path_tokens_before_discovery() {
+        for id in ["", "..", "../main", "main/child", "main\\child"] {
+            assert!(
+                list_subagent_records("codex", id, "", None, None, None).is_err(),
+                "{id}"
+            );
+        }
+    }
+
+    #[test]
     fn codex_sessions_root_does_not_duplicate_sessions() {
         let got = resolve_codex_sessions_root(Some("/home/me/.codex/sessions".to_string()));
         assert_eq!(got, PathBuf::from("/home/me/.codex/sessions"));
@@ -1474,7 +2148,10 @@ mod tests {
 
     #[tokio::test]
     async fn codex_discovery_uses_actual_parent_transcript_and_checks_parent_identity() {
-        let root = std::env::temp_dir().join(format!("cli-manager-codex-discovery-{}", uuid::Uuid::new_v4()));
+        let root = std::env::temp_dir().join(format!(
+            "cli-manager-codex-discovery-{}",
+            uuid::Uuid::new_v4()
+        ));
         let sessions = root.join("custom-codex/sessions/2026/10/21");
         fs::create_dir_all(&sessions).unwrap();
         let child = sessions.join("rollout-2026-10-21T15-54-48-child-thread.jsonl");
@@ -1485,19 +2162,43 @@ mod tests {
                 "source":{"subagent":{"thread_spawn":{"parent_thread_id":"parent-thread","depth":1}}}
             }
         }).to_string() + "\n").unwrap();
-        let discover = |parent_id: &str| codex_subagent_transcript_discover(
-            parent_id.into(), "child-thread".into(), Some(root.join("wrong-config").to_string_lossy().into_owned()),
-            None, Some(parent.to_string_lossy().into_owned()),
+        let discover = |parent_id: &str| {
+            codex_subagent_transcript_discover(
+                parent_id.into(),
+                "child-thread".into(),
+                Some(root.join("wrong-config").to_string_lossy().into_owned()),
+                None,
+                Some(parent.to_string_lossy().into_owned()),
+            )
+        };
+        assert_eq!(
+            discover("parent-thread").await.unwrap().map(PathBuf::from),
+            Some(child.clone())
         );
-        assert_eq!(discover("parent-thread").await.unwrap().map(PathBuf::from), Some(child.clone()));
         assert_eq!(discover("another-parent").await.unwrap(), None);
-        let resolve = |parent_id: &str, child_id: &str| resolve_transcript_path(
-            Some(child.to_string_lossy().into_owned()), None, None,
-            Some(parent_id.into()), Some(child_id.into()), None,
+        let resolve = |parent_id: &str, child_id: &str| {
+            resolve_transcript_path(
+                Some(child.to_string_lossy().into_owned()),
+                None,
+                None,
+                Some(parent_id.into()),
+                Some(child_id.into()),
+                None,
+                None,
+            )
+        };
+        assert_eq!(
+            resolve("parent-thread", "child-thread").map(PathBuf::from),
+            Ok(child.clone())
         );
-        assert_eq!(resolve("parent-thread", "child-thread").map(PathBuf::from), Ok(child.clone()));
-        assert_eq!(resolve("another-parent", "child-thread").unwrap_err(), "transcript_path_outside_allowed_roots");
-        assert_eq!(resolve("parent-thread", "another-child").unwrap_err(), "transcript_path_outside_allowed_roots");
+        assert_eq!(
+            resolve("another-parent", "child-thread").unwrap_err(),
+            "transcript_path_outside_allowed_roots"
+        );
+        assert_eq!(
+            resolve("parent-thread", "another-child").unwrap_err(),
+            "transcript_path_outside_allowed_roots"
+        );
         fs::remove_dir_all(&root).unwrap();
     }
 
@@ -1592,7 +2293,7 @@ mod tests {
 
     #[test]
     fn resolve_requires_parts_when_no_explicit_path() {
-        let err = resolve_transcript_path(None, None, None, None, None, None).unwrap_err();
+        let err = resolve_transcript_path(None, None, None, None, None, None, None).unwrap_err();
         // 缺 home 或缺 cwd 都应报错（不静默编出错误路径）。
         assert!(err == "missing_cwd" || err == "no_home_dir", "got {err}");
     }

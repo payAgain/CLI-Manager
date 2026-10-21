@@ -122,6 +122,7 @@ const TERMINAL_TOOLBAR_OPTIONS: { key: TerminalToolbarOptionKey; labelKey: Trans
   { key: "files", labelKey: "settings.general.toolbar.files" },
   { key: "stats", labelKey: "settings.general.toolbar.stats" },
   { key: "gitChanges", labelKey: "settings.general.toolbar.gitChanges" },
+  { key: "subagents", labelKey: "terminal.subagents.title" },
   { key: "backgroundTasks", labelKey: "settings.general.toolbar.backgroundTasks" },
 ];
 

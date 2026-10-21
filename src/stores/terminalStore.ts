@@ -1,3 +1,4 @@
+import { inferWslDistroFromCwd, resolveSubagentConfigDir } from "../lib/subagentBrowser";
 import { useCommandHistoryStore } from "./commandHistoryStore";
 import { readSubagentTranscriptLifecycle, type SubagentTranscriptCursor, type SubagentTranscriptStatus } from "../lib/subagentTranscript";
 import { acceptsAgentHook, applyAgentDetection, applyHookAgentIdentity, type AgentDetection } from "../lib/terminalAgent";
@@ -326,7 +327,7 @@ interface TerminalStore {
   hideBackgroundForSession: (sessionId: string) => void;
   showBackgroundForSession: (sessionId: string) => void;
   /** 收到 CLI SubagentStart：在发起 Tab 所在 pane 分屏出只读转录面板并开始 tail。 */
-  openSubagentTranscript: (payload: CliHookPayload) => Promise<void>;
+  openSubagentTranscript: (payload: CliHookPayload, options?: { manual?: boolean; configDir?: string | null }) => Promise<void>;
   /** 收到 CLI SubagentStop：标记完成，并按设置收起分屏但保留结果。 */
   finishSubagentTranscript: (payload: CliHookPayload, status?: SubagentTranscriptStatus) => void;
   /** 收起已完成的转录分屏，保留会话、输出和订阅供重新查看。 */
@@ -533,13 +534,6 @@ function trimOptional(value: string | null | undefined): string | null {
   return trimmed ? trimmed : null;
 }
 
-function inferWslDistroFromCwd(cwd: string | null | undefined): string | null {
-  const value = trimOptional(cwd);
-  if (!value) return null;
-  const normalized = value.replace(/\//g, "\\");
-  const match = normalized.match(/^(?:\\\\wsl(?:\.localhost|\$)\\|\\\\\?\\UNC\\wsl(?:\.localhost|\$)\\)([^\\]+)(?:\\|$)/i);
-  return match?.[1]?.trim() || null;
-}
 
 function resolveHookWslDistroName(payload: CliHookPayload): string | null {
   return trimOptional(payload.wslDistroName) ?? inferWslDistroFromCwd(payload.cwd);
@@ -563,9 +557,9 @@ function hashString(value: string): string {
 }
 
 function createSubagentPaneId(parentTabId: string, agentId: string | null, toolUseId: string | null, childTranscriptPath: string | null): string {
-  if (agentId) return `subagent:${agentId}`;
-  if (toolUseId) return `subagent:tool:${toolUseId}`;
-  if (childTranscriptPath) return `subagent:path:${hashString(childTranscriptPath)}`;
+  if (agentId) return `subagent:${parentTabId}:${agentId}`;
+  if (toolUseId) return `subagent:tool:${parentTabId}:${toolUseId}`;
+  if (childTranscriptPath) return `subagent:path:${parentTabId}:${hashString(childTranscriptPath)}`;
   subagentSeq += 1;
   return `subagent:${parentTabId}:${Date.now().toString(36)}:${subagentSeq.toString(36)}`;
 }
@@ -878,6 +872,7 @@ function findSubagentSessionId(sessions: TerminalSession[], payload: CliHookPayl
     const byAgent = sessions.find(
       (session) =>
         session.kind === "subagent-transcript" &&
+        session.subagent?.parentSessionId === payload.tabId &&
         (session.subagent?.agentId === agentId || session.id === `subagent:${agentId}`)
     );
     if (byAgent) return byAgent.id;
@@ -888,6 +883,7 @@ function findSubagentSessionId(sessions: TerminalSession[], payload: CliHookPayl
     const byTool = sessions.find(
       (session) =>
         session.kind === "subagent-transcript" &&
+        session.subagent?.parentSessionId === payload.tabId &&
         (session.subagent?.toolUseId === toolUseId || session.id === `subagent:tool:${toolUseId}`)
     );
     if (byTool) return byTool.id;
@@ -3038,7 +3034,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     set({ hiddenBackgroundSessionIds: next });
   },
 
-  openSubagentTranscript: async (payload) => {
+  openSubagentTranscript: async (payload, options) => {
     const parentTabId = payload.tabId;
     const sessions = get().sessions;
     // 多窗口隔离：hook 事件广播到所有窗口，仅拥有该 Tab 的窗口处理。
@@ -3065,8 +3061,16 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     const pseudoId = existingSessionId ?? createSubagentPaneId(parentTabId, agentId, toolUseId, resolvedSource.kind === "child-jsonl" ? resolvedSource.transcriptPath ?? null : null);
     const previousSource = get().subagentTranscripts[pseudoId]?.source;
     const source = mergeSubagentSource(previousSource, resolvedSource);
-    const shouldSubscribe = shouldSubscribeSubagentSource(previousSource, source);
+    const shouldSubscribe = options?.manual
+      ? source.kind === "child-jsonl" && Boolean(source.transcriptPath)
+      : shouldSubscribeSubagentSource(previousSource, source);
     const splitViewEnabled = useSettingsStore.getState().hookSubagentSplitViewEnabled;
+    const owningSession = sessions.find((session) => session.id === parentTabId)!;
+    const project = useProjectStore.getState().projects.find((project) => project.id === owningSession.projectId);
+    const settings = useSettingsStore.getState();
+    const configDir = options?.configDir ?? resolveSubagentConfigDir(payload.source === "codex" ? "codex" : "claude", owningSession, project, {
+      codexConfigDir: settings.codexHookConfigDir, claudeConfigDir: settings.claudeHookConfigDir,
+    });
 
     logInfo("[subagent_transcript] source resolved", {
       event: payload.event,
@@ -3100,6 +3104,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
           sourceKind: source.kind,
           reason: source.reason,
           wslDistroName: resolvedWslDistroName,
+          configDir,
         });
         return false;
       }
@@ -3112,6 +3117,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
           sessionId: payload.sessionId ?? null,
           agentId,
           wslDistroName: resolvedWslDistroName,
+          configDir,
         });
         if (result.initialContent) {
           useTerminalStore.getState().appendSubagentTranscript(pseudoId, result.initialContent, true);
@@ -3149,6 +3155,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
           sessionId: payload.sessionId ?? null,
           agentId,
           wslDistroName: resolvedWslDistroName,
+          configDir,
         });
         const childSource: SubagentTranscriptSource = {
           kind: "child-jsonl",
@@ -3212,7 +3219,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
         || retryAttemptCount % 12 === 0;
 
       try {
-        const codexConfigDir = useSettingsStore.getState().codexHookConfigDir ?? undefined;
+        const codexConfigDir = configDir ?? undefined;
         if (shouldLogAttempt) {
           logInfo("[subagent_transcript] codex rollout discovery requested", {
             pseudoId,
@@ -3269,6 +3276,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
           sessionId: payload.sessionId ?? null,
           agentId,
           wslDistroName: resolvedWslDistroName,
+          configDir,
         });
         const childSource: SubagentTranscriptSource = {
           kind: "child-jsonl",
@@ -3317,7 +3325,8 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
 
     const subscribeAvailableChild = async () => {
       if (shouldSubscribe) {
-        await subscribeChild();
+        const subscribed = await subscribeChild();
+        if (options?.manual && !subscribed) throw new Error("subagent_transcript_subscribe_failed");
         return;
       }
 
@@ -3384,11 +3393,12 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
           },
         },
       }));
+      if (options?.manual) get().setActive(pseudoId);
       await subscribeAvailableChild();
       return;
     }
 
-    if (!splitViewEnabled) {
+    if (!splitViewEnabled && !options?.manual) {
       logInfo("[subagent_transcript] split view disabled, skipping new pane", {
         event: payload.event,
         parentTabId,
@@ -3462,13 +3472,14 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     set({
       sessions: newSessions,
       ...workspanState,
-      subagentTranscripts: { ...state.subagentTranscripts, [pseudoId]: { content: "", ended: false, status: "running", resetSeq: 0, source } },
+      subagentTranscripts: { ...state.subagentTranscripts, [pseudoId]: { content: "", ended: false, status: options?.manual ? undefined : "running", resetSeq: 0, source } },
     });
 
     // 持久化（sessionStore 会过滤掉转录伪会话）。
     void useSessionStore.getState().saveSessions(newSessions).catch(() => {});
     persistWorkspanState(workspans, state.activeWorkspanId, newSessions);
 
+    if (options?.manual) get().setActive(pseudoId);
     await subscribeAvailableChild();
   },
 
