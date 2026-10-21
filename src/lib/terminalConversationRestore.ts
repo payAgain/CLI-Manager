@@ -5,7 +5,7 @@ import type { Project, TerminalSession } from "./types";
 
 /** Persist the current Agent, including manual starts, without retaining a dead process identity. */
 export function persistTerminalSession(session: TerminalSession): TerminalSession {
-  const { runtimeAgent, runtimeAgentObservedAtMs: _observedAt, pendingConversationResume, ...persisted } = session;
+  const { runtimeAgent, runtimeAgentObservedAtMs: _observedAt, pendingConversationResume, deferredStartupCmd: _deferredStartup, ...persisted } = session;
   if (pendingConversationResume && Date.now() <= pendingConversationResume.expiresAtMs) {
     return {
       ...persisted,

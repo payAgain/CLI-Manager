@@ -353,7 +353,8 @@ fn classify_process(
     if pid == app_pid {
         return Some(ManagedProcessRole::AppMain);
     }
-    if !is_descendant_of(pid, app_pid, parents) {
+    if !is_descendant_of(pid, app_pid, parents)
+        && !crate::process_attribution::is_app_webkit(pid, name, app_pid) {
         return None;
     }
     if is_webview_process_name(name) {
@@ -379,11 +380,7 @@ fn is_descendant_of(pid: u32, ancestor: u32, parents: &HashMap<u32, u32>) -> boo
 }
 
 fn is_webview_process_name(name: &str) -> bool {
-    let normalized = name.to_ascii_lowercase();
-    normalized.contains("msedgewebview2")
-        || normalized.contains("webkitwebprocess")
-        || normalized.contains("webkitnetworking")
-        || normalized.contains("webview")
+    crate::process_attribution::is_webview(name)
 }
 
 fn finite_cpu(value: f32) -> f32 {

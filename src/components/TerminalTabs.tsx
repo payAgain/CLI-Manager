@@ -1097,7 +1097,7 @@ function SortableWorkspanTab({
 
 function WorkspanTabbarEndDropTarget({ disabled }: { disabled: boolean }) {
   const { setNodeRef } = useDroppable({ id: WORKSPAN_TABBAR_END_DROP_ID, disabled });
-  return <div ref={setNodeRef} className="h-full min-w-0 flex-1" aria-hidden="true" />;
+  return <div ref={setNodeRef} className="h-full min-w-0 flex-1" data-tauri-drag-region aria-hidden="true" />;
 }
 
 function DragOverlayTab({
@@ -4065,6 +4065,7 @@ export function TerminalTabs({
       >
         <nav
           className="ui-terminal-actions ui-workspace-topbar flex shrink-0 items-center"
+          data-tauri-drag-region
           aria-label={t("terminal.toolbar.actions")}
           data-show-text={terminalToolbarVisibility.showText ? "true" : undefined}
           style={terminalActionSidebarStyle}
@@ -4412,6 +4413,7 @@ export function TerminalTabs({
                   <div
                     ref={workspanTabBarRef}
                     className="ui-terminal-pane-chrome ui-workspan-tabbar relative flex h-9 shrink-0 items-center px-1"
+                    data-tauri-drag-region
                   >
                   <div
                     className="ui-workspan-detach-insertion"
@@ -4422,6 +4424,7 @@ export function TerminalTabs({
                   <div
                     ref={workspanTabScrollRef}
                     className="ui-workspan-tab-scroll flex h-full min-w-0 flex-1 items-center overflow-x-auto"
+                    data-tauri-drag-region
                     role="tablist"
                     aria-label={t("terminal.workspan.tabList")}
                     onWheel={(event) => {

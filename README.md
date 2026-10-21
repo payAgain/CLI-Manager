@@ -54,6 +54,8 @@ Enable the supported CLI's **Hook integration** to save exact conversation IDs a
 
 ## Also included
 
+**Automatic YOLO startup:** choose **Settings → Agents → YOLO** to add the appropriate permission arguments when launching a supported Agent. Applies to new tabs, splits, Worktrees, and conversation restoration locally, in WSL, and over SSH. Explicit project permission arguments take precedence; typed commands and complex scripts retain their own arguments. The default is Manual.
+
 | Area | Capabilities |
 | --- | --- |
 | Projects | Groups, folder import, project search, CLI launch arguments, environment variables, and Shell settings. |
@@ -82,7 +84,7 @@ Terminal improvements include Unicode 15 grapheme handling, IME input fixes, pre
 4. **Enable Hooks and history sources in Settings.** Hooks provide exact session binding and task status. History sources provide past conversations, search, and supported resume actions. SSH CLI integration is configured on the corresponding host.
 5. **Choose an exit and restore policy.** Continue tasks in the background, minimize to the tray, or stop tasks and exit. On startup, restore saved terminals when prompted, or enable automatic restore.
 
-Selecting “Stop tasks and exit the app” clears terminal restoration data; the original CLI conversation files are retained. If an older terminal has already lost its session ID, resume the original conversation from history once to establish a new binding.
+Selecting “Stop tasks and exit the app” stops running processes while keeping tabs and conversation identities for the next launch. Rejecting restoration, or explicitly deleting a terminal/background task, removes the corresponding restoration data. Original CLI conversation files are retained. If an older terminal has already lost its session ID, resume the original conversation from history once to establish a new binding.
 
 ## Build from source
 

@@ -1,3 +1,46 @@
+# 已安装 CLI 工具检测（0.1.0，未发布）
+
+- 项目配置原先直接遍历全量工具描述表。现通过 `cli_tools_scan` 在所选 Shell 查询命令可用性，前端仅展示返回的已知工具；项目目录、环境变量、Shell 与 SSH 主机构成独立检测上下文。已有值与自定义输入不被检测结果清空，零结果及失败均不回退全量清单，提供重新检测。
+- 后端复用 PTY Shell 解析与 SSH 传输／认证校验，限时 12 秒异步执行；本机使用 Shell 初始化后的 PATH，WSL 按项目 UNC 路径选择发行版，SSH 使用远端 Shell 并保留认证和主机密钥规则。仅查询命令名称，不执行 Agent，不安装 Hook，不改配置或迁移。检测不依赖窗口焦点、隐藏／托盘、分屏／Workspan 的会话状态，也不更改 Worktree 或 Agent 绑定。
+- 5 项 Rust 回归通过：带边界的结果解析、远端上下文引用、交互认证拒绝、真实文件可执行权限与不执行 Agent、真实 macOS 登录 Shell 检测；常规 PATH 和图形应用精简 PATH 均检测到 Claude／Codex。14 项相关前端回归、`npx tsc --noEmit`、`cargo check --manifest-path src-tauri/Cargo.toml`、`git diff --check` 通过。
+- 隔离页面运行生产 CliToolCombobox、安装检测 Hook 和实际 AgentSettingsPage，手动检查中英文只列已安装项、空／失败状态、自定义输入 Enter 不覆盖、空列表方向键、切换 Shell 后旧异步响应不覆盖新列表。智能体页同步筛选已安装且支持 YOLO 的工具。预览 IPC 使用隔离数据，临时页面／服务／浏览器会话已清理；真实 Windows／WSL／SSH 及 Fish／PowerShell 仍待对应环境实测。
+- `npm run tauri:build:local -- --bundles app` 通过，`src-tauri/target/release/bundle/macos/CLI-Manager.app` 已生成并通过本地临时签名与严格校验。未生成 DMG，未提交或推送。
+
+---
+
+# 项目终端入口区分（0.1.0，未发布）
+
+- 原因：两个入口都会创建新标签；“打开终端”执行项目 CLI／启动命令，“新建终端”原意为空白 Shell，无启动配置时行为重复，且 SSH 把未提供命令回退为项目 Agent。菜单与工作区快捷按钮现按配置标记“启动 Agent／运行启动命令／新建空白终端”，没有配置时隐藏重复入口。
+- 项目与 Worktree 的空白启动显式传空命令，保留环境、Shell、工作目录与 Worktree 身份；空白终端不预先绑定项目 Agent，后续手动启动继续通过进程／Hook 绑定。窗口焦点、隐藏／托盘不参与启动分类，分屏共用分类，旧会话兼容与精确恢复逻辑保留。
+- 55 项分类、Agent 状态、YOLO、准确恢复与退出回归通过；执行生产侧栏回调并经过实际 PTY 启动解析，覆盖本地／WSL／SSH、项目／Worktree、YOLO 开启时空白启动、环境与目录保留。`npx tsc --noEmit`、`cargo check --manifest-path src-tauri/Cargo.toml`、`git diff --check` 通过。
+- 隔离浏览器直接渲染生产菜单 JSX，手动核对中英文中无配置、Agent 配置和脚本配置三种菜单，确认无配置只显示一次空白终端。预览未连接用户 PTY、设置或历史；真实 SSH／WSL 与原生菜单仍待实机复测，临时预览页面、服务和浏览器会话已清理。
+- `npm run tauri:build:local -- --bundles app` 成功，`src-tauri/target/release/bundle/macos/CLI-Manager.app` 已重新生成并完成本地临时签名及严格校验；没有生成 DMG，未提交或推送。
+
+---
+
+# Agent 自动 YOLO 启动（0.1.0，未发布）
+
+- 对照本机 Orca 的 `tui-agent-permissions.js`、`tui-agent-launch-defaults.js`，并核对本机 Claude／Codex CLI 帮助及官方参数文档。权限设置默认手动，统一在 PTY 启动边界追加 11 种工具的独立参数；不改项目命令、用户 CLI 全局配置或手动输入。
+- 新建、分屏、Workspan、Worktree、会话恢复共用启动入口；SSH 在构建远端启动命令前应用，WSL 包装保留发行版／用户／目录参数，外部终端调用同一纯函数。存活 daemon 附着不重新启动，焦点／隐藏／托盘不触发重新执行，Hook 安装与状态逻辑保持原样。
+- 会话保存基础命令；初次画面回放后的延迟启动另存临时执行命令且不落盘，切回手动后不会继承自动参数。显式权限／Codex profile 与权限配置优先；不改复杂脚本、Shell 替换、管理命令及不支持的工具。
+- 77 项权限参数、准确恢复、退出保存、Agent 识别、Workspan、历史项目选择与鼠标回归通过，包含 SSH 无 Hook 安装、原主机与目录、WSL、延迟启动和手动模式切换；`npx tsc --noEmit`、`cargo check --manifest-path src-tauri/Cargo.toml`、`git diff --check` 通过。
+- 隔离浏览器使用实际 SettingsModal／AgentSettingsPage 检查中文深色、英文浅色、繁体窄窗口、双向切换、重载后选择保留、逐工具命令预览和 Escape 关闭；500px 视口文档无横向溢出。仅使用隔离内存／预览存储，未连接用户 PTY 或设置。真实 SSH／WSL 与其他未安装 CLI 的执行仍需对应环境验证；临时预览页面与服务、浏览器会话已清理。
+- `npm run tauri:build:local -- --bundles app` 成功，产物为 `src-tauri/target/release/bundle/macos/CLI-Manager.app`（0.1.0）；本地临时签名及 `codesign --verify --deep --strict` 校验通过。未生成 DMG，未停止当前用户会话，未提交或推送。
+
+---
+
+# macOS 内存、窗口拖动、滚轮与退出恢复（0.1.0，未发布）
+
+- 内存漏项根因：macOS WebKit XPC 服务的父进程是 launchd，现有父子树无法关联。采样使用系统 responsibility 查询关联本应用的 WebContent／GPU／Networking，内存详情和运行诊断共用归属判断；保留 PID 启动时间核对、终端／Agent 互斥归属及隐藏时暂停采样。
+- 10 项内存归属测试、3 项跨平台名称／macOS 实际责任进程查询测试通过；另外手动运行真实 WebKit 采样用例，确认父进程不属于责任应用的渲染服务能被计入，应用主进程与渲染内存均大于零。未将其他应用的同名 WebKit 服务加入总计。
+- 窗口拖动补齐顶部嵌套容器及尾部 droppable 的原生拖动标记；在隔离浏览器中核对命中空白区域会触发拖动分流，标签与工具按钮不触发，仍需原生窗口移动手动复测。
+- 终端使用 1.25 倍行距，留白置于独立外层，避免 FitAddon 忽略挂载容器 padding 后裁掉末行。隔离页面验证中英文及深浅背景，真实滚轮使旧快照视口由 138 移至 126，输入记录为空；普通 Shell 可滚动，SGR Agent 保留鼠标滚轮上报，Shift＋滚轮查看本地历史。渲染区域底部 712.4px，小于可用区域底部 714.4px，末行完整。
+- 退出恢复根因由用户日志确认：“终止任务，退出应用”曾隐式 clear 恢复快照。现在停止进程保留标签和准确 ID；Cmd＋Q／原生退出接入同一保存守卫，重复退出不重复清理。实际退出清理函数回归验证关闭事件不能覆盖冻结快照，重新加载后可 resume 原 ID；明确拒绝恢复及删除后台任务继续删除对应恢复数据。旧版已清除的数据需要从历史重建一次。
+- 199 项终端／恢复／退出／传输回归全部通过，`npx tsc --noEmit`、`cargo check --manifest-path src-tauri/Cargo.toml` 与 `git diff --check` 通过。浏览器验证使用隔离终端数据，无真实 PTY 连接；临时页面、服务和浏览器会话已清理。真实 SSH／WSL 和原生菜单退出仍需对应环境验证。
+- `npm run tauri:build:local -- --bundles app` 通过，仅生成 macOS App；产物为 `src-tauri/target/release/bundle/macos/CLI-Manager.app`，已完成本地临时签名及 `codesign --verify --deep --strict` 校验。未运行新版覆盖用户当前会话，未提交、推送或生成 DMG。
+
+---
+
 # 项目切换终端渲染修复（0.1.0，2026-10-20，未发布）
 
 - 根因：同一帧的 ResizeObserver 普通布局请求会覆盖可见性恢复的立即布局／完整重绘请求；排队中的立即布局还可能在窗格隐藏后执行，零尺寸布局会丢掉重绘标记。组件每次切回又隐藏整个终端，等待完整渲染或 500ms 超时，造成空白与闪烁。

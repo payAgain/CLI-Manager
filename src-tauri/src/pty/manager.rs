@@ -195,7 +195,7 @@ impl PtyManager {
         Err(format!("Shell executable not found: {trimmed}"))
     }
 
-    fn resolve_shell(shell: &str) -> Result<(String, Vec<String>), String> {
+    pub(crate) fn resolve_shell(shell: &str) -> Result<(String, Vec<String>), String> {
         if let Some(custom_shell) = Self::resolve_custom_shell_path(shell)? {
             return Ok((custom_shell, Vec::new()));
         }

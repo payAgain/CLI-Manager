@@ -60,6 +60,12 @@ test("stored session classification wins over later project edits", () => {
   );
 });
 
+test("a blank shell in an Agent project is not classified as an Agent before it is launched", () => {
+  const metadata = agentTerminal.createAgentTerminalMetadata({ cli_tool: "codex" }, false);
+  assert.deepEqual(metadata, { isAgentSession: false, cliTool: undefined });
+  assert.equal(agentTerminal.shouldIncludeAgentTerminal(metadata, { cli_tool: "codex" }, true), false);
+});
+
 test("legacy sessions fall back to the associated project CLI tool", () => {
   assert.deepEqual(
     agentTerminal.resolveAgentTerminalMetadata({}, { cli_tool: "opencode" }),

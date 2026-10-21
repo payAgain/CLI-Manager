@@ -46,6 +46,13 @@ export function resolveProjectStartupCommand(
   return cliArgs ? `${cliTool} ${cliArgs}` : cliTool;
 }
 
+export function projectTerminalLaunchLabel(
+  project: Pick<Project, "cli_tool" | "cli_args" | "startup_cmd">,
+): "sidebar.menu.launchAgent" | "sidebar.menu.runStartupCommand" | "sidebar.menu.newBlankTerminal" {
+  if (!resolveProjectStartupCommand(project)) return "sidebar.menu.newBlankTerminal";
+  return project.startup_cmd.trim() ? "sidebar.menu.runStartupCommand" : "sidebar.menu.launchAgent";
+}
+
 // 历史会话 resume 命令继承项目启动参数：仅当项目走 cli_tool 分支且工具类型与会话来源一致时追加；
 // startup_cmd 是自由文本（可能含一次性 prompt），无法安全拆参，保持不继承。
 export function appendResumeCliArgs(

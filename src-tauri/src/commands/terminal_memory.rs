@@ -14,6 +14,7 @@ struct ProcessSample {
     name: String,
     command: Vec<String>,
     memory: u64,
+    app_webview: bool,
 }
 
 #[derive(Default, Serialize)]
@@ -224,12 +225,10 @@ fn aggregate(
             } else {
                 snapshot.unassigned_bytes += process.memory;
             }
-        } else if belongs_to(process.pid, app_pid, &processes) {
+        } else if process.app_webview || belongs_to(process.pid, app_pid, &processes) {
             if process.pid == app_pid {
                 snapshot.framework.app_bytes += process.memory;
-            } else if ["webview", "webkit"]
-                .iter()
-                .any(|name| process.name.to_ascii_lowercase().contains(name))
+            } else if crate::process_attribution::is_webview(&process.name)
             {
                 snapshot.framework.webview_bytes += process.memory;
             } else {
@@ -273,6 +272,9 @@ fn sample(
             name: process.name().to_string_lossy().into_owned(),
             command: Vec::new(),
             memory: 0,
+            app_webview: crate::process_attribution::is_app_webkit(
+                pid.as_u32(), &process.name().to_string_lossy(), app_pid,
+            ),
         })
         .collect();
     let parents: HashMap<_, _> = identities
@@ -282,7 +284,7 @@ fn sample(
     let managed: Vec<_> = identities
         .iter()
         .filter(|process| {
-            belongs_to(process.pid, app_pid, &parents)
+            process.app_webview || belongs_to(process.pid, app_pid, &parents)
                 || daemon_pid.is_some_and(|pid| belongs_to(process.pid, pid, &parents))
         })
         .map(|process| Pid::from_u32(process.pid))
@@ -360,6 +362,7 @@ mod tests {
             memory,
             started_at: 100,
             command: Vec::new(),
+            app_webview: false,
         }
     }
 
@@ -427,6 +430,21 @@ mod tests {
         assert_eq!(snapshot.terminals[1].total_bytes, Some(11));
         assert_eq!(snapshot.terminals[1].agents[0].name, "Claude");
         assert_eq!(snapshot.total_bytes, 21);
+    }
+
+    #[test]
+    fn counts_owned_launchd_webkit_services_without_claiming_other_apps() {
+        let mut content = process(100, 1, "com.apple.WebKit.WebContent", 200);
+        content.app_webview = true;
+        let mut gpu = process(101, 1, "com.apple.WebKit.GPU", 30);
+        gpu.app_webview = true;
+        let snapshot = aggregate(&[
+            process(20, 1, "cli-manager", 50), content, gpu,
+            process(102, 1, "com.apple.WebKit.WebContent", 900),
+        ], 20, None, &[], false);
+        assert_eq!(snapshot.framework.webview_bytes, 230);
+        assert_eq!(snapshot.framework.app_bytes, 50);
+        assert_eq!(snapshot.total_bytes, 280);
     }
 
     #[test]
@@ -531,6 +549,27 @@ mod tests {
         let snapshot = sample(&mut System::new(), std::process::id(), None, &[], false);
         assert!(snapshot.framework.app_bytes > 0);
         assert!(snapshot.total_bytes >= snapshot.framework.app_bytes);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    #[ignore = "manual smoke check requires a running same-user WebKit application"]
+    fn reads_real_launchd_webkit_memory() {
+        let mut system = System::new();
+        system.refresh_processes_specifics(ProcessesToUpdate::All, true,
+            ProcessRefreshKind::nothing().without_tasks());
+        let renderer = system.processes().iter().find(|(_, process)|
+            process.name().to_string_lossy().contains("WebKit.WebContent"))
+            .expect("run a WebKit application before this manual smoke check");
+        let owner = system.processes().keys().find(|pid|
+            crate::process_attribution::is_app_webkit(renderer.0.as_u32(),
+                &renderer.1.name().to_string_lossy(), pid.as_u32()))
+            .expect("WebKit must have an identifiable responsible application").as_u32();
+        assert_ne!(renderer.1.parent().map(|pid| pid.as_u32()), Some(owner));
+        let snapshot = sample(&mut system, owner, None, &[], false);
+        assert!(snapshot.framework.webview_bytes > 0);
+        assert!(snapshot.framework.app_bytes > 0);
+        assert!(snapshot.total_bytes >= snapshot.framework.webview_bytes + snapshot.framework.app_bytes);
     }
 
     #[cfg(target_os = "windows")]

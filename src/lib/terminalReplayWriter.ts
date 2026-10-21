@@ -77,8 +77,12 @@ export function trackTerminalMouseProtocol(terminal: Pick<Terminal, "parser">) {
 }
 
 /** Quarantine only mouse reports whose encoding was lost in an old checkpoint. */
+export function isTerminalMouseInputSafe(terminal: object): boolean {
+  return mouseProtocols.get(terminal)?.inputSafe !== false;
+}
+
 export function canForwardTerminalBinaryInput(terminal: object, data: string): boolean {
-  return mouseProtocols.get(terminal)?.inputSafe !== false
+  return isTerminalMouseInputSafe(terminal)
     || data.length !== 6 || !data.startsWith("\x1b[M");
 }
 

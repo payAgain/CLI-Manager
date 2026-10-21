@@ -1,6 +1,7 @@
 import { useCommandHistoryStore } from "./commandHistoryStore";
 import { acceptsAgentHook, applyAgentDetection, applyHookAgentIdentity, type AgentDetection } from "../lib/terminalAgent";
 import { create } from "zustand";
+import { applyAgentLaunchPermissions } from "../lib/agentLaunchPermissions";
 import { invoke } from "@tauri-apps/api/core";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { toast } from "sonner";
@@ -1206,6 +1207,8 @@ interface SshLaunchPayload extends SshConnectionSpecPayload {
 interface ResolvedPtyLaunch {
   shell: string | null;
   startupCmd?: string;
+  /** Persist the user's command, so a later mode change does not replay injected flags. */
+  baseStartupCmd?: string;
   startupHandledByLaunch: boolean;
   environmentType?: "ssh";
   sshHostId?: string;
@@ -1290,11 +1293,11 @@ function buildPtyEnvVars(
   return Object.keys(next).length > 0 ? next : null;
 }
 
-function getProjectAgentTerminalMetadata(projectId?: string) {
+function getProjectAgentTerminalMetadata(projectId?: string, startupCmd?: string) {
   const project = projectId
     ? useProjectStore.getState().projects.find((item) => item.id === projectId)
     : undefined;
-  return createAgentTerminalMetadata(project);
+  return createAgentTerminalMetadata(project, Boolean(startupCmd));
 }
 
 function getRestoredAgentTerminalMetadata(
@@ -1330,9 +1333,10 @@ async function resolvePtyLaunch(options: DetachedPtyLaunchOptions, os: OsPlatfor
     const hosts = useSshHostStore.getState().hosts;
     const host = hosts.find((candidate) => candidate.id === sshHostId);
     if (!host) throw new Error("ssh_host_not_found");
-    const resolvedStartupCmd = options.startupCmd === undefined && project?.environment_type === "ssh"
+    const baseStartupCmd = options.startupCmd === undefined && project?.environment_type === "ssh"
       ? resolveProjectStartupCommand(project)
       : options.startupCmd?.trim() || undefined;
+    const resolvedStartupCmd = applyAgentLaunchPermissions(baseStartupCmd, useSettingsStore.getState().agentPermissionMode);
     const resolvedEnvironmentOverrides = options.envVars === undefined && project?.environment_type === "ssh"
       ? parseProjectEnvVars(project) ?? {}
       : options.envVars ?? {};
@@ -1378,6 +1382,7 @@ async function resolvePtyLaunch(options: DetachedPtyLaunchOptions, os: OsPlatfor
     return {
       shell: null,
       startupCmd: resolvedStartupCmd,
+      baseStartupCmd,
       startupHandledByLaunch: true,
       environmentType: "ssh",
       sshHostId: host.id,
@@ -1409,9 +1414,14 @@ async function resolvePtyLaunch(options: DetachedPtyLaunchOptions, os: OsPlatfor
   }
 
   const resolvedShell = resolveShellForPty(options.shell, !!options.projectId, os);
+  const baseStartupCmd = options.startupCmd?.trim() || undefined;
   return {
     shell: resolvedShell,
-    startupCmd: prepareStartupCommandForPty(options.startupCmd ?? undefined, normalizeShellKey(resolvedShell) ?? null),
+    baseStartupCmd,
+    startupCmd: prepareStartupCommandForPty(
+      applyAgentLaunchPermissions(baseStartupCmd, useSettingsStore.getState().agentPermissionMode),
+      normalizeShellKey(resolvedShell) ?? null,
+    ),
     startupHandledByLaunch: false,
     invokeArgs: {
       cwd: options.cwd ?? null,
@@ -1590,8 +1600,8 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
       cwd,
       shell: resolvedShell,
       envVars,
-      startupCmd: launch.startupHandledByLaunch ? launchStartupCmd : startupCmd,
-      ...getProjectAgentTerminalMetadata(projectId),
+      startupCmd: launch.baseStartupCmd,
+      ...getProjectAgentTerminalMetadata(projectId, launch.baseStartupCmd),
       environmentType: launch.environmentType,
       sshHostId: launch.sshHostId,
       remotePath: launch.remotePath,
@@ -2198,8 +2208,8 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
       cwd: options?.cwd,
       shell: resolvedShell,
       envVars: options?.envVars,
-      startupCmd: launch.startupHandledByLaunch ? launchStartupCmd : options?.startupCmd,
-      ...getProjectAgentTerminalMetadata(options?.projectId),
+      startupCmd: launch.baseStartupCmd,
+      ...getProjectAgentTerminalMetadata(options?.projectId, launch.baseStartupCmd),
       environmentType: launch.environmentType,
       sshHostId: launch.sshHostId,
       remotePath: launch.remotePath,
@@ -2745,7 +2755,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
         cwd: ps.cwd,
         shell: resolvedShell,
         envVars: ps.envVars,
-        startupCmd: launch.startupHandledByLaunch ? restoredStartupCmd : launchStartupCmd,
+        startupCmd: launch.baseStartupCmd,
         isAgentSession: conversation.isAgentSession,
         cliTool: conversation.cliTool,
         environmentType: launch.environmentType ?? ps.environmentType,
@@ -2766,6 +2776,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
         remoteHistorySourceInstanceId: ps.remoteHistorySourceInstanceId,
         initialTerminalOutput,
         deferStartupUntilInitialOutput,
+        deferredStartupCmd: deferStartupUntilInitialOutput ? launchStartupCmd : undefined,
       };
 
       let unlisten: UnlistenFn;

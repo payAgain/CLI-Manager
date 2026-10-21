@@ -421,6 +421,8 @@ export interface TerminalSession {
   initialTerminalOutput?: string;
   /** true 时启动命令由 XTermTerminal 在 initialTerminalOutput 写完后再发送。 */
   deferStartupUntilInitialOutput?: boolean;
+  /** 本次延迟启动使用的最终命令，不落盘；基础 startupCmd 不包含自动权限参数。 */
+  deferredStartupCmd?: string;
   cliSessionId?: string;
   remoteTranscriptRef?: string;
   remoteHistoryConsumerId?: string;

@@ -91,6 +91,9 @@ export function RunningTasksExitDialog({ open, runningCount, onBackground, onMin
             />
             {t("dialogs.runningTasksExit.discard")}
           </label>
+          {action === "discard" && <p className="ml-5 text-[11px] text-text-secondary">
+            {t("dialogs.runningTasksExit.discardDescription")}
+          </p>}
           <label className="flex cursor-pointer items-center gap-2 text-[13px] text-text-primary">
             <input
               type="radio"

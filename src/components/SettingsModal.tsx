@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import {
   ClipboardList,
+  Bot,
   Code2,
   History,
   Info,
@@ -16,6 +17,7 @@ import { useFocusTrap } from "../hooks/useFocusTrap";
 import { AppMantineThemeProvider } from "./ui/MantineThemeProvider";
 import { SettingsLayout } from "./settings/SettingsLayout";
 import { GeneralSettingsPage } from "./settings/pages/GeneralSettingsPage";
+import { AgentSettingsPage } from "./settings/pages/AgentSettingsPage";
 import { DeveloperSettingsPage } from "./settings/pages/DeveloperSettingsPage";
 import { SidebarSettingsPage } from "./settings/pages/SidebarSettingsPage";
 import { ThemeSettingsPage } from "./settings/pages/ThemeSettingsPage";
@@ -31,6 +33,7 @@ import { normalizeFontFamilyStack } from "../lib/systemFonts";
 
 export type SettingsTab =
   | "general"
+  | "agents"
   | "developer"
   | "sidebar"
   | "terminal-theme"
@@ -51,6 +54,7 @@ interface SettingsTabConfig {
 
 const SETTINGS_TAB_ORDER: SettingsTab[] = [
   "general",
+  "agents",
   "terminal-theme",
   "shortcuts",
   "templates",
@@ -63,6 +67,12 @@ const SETTINGS_TAB_ORDER: SettingsTab[] = [
 ];
 
 const SETTINGS_TAB_CONFIG: Record<SettingsTab, SettingsTabConfig> = {
+  agents: {
+    label: "settings.tabs.agents.label",
+    title: "settings.tabs.agents.title",
+    description: "settings.tabs.agents.description",
+    icon: Bot,
+  },
   general: {
     label: "settings.tabs.general.label",
     title: "settings.tabs.general.title",
@@ -204,6 +214,7 @@ export function SettingsModal({ open, onClose, onAfterClose, initialTab, onActiv
   const activeConfig = SETTINGS_TAB_CONFIG[activeTab];
   const activeContent = (() => {
     if (activeTab === "general") return <GeneralSettingsPage />;
+    if (activeTab === "agents") return <AgentSettingsPage />;
     if (activeTab === "developer") return <DeveloperSettingsPage />;
     if (activeTab === "sidebar") return <SidebarSettingsPage />;
     if (activeTab === "terminal-theme") return <ThemeSettingsPage />;

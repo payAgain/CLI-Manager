@@ -23,7 +23,7 @@ import { ConfirmDialog } from "../ConfirmDialog";
 import { useAppConfirm } from "../ui/useAppConfirm";
 import { WorktreeFinishDialog } from "../worktree/WorktreeFinishDialog";
 import { openWindowsTerminal } from "../../lib/externalTerminal";
-import { resolveProjectStartupCommand } from "../../lib/projectStartupCommand";
+import { projectTerminalLaunchLabel, resolveProjectStartupCommand } from "../../lib/projectStartupCommand";
 import { resolveHistoryProjectPath } from "../../lib/historyProjectPaths";
 import { resolveCliToolHistorySourceId } from "../../lib/cliTools";
 import { shouldSidebarBootstrapProjects } from "../../lib/projectLoadPolicy";
@@ -1149,9 +1149,9 @@ export function Sidebar({
     async (project: Project) => {
       if (compactMode || useExternalTerminal) {
         if (rejectUnsupportedCapability(project, "externalTerminal")) return;
-        await openWindowsTerminal([{ title: project.name, cwd: project.path }]);
+        await openWindowsTerminal([{ title: project.name, cwd: project.path, shell: project.shell || undefined }]);
       } else {
-        await createSession(project.id, project.path, project.name, undefined, undefined, project.shell || undefined);
+        await createSession(project.id, project.path, project.name, "", parseProjectEnvVars(project), project.shell || undefined);
       }
       if (projectScopedTerminalViewEnabled) {
         onTerminalScopeChange?.({ kind: "project", projectId: project.id });
@@ -1166,9 +1166,9 @@ export function Sidebar({
       if (rejectMissingWorktree(worktree)) return;
       const title = worktree.name;
       if (compactMode || useExternalTerminal) {
-        await openWindowsTerminal([{ title, cwd: worktree.path }]);
+        await openWindowsTerminal([{ title, cwd: worktree.path, shell: project.shell || undefined }]);
       } else {
-        await createSession(project.id, worktree.path, title, undefined, undefined, project.shell || undefined, undefined, worktree.id);
+        await createSession(project.id, worktree.path, title, "", parseProjectEnvVars(project), project.shell || undefined, undefined, worktree.id);
       }
       if (projectScopedTerminalViewEnabled) {
         onTerminalScopeChange?.({ kind: "worktree", projectId: worktree.project_id, worktreeId: worktree.id });
@@ -2233,8 +2233,8 @@ export function Sidebar({
                     setContextMenu(null);
                   }}
                 >
-                  <Play size={14} strokeWidth={1.5} />
-                  {compactMode ? t("sidebar.menu.openExternalTerminal") : t("sidebar.menu.openTerminal")}
+                  {resolveProjectStartupCommand(contextMenu.project) ? <Play size={14} strokeWidth={1.5} /> : <Plus size={14} strokeWidth={1.5} />}
+                  {compactMode ? t("sidebar.menu.openExternalTerminal") : t(projectTerminalLaunchLabel(contextMenu.project))}
                 </button>
                 {!compactMode && !useExternalTerminal && !showProjectBatchContextMenu && (
                   <button
@@ -2251,7 +2251,7 @@ export function Sidebar({
                 )}
                 <button
                   className="context-menu-item"
-                  hidden={showProjectBatchContextMenu}
+                  hidden={showProjectBatchContextMenu || !resolveProjectStartupCommand(contextMenu.project)}
                   role="menuitem"
                   onClick={() => {
                     void handleNewProjectTerminal(contextMenu.project);
@@ -2259,7 +2259,7 @@ export function Sidebar({
                   }}
                 >
                   <Plus size={14} strokeWidth={1.5} />
-                  {t("sidebar.menu.newProjectTerminal")}
+                  {t("sidebar.menu.newBlankTerminal")}
                 </button>
                 <button
                   className="context-menu-item"
@@ -2442,11 +2442,12 @@ export function Sidebar({
                     setContextMenu(null);
                   }}
                 >
-                  <Play size={14} strokeWidth={1.5} />
-                  {t("worktree.menu.open")}
+                  {resolveProjectStartupCommand(contextMenu.project) ? <Play size={14} strokeWidth={1.5} /> : <Plus size={14} strokeWidth={1.5} />}
+                  {t(projectTerminalLaunchLabel(contextMenu.project))}
                 </button>
                 <button
                   className="context-menu-item"
+                  hidden={!resolveProjectStartupCommand(contextMenu.project)}
                   role="menuitem"
                   onClick={() => {
                     void handleNewWorktreeTerminal(contextMenu.project, contextMenu.worktree);
@@ -2454,7 +2455,7 @@ export function Sidebar({
                   }}
                 >
                   <Plus size={14} strokeWidth={1.5} />
-                  {t("worktree.menu.newTerminal")}
+                  {t("sidebar.menu.newBlankTerminal")}
                 </button>
                 <button
                   className="context-menu-item"

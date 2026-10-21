@@ -76,7 +76,7 @@ import {
   createTerminalCliContext,
   isCodexTerminalContext,
 } from "../terminal/browser/TerminalCliContext";
-import { createTerminalMouseInteractionOptions } from "../terminal/browser/TerminalMouseInteraction";
+import { attachTerminalHistoryWheel, createTerminalMouseInteractionOptions } from "../terminal/browser/TerminalMouseInteraction";
 import {
   createPiTerminalCompatibility,
   type PiTerminalCompatibility,
@@ -992,6 +992,7 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
       cursorWidth: 1,
       fontSize,
       fontFamily: effectiveFontFamily,
+      lineHeight: 1.25,
       fontWeight: "normal",
       fontWeightBold: "bold",
       scrollback: effectiveTerminalScrollbackRows,
@@ -1140,6 +1141,7 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
     installTerminalUnicode(terminal);
     terminal.loadAddon(webLinksAddon);
     terminal.open(containerRef.current);
+    baseDisposables.push(attachTerminalHistoryWheel(terminal));
     const updateCtrlKeyState = (event: KeyboardEvent) => {
       if (event.key === "Control") ctrlKeyDown = event.type === "keydown";
     };
@@ -1214,7 +1216,7 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
       if (!sessionSnapshot?.deferStartupUntilInitialOutput || !sessionSnapshot.startupCmd) return;
       terminalProcessManager.write(
         sessionId,
-        formatStartupInputForPty(sessionSnapshot.startupCmd, normalizeShellKey(sessionSnapshot.shell) ?? null),
+        formatStartupInputForPty(sessionSnapshot.deferredStartupCmd ?? sessionSnapshot.startupCmd, normalizeShellKey(sessionSnapshot.shell) ?? null),
       ).catch((err) => reportPtyWriteError("deferredStartup", err));
     };
     let resolveInitialDisplayReady: (() => void) | null = null;
@@ -1841,7 +1843,9 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
           className="absolute inset-y-0 left-0 min-w-0 overflow-hidden"
           style={{ width: markdownPreviewOpen ? `${100 - markdownPreviewPanelPercent}%` : "100%" }}
         >
-          <div ref={containerRef} className="relative h-full w-full overflow-hidden pl-2" />
+          <div className="h-full w-full px-3 py-2">
+            <div ref={containerRef} className="relative h-full w-full overflow-hidden" />
+          </div>
         </div>
         {markdownPreviewOpen && (
           <div

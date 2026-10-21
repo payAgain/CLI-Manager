@@ -527,6 +527,12 @@ fn ssh_remote_command(spec: &SshConnectionSpec, remote_command: &str) -> Result<
     ssh_remote_command_with_options(spec, remote_command, false, false)
 }
 
+pub(crate) fn cli_tools_probe_command(spec: &SshConnectionSpec, script: &str) -> Result<Command, String> {
+    validate_spec(spec)?;
+    ensure_non_interactive(spec)?;
+    ssh_remote_command(spec, script)
+}
+
 fn ssh_probe_command(
     spec: &SshConnectionSpec,
     accept_new_host_key: bool,

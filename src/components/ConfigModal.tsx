@@ -37,6 +37,8 @@ import {
   type CliArgsHistoryEntry,
 } from "../lib/cliArgsHistory";
 import { useSshDirectoryBrowser } from "../hooks/useSshDirectoryBrowser";
+import { useInstalledCliTools, type CliToolScanContext } from "../hooks/useInstalledCliTools";
+import { parseProjectEnvVars } from "../lib/projectEnv";
 
 interface Props {
   project?: Project;
@@ -52,7 +54,6 @@ interface SshPathCheckResult {
   gitRepository: boolean;
 }
 
-const CLI_TOOL_OPTIONS = CLI_TOOL_DESCRIPTORS.map((tool) => tool.command);
 const WORKTREE_STRATEGIES: WorktreeIsolationStrategy[] = ["disabled", "prompt", "autoParallel", "always"];
 const WORKTREE_STRATEGY_LABEL_KEYS: Record<WorktreeIsolationStrategy, TranslationKey> = {
   prompt: "worktree.strategy.prompt",
@@ -307,6 +308,16 @@ export function ConfigModal({ project, cloneFrom, defaultGroupId, onManageSshHos
   };
 
   const selectedSshHost = sshHosts.find((host) => host.id === sshHostId) ?? null;
+  const cliScanContext: CliToolScanContext | null = useMemo(() => {
+    const envVars = parseProjectEnvVars({ env_vars: envVarsText });
+    if (projectType === "ssh") {
+      if (!selectedSshHost) return null;
+      try {
+        return { cwd: remotePath.trim(), envVars, sshSpec: buildSshConnectionSpec(selectedSshHost, sshHosts) };
+      } catch { return null; }
+    }
+    return { shell: shell.trim() || resolveFallbackShell(osPlatform), cwd: path.trim(), envVars };
+  }, [envVarsText, osPlatform, path, projectType, remotePath, resolveFallbackShell, selectedSshHost, shell, sshHosts]);
 
   const describeRemotePathError = useCallback((err: unknown) => {
     const code = err instanceof Error ? err.message : String(err);
@@ -700,6 +711,7 @@ export function ConfigModal({ project, cloneFrom, defaultGroupId, onManageSshHos
                   onOpenChange={setCliToolComboboxOpen}
                   value={cliTool}
                   onChange={setCliTool}
+                  scanContext={cliScanContext}
                 />
               </div>
 
@@ -1038,6 +1050,7 @@ function CliToolCombobox({
   onOpenChange,
   value,
   onChange,
+  scanContext,
 }: {
   id?: string;
   ariaLabel?: string;
@@ -1046,12 +1059,14 @@ function CliToolCombobox({
   onOpenChange: (open: boolean) => void;
   value: string;
   onChange: (value: string) => void;
+  scanContext: CliToolScanContext | null;
 }) {
   const [activeIndex, setActiveIndex] = useState(0);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const listboxId = useId();
   const { t } = useI18n();
+  const { commands: options, status: scanStatus, refresh } = useInstalledCliTools(scanContext, open);
   const vendor = inferVendor(value);
   const normalizedValue = value.trim().toLowerCase();
   const selectedDescriptor = CLI_TOOL_DESCRIPTORS.find(
@@ -1059,11 +1074,10 @@ function CliToolCombobox({
   );
   const resolveOptionIndex = useCallback((nextValue: string) => {
     const normalized = nextValue.trim().toLowerCase();
-    const exactMatch = CLI_TOOL_OPTIONS.findIndex((tool) => tool === normalized);
+    const exactMatch = options.findIndex((tool) => tool === normalized);
     if (exactMatch >= 0) return exactMatch;
-    const prefixMatch = CLI_TOOL_OPTIONS.findIndex((tool) => tool.startsWith(normalized));
-    return prefixMatch >= 0 ? prefixMatch : 0;
-  }, []);
+    return options.findIndex((tool) => tool.startsWith(normalized));
+  }, [options]);
 
   useEffect(() => {
     if (!open) return;
@@ -1087,7 +1101,7 @@ function CliToolCombobox({
   const selectTool = (tool: string) => {
     onChange(tool);
     onOpenChange(false);
-    setActiveIndex(CLI_TOOL_OPTIONS.indexOf(tool));
+    setActiveIndex(options.indexOf(tool));
     inputRef.current?.focus();
   };
 
@@ -1098,7 +1112,7 @@ function CliToolCombobox({
     }
   };
 
-  const activeOptionId = open ? `${listboxId}-option-${CLI_TOOL_OPTIONS[activeIndex]}` : undefined;
+  const activeOptionId = open && options[activeIndex] ? `${listboxId}-option-${options[activeIndex]}` : undefined;
 
   return (
     <div ref={rootRef} className="relative" onBlur={handleBlur}>
@@ -1132,7 +1146,7 @@ function CliToolCombobox({
               onOpenChange(true);
               return;
             }
-            setActiveIndex((current) => (current + 1) % CLI_TOOL_OPTIONS.length);
+            if (options.length) setActiveIndex((current) => (current + 1) % options.length);
           } else if (e.key === "ArrowUp") {
             e.preventDefault();
             if (!open) {
@@ -1140,7 +1154,7 @@ function CliToolCombobox({
               onOpenChange(true);
               return;
             }
-            setActiveIndex((current) => (current - 1 + CLI_TOOL_OPTIONS.length) % CLI_TOOL_OPTIONS.length);
+            if (options.length) setActiveIndex((current) => current <= 0 ? options.length - 1 : current - 1);
           } else if (e.key === "Enter") {
             if (!open) {
               e.preventDefault();
@@ -1149,13 +1163,14 @@ function CliToolCombobox({
               return;
             }
             e.preventDefault();
-            selectTool(CLI_TOOL_OPTIONS[activeIndex]);
+            if (options[activeIndex]) selectTool(options[activeIndex]);
+            else onOpenChange(false);
           } else if (e.key === "Home" && open) {
             e.preventDefault();
             setActiveIndex(0);
           } else if (e.key === "End" && open) {
             e.preventDefault();
-            setActiveIndex(CLI_TOOL_OPTIONS.length - 1);
+            setActiveIndex(options.length - 1);
           } else if (e.key === "Escape") {
             if (open) {
               e.preventDefault();
@@ -1202,7 +1217,7 @@ function CliToolCombobox({
           role="listbox"
           className="ui-select-popover absolute left-0 top-full z-[60] mt-1 max-h-48 w-full overflow-y-auto rounded-xl border border-border bg-surface-container-high py-1 text-xs shadow-lg"
         >
-          {CLI_TOOL_OPTIONS.map((tool, index) => {
+          {options.map((tool, index) => {
             const descriptor = CLI_TOOL_DESCRIPTORS.find((item) => item.command === tool);
             const selected = normalizedValue === tool;
             return (
@@ -1232,6 +1247,14 @@ function CliToolCombobox({
               </button>
             );
           })}
+          {options.length === 0 && <p role="status" className="px-3 py-2 text-[11px] leading-relaxed text-text-muted">
+            {t(scanStatus === "loading" ? "cliTools.scanning" : scanStatus === "error" ? "cliTools.scanFailed" : scanStatus === "unavailable" ? "cliTools.selectHost" : "cliTools.noneInstalled")}
+          </p>}
+          <button type="button" disabled={scanStatus === "loading" || scanStatus === "unavailable"}
+            onMouseDown={event => event.preventDefault()} onClick={refresh}
+            className="ui-focus-ring mt-1 w-full border-t border-border px-3 py-2 text-left text-[11px] text-text-secondary disabled:opacity-50">
+            {t("cliTools.refresh")}
+          </button>
         </div>
       )}
     </div>

@@ -5,6 +5,7 @@ import { AlertTriangle, MoreHorizontal, Play, Terminal } from "../icons";
 import { useTerminalStore } from "../../stores/terminalStore";
 import type { Project, WorktreeRecord } from "../../lib/types";
 import { useI18n } from "../../lib/i18n";
+import { projectTerminalLaunchLabel } from "../../lib/projectStartupCommand";
 
 interface WorkspaceCardProps {
   project: Project;
@@ -31,6 +32,8 @@ export function WorkspaceCard({ project, worktree, name, branch, selected, prima
   const running = terminals.some((s) => statuses[s.id] === "running");
   const error = terminals.some((s) => statuses[s.id] === "error");
   const status = error ? "error" : running ? "running" : "idle";
+  const launchAction = projectTerminalLaunchLabel(project);
+  const launchLabel = t(launchAction);
   return (
     <div className="ui-workspace-card ui-focus-ring" data-selected={selected} data-status={status}
       data-compact={compact} data-invalid={invalid} data-node-kind={primary ? "project" : "worktree"}
@@ -42,8 +45,8 @@ export function WorkspaceCard({ project, worktree, name, branch, selected, prima
         {project.environment_type !== "local" && <span className="ui-workspace-environment">{project.environment_type.toUpperCase()}</span>}
         {invalid && <AlertTriangle size={12} className="text-warning" aria-label={t("sidebar.tree.pathMissing")} />}
         <span className="ui-workspace-card-actions">
-          <button className="ui-sidebar-tool ui-focus-ring" title={t("sidebar.tree.openTerminal")} aria-label={t("sidebar.tree.openTerminal")}
-            onClick={(e) => { e.stopPropagation(); onOpen(); }}><Play size={12} /></button>
+          <button className="ui-sidebar-tool ui-focus-ring" title={launchLabel} aria-label={launchLabel}
+            onClick={(e) => { e.stopPropagation(); onOpen(); }}>{launchAction === "sidebar.menu.newBlankTerminal" ? <Terminal size={12} /> : <Play size={12} />}</button>
           <button className="ui-sidebar-tool ui-focus-ring" aria-label={t("workspace.actions")} title={t("workspace.actions")}
             onClick={(e) => { e.stopPropagation(); onContextMenu(e); }}><MoreHorizontal size={13} /></button>
         </span>

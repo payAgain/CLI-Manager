@@ -13,9 +13,10 @@ function normalizedCliTool(project: AgentTerminalProject | null | undefined): st
 }
 
 export function createAgentTerminalMetadata(
-  project: AgentTerminalProject | null | undefined
+  project: AgentTerminalProject | null | undefined,
+  hasStartupCommand = true,
 ): AgentTerminalMetadata {
-  const cliTool = normalizedCliTool(project);
+  const cliTool = hasStartupCommand ? normalizedCliTool(project) : "";
   return {
     isAgentSession: Boolean(cliTool),
     cliTool: cliTool || undefined,

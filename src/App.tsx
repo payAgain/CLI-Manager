@@ -378,10 +378,12 @@ function App() {
   const exitTasksBehaviorRef = useRef(exitWithRunningTasksBehavior);
   const pendingExitDaemonSessionsCheckedRef = useRef(false);
   const pendingExitSourceRef = useRef("window close");
+  const exitCleanupInProgressRef = useRef(false);
 
   const handleOpenSettings = useCallback((tab?: SettingsTab) => {
     const allowedTabs: readonly SettingsTab[] = [
       "general",
+      "agents",
       "developer",
       "sidebar",
       "terminal-theme",
@@ -995,10 +997,11 @@ function App() {
 
   const runExitCleanup = useCallback(async (
     source: string,
-    options?: { closePty?: boolean; discardSessions?: boolean; closeAllPty?: boolean }
+    options?: { closePty?: boolean; closeAllPty?: boolean }
   ) => {
+    if (exitCleanupInProgressRef.current) return;
+    exitCleanupInProgressRef.current = true;
     const closePty = options?.closePty ?? true;
-    const discardSessions = options?.discardSessions ?? false;
     const closeAllPty = options?.closeAllPty ?? true;
     const ptySessionIds = useTerminalStore
       .getState()
@@ -1008,7 +1011,6 @@ function App() {
     logInfo("exit: cleanup started", {
       source,
       closePty,
-      discardSessions,
       ptySessionCount: ptySessionIds.length,
       ptySessionIds,
     });
@@ -1022,9 +1024,7 @@ function App() {
       // Issue #123：正常退出前把各终端最终画面强制落盘，供下次启动问询式恢复。
       // 必须在 PtyHost closeAll 之前，避免关闭 PTY 触发的重绘/清屏影响 serialize 结果；
       // 此处不再 clear() 工作区快照——那会让"关闭后恢复"永远拿不到数据。
-      if (!discardSessions) {
-        await flushTerminalSnapshotsNow();
-      }
+      await flushTerminalSnapshotsNow();
       await useSessionStore.getState().freezeForExit(useTerminalStore.getState().sessions);
       // Phase 2：daemon 模式"转入后台"时 closePty=false——PTY 留在守护进程里继续跑，
       // 快照仍落盘作为 daemon 也挂掉时的最终兜底。
@@ -1065,18 +1065,13 @@ function App() {
         });
         return;
       }
-      if (discardSessions) {
-        await useSessionStore.getState().clear().catch((err) => {
-          logWarn("Failed to clear discarded terminal sessions", err);
-        });
-        logInfo("exit: persisted sessions discarded", { source });
-      }
       canExit = true;
     } catch (err) {
       logWarn("exit: cleanup failed, keeping application open", { source, err });
     } finally {
-      logInfo("exit: cleanup finished", { source, closePty, discardSessions, canExit });
+      logInfo("exit: cleanup finished", { source, closePty, canExit });
       if (canExit && await exitApp(source)) return;
+      exitCleanupInProgressRef.current = false;
       useSessionStore.getState().resumePersistence();
       flushSync(() => {
         setExitPhase(null);
@@ -1150,7 +1145,6 @@ function App() {
     }
     if (behavior === "discard") {
       await runExitCleanup(source, {
-        discardSessions: true,
         closeAllPty: daemonSessionsChecked,
       });
       return;
@@ -1206,7 +1200,6 @@ function App() {
     });
     await persistExitTaskBehaviorBeforeAction(remember, "discard");
     await runExitCleanup(pendingExitSourceRef.current, {
-      discardSessions: true,
       closeAllPty: pendingExitDaemonSessionsCheckedRef.current,
     });
   }, [persistExitTaskBehaviorBeforeAction, runExitCleanup, runningTasksCount]);
@@ -1230,9 +1223,13 @@ function App() {
     const unlistenPromise = listen("tray-quit-requested", async () => {
       await requestExitGuardedByRunningTasks("tray quit");
     });
+    const unlistenNative = listen("app-quit-requested", async () => {
+      await requestExitGuardedByRunningTasks("native quit");
+    });
 
     return () => {
       void unlistenPromise.then((unlisten) => unlisten());
+      void unlistenNative.then((unlisten) => unlisten());
     };
   }, [requestExitGuardedByRunningTasks]);
 
@@ -1476,10 +1473,10 @@ function App() {
       />
       <ConfirmDialog
         open={restorePromptOpen}
-        title="恢复上次会话"
-        message="检测到上次保留的终端标签，是否恢复？"
-        confirmText="恢复"
-        cancelText="不恢复"
+        title={t("terminal.restore.promptTitle")}
+        message={t("terminal.restore.promptDescription")}
+        confirmText={t("terminal.restore.confirm")}
+        cancelText={t("terminal.restore.reject")}
         confirmAutoFocus
         contentClassName="w-[calc(100vw-2rem)] max-w-[460px]"
         onConfirm={handleConfirmRestoreSessions}

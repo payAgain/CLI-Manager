@@ -7,6 +7,7 @@ import { backgroundImageExists } from "../lib/assetUrl";
 import { defaultShellForOs, getOsPlatform, isWindowsOnlyShellKey } from "../lib/shell";
 import { getCliManagerDataPaths } from "../lib/appPaths";
 import { singleFlight } from "../lib/singleFlight";
+import { normalizeAgentPermissionMode, type AgentPermissionMode } from "../lib/agentLaunchPermissions";
 import {
   migrateTerminalShellProfiles,
   type TerminalShellProfile,
@@ -62,6 +63,7 @@ export const LINUX_GRAPHICS_MODES = ["auto", "system", "disable-dmabuf", "disabl
 export type LinuxGraphicsMode = (typeof LINUX_GRAPHICS_MODES)[number];
 type LastSettingsTab =
   | "general"
+  | "agents"
   | "developer"
   | "sidebar"
   | "terminal-theme"
@@ -278,6 +280,7 @@ const TERMINAL_BACKGROUND_POSITIONS: readonly TerminalBackgroundPosition[] = [
 
 export interface Settings {
   language: LanguagePreference;
+  agentPermissionMode: AgentPermissionMode;
   theme: ThemeMode;
   lightThemePalette: LightThemePalette;
   darkThemePalette: DarkThemePalette;
@@ -405,6 +408,7 @@ interface SettingsStore extends Settings {
 
 const DEFAULTS: Settings = {
   language: "auto",
+  agentPermissionMode: "manual",
   theme: "system",
   lightThemePalette: "warm-paper",
   darkThemePalette: "carbon-black",
@@ -563,6 +567,7 @@ const LEGACY_TERMINAL_THEME_MAP: Partial<Record<string, string>> = {
 
 const LAST_SETTINGS_TABS: readonly LastSettingsTab[] = [
   "general",
+  "agents",
   "developer",
   "sidebar",
   "terminal-theme",
@@ -933,6 +938,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
 
     const theme = (entries.theme as ThemeMode) ?? DEFAULTS.theme;
     entries.language = migrateLanguagePreference(entries.language);
+    entries.agentPermissionMode = normalizeAgentPermissionMode(entries.agentPermissionMode);
     entries.lastSettingsTab = migrateLastSettingsTab(entries.lastSettingsTab);
     const debugMode = (entries.debugMode as boolean) ?? DEFAULTS.debugMode;
     const storedTerminalThemeMode = entries.terminalThemeMode as unknown;

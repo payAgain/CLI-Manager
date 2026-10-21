@@ -1,6 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
 import { logError } from "./logger";
+import { applyAgentLaunchPermissions } from "./agentLaunchPermissions";
+import { useSettingsStore } from "../stores/settingsStore";
 
 export interface ExternalTab {
   cwd?: string;
@@ -16,7 +18,7 @@ export async function openWindowsTerminal(tabs: ExternalTab[]) {
       tabs: tabs.map((t) => ({
         cwd: t.cwd ?? null,
         title: t.title,
-        startup_cmd: t.startupCmd ?? null,
+        startup_cmd: applyAgentLaunchPermissions(t.startupCmd, useSettingsStore.getState().agentPermissionMode) ?? null,
         shell: t.shell ?? null,
       })),
     });

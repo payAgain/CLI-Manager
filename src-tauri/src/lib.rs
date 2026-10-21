@@ -16,6 +16,7 @@ pub mod hook_client;
 mod linux_graphics;
 mod log_rotation;
 mod process_job;
+mod process_attribution;
 pub mod pty;
 mod runtime_diagnostics;
 mod shell_resolver;
@@ -55,6 +56,9 @@ fn show_main_window<R: Runtime>(app: &AppHandle<R>) {
 #[derive(Default)]
 struct PendingBackgroundSession(Mutex<Option<String>>);
 
+#[derive(Default)]
+struct ApprovedAppExit(std::sync::atomic::AtomicBool);
+
 fn background_session_arg(args: &[String]) -> Option<String> {
     args.windows(2).find_map(|pair| {
         (pair[0] == "--restore-background-session" && !pair[1].trim().is_empty())
@@ -84,6 +88,7 @@ fn app_show_main_window(app: AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 fn app_exit(app: AppHandle) {
+    app.state::<ApprovedAppExit>().0.store(true, std::sync::atomic::Ordering::Release);
     app.exit(0);
 }
 
@@ -913,6 +918,7 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_notification::init())
         .manage(PendingBackgroundSession::default())
+        .manage(ApprovedAppExit::default())
         .manage(daemon::client::DaemonBridge::new())
         .manage(file_watcher::FileWatcherBridge::new())
         .manage(git_watcher::GitWatcherBridge::new())
@@ -940,6 +946,7 @@ pub fn run() {
             take_pending_background_session,
             commands::terminal_shell::terminal_shell_scan,
             commands::terminal_shell::terminal_shell_icon,
+            commands::cli_tools::cli_tools_scan,
             commands::ssh::ssh_client_status,
             commands::ssh::ssh_resolve_user,
             commands::ssh::ssh_test_connection,
@@ -1109,6 +1116,14 @@ pub fn run() {
         .build(context)
         .expect("error while building tauri application")
         .run(|app, event| {
+            // Cmd+Q and the native application menu must save through the same
+            // frontend exit guard as the window button and tray menu.
+            if let tauri::RunEvent::ExitRequested { api, .. } = &event {
+                if !app.state::<ApprovedAppExit>().0.load(std::sync::atomic::Ordering::Acquire) {
+                    api.prevent_exit();
+                    let _ = app.emit("app-quit-requested", ());
+                }
+            }
             if let tauri::RunEvent::Exit = &event {
                 crash_reporter::mark_graceful_exit();
             }

@@ -91,11 +91,11 @@ function findNode(predicate) {
 const restoreBody = findNode(node => ts.isPropertyAssignment(node) && node.name.getText(terminalAst) === "restoreSessions").initializer.getText(terminalAst);
 const launchBody = findNode(node => ts.isFunctionDeclaration(node) && node.name?.text === "resolvePtyLaunch").getText(terminalAst);
 const mirrorBody = findNode(node => ts.isFunctionDeclaration(node) && node.name?.text === "buildWorkspanMirror").getText(terminalAst);
-const restoreCompiled = ts.transpileModule(`let restoreInProgress = false; ${launchBody}\n${mirrorBody}\nexports.restore = ${restoreBody};`, {
+const restoreCompiled = ts.transpileModule(`let restoreInProgress = false; ${launchBody}\n${mirrorBody}\nexports.restore = ${restoreBody}; exports.launch = resolvePtyLaunch;`, {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
 }).outputText;
 
-async function restoreHarness(saved, projects = [], daemon = [], integration = {}) {
+async function restoreHarness(saved, projects = [], daemon = [], integration = {}, settings = {}) {
   const persistence = sessionStore(saved);
   await persistence.api.getState().load();
   const state = {}, created = [], writes = [], timers = [], notices = [], errors = [];
@@ -107,12 +107,13 @@ async function restoreHarness(saved, projects = [], daemon = [], integration = {
   runInNewContext(restoreCompiled, {
     exports, Date, Map, Set, crypto: { randomUUID: () => `bridge-${++sequence}` },
     ...workspan, resolveTerminalConversationRestore,
+    ...load("src/lib/agentLaunchPermissions.ts"),
     useSessionStore: persistence.api,
     useTerminalStore: { getState: () => state, setState }, set: setState, get: () => state,
     useProjectStore: { getState: () => projectState },
     useSshHostStore: { getState: () => sshState },
     useSshAgentIntegrationStore: { getState: () => ({ loaded: true, installations: [], integrations: [], preferences: [], ...integration }) },
-    useSettingsStore: { getState: () => ({ workspanEnabled: true }) },
+    useSettingsStore: { getState: () => ({ workspanEnabled: true, ...settings }) },
     invoke: async command => { assert.equal(command, "pty_daemon_sessions"); return daemon; },
     getOsPlatform: async () => "macos",
     terminalProcessManager: {
@@ -149,8 +150,51 @@ async function restoreHarness(saved, projects = [], daemon = [], integration = {
   for (const timer of timers) timer();
   await settle();
   assert.deepEqual(errors, []);
-  return { state, persistence, created, writes, notices };
+  return { state, persistence, created, writes, notices, resolveLaunch: exports.launch };
 }
+
+test("project and Worktree blank-terminal actions suppress SSH Agent fallback and preserve their launch context", async () => {
+  const sidebarSource = readFileSync(resolve(root, "src/components/sidebar/index.tsx"), "utf8");
+  const sidebarAst = ts.createSourceFile("sidebar.tsx", sidebarSource, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const findCallback = name => {
+    let result;
+    function visit(node) {
+      if (ts.isVariableDeclaration(node) && node.name.getText(sidebarAst) === name) result = node.initializer.arguments[0].getText(sidebarAst);
+      else ts.forEachChild(node, visit);
+    }
+    visit(sidebarAst);
+    assert.ok(result, `production callback ${name} exists`);
+    return result;
+  };
+  for (const environment of ["local", "wsl", "ssh"]) {
+    const p = project({ environment_type: environment, shell: environment === "wsl" ? "wsl" : "zsh", ssh_host_id: "host", remote_path: "/remote/repo" });
+    const h = await restoreHarness({}, [p], [], {}, { agentPermissionMode: "yolo" });
+    for (const name of ["handleNewProjectTerminal", "handleNewWorktreeTerminal"]) {
+      const calls = [], exports = {};
+      runInNewContext(ts.transpileModule(`exports.callback = ${findCallback(name)};`, { compilerOptions: { module: ts.ModuleKind.CommonJS } }).outputText, {
+        exports, compactMode: false, useExternalTerminal: false,
+        createSession: async (...args) => calls.push(args), parseProjectEnvVars: () => ({ APP_TEST: "kept" }),
+        projectScopedTerminalViewEnabled: false, closeHistory: () => {}, rejectMissingWorktree: () => false,
+      });
+      await exports.callback(p, { id: "wt", project_id: p.id, path: "/repo/worktree", name: "branch" });
+      const [projectId, cwd, , startupCmd, envVars, shell, , worktreeId] = calls[0];
+      assert.equal(startupCmd, "", `${environment} ${name} must explicitly suppress project startup`);
+      assert.equal(cwd, name === "handleNewWorktreeTerminal" ? "/repo/worktree" : p.path);
+      assert.equal(worktreeId, name === "handleNewWorktreeTerminal" ? "wt" : undefined);
+      const launch = await h.resolveLaunch({ projectId, cwd, startupCmd, envVars, shell, worktreeId }, "macos");
+      assert.equal(launch.startupCmd, undefined);
+      assert.equal(launch.baseStartupCmd, undefined);
+      if (environment === "ssh") {
+        assert.equal(launch.invokeArgs.sshLaunch.startupCommand, null);
+        assert.equal(launch.invokeArgs.sshLaunch.environmentOverrides.APP_TEST, "kept");
+        assert.equal(launch.invokeArgs.sshLaunch.remotePath, "/remote/repo");
+      } else {
+        assert.equal(launch.invokeArgs.envVars.APP_TEST, "kept");
+        assert.equal(launch.shell, p.shell);
+      }
+    }
+  }
+});
 
 test("manual Agent and exact Hook identity survive save, PTY shutdown and a new application load", async () => {
   const h = sessionStore();
@@ -166,6 +210,39 @@ test("manual Agent and exact Hook identity survive save, PTY shutdown and a new 
   assert.equal(restored.created.length, 1);
   assert.equal(restored.writes[0].text, `codex resume --no-alt-screen ${CURRENT}\r`);
   assert.equal(restored.state.sessions[0].initialTerminalOutput, undefined);
+});
+
+test("YOLO is applied to exact conversation restoration and switching to Manual removes only injected defaults", async () => {
+  const saved = { sessions: [persistTerminalSession(running())] };
+  const yolo = await restoreHarness(saved, [], [], {}, { agentPermissionMode: "yolo" });
+  assert.equal(yolo.writes[0].text, `codex --dangerously-bypass-approvals-and-sandbox resume --no-alt-screen ${CURRENT}\r`);
+  assert.equal(yolo.state.sessions[0].startupCmd, `codex resume --no-alt-screen ${CURRENT}`);
+  assert.equal(yolo.state.sessions[0].cliSessionId, CURRENT);
+  const manual = await restoreHarness({ sessions: yolo.state.sessions }, [], [], {}, { agentPermissionMode: "manual" });
+  assert.equal(manual.writes[0].text, `codex resume --no-alt-screen ${CURRENT}\r`);
+});
+
+test("deferred startup applies current permissions after scrollback without persisting automatic arguments", async () => {
+  const yolo = await restoreHarness({ sessions: [shell({ startupCmd: "gemini", initialTerminalOutput: "previous output" })] }, [], [], {}, { agentPermissionMode: "yolo" });
+  const session = yolo.state.sessions[0];
+  assert.equal(session.startupCmd, "gemini");
+  assert.equal(session.deferredStartupCmd, "gemini --yolo");
+  assert.equal(session.deferStartupUntilInitialOutput, true);
+  assert.equal(yolo.writes.length, 0);
+  assert.equal(persistTerminalSession(session).deferredStartupCmd, undefined);
+});
+
+test("SSH and WSL restore use YOLO without changing remote identity or requiring a Hook installation", async () => {
+  const ssh = project({ environment_type: "ssh", ssh_host_id: "host", remote_path: "/remote/repo" });
+  const saved = persistTerminalSession(running({ projectId: ssh.id, environmentType: "ssh", sshHostId: "host", remotePath: "/remote/repo" }));
+  const restored = await restoreHarness({ sessions: [saved] }, [ssh], [], {}, { agentPermissionMode: "yolo" });
+  assert.equal(restored.created[0].sshLaunch.startupCommand, `codex --dangerously-bypass-approvals-and-sandbox resume --no-alt-screen ${CURRENT}`);
+  assert.equal(restored.created[0].sshLaunch.remotePath, "/remote/repo");
+  assert.equal(restored.created[0].sshLaunch.agentPath, "");
+  assert.equal(restored.writes.length, 0);
+  assert.doesNotMatch(restored.state.sessions[0].startupCmd, /dangerously/);
+  const wsl = await restoreHarness({ sessions: [persistTerminalSession(running({ startupCmd: "wsl.exe -d Ubuntu -- codex", shell: "pwsh" }))] }, [], [], {}, { agentPermissionMode: "yolo" });
+  assert.equal(wsl.writes[0].text, `wsl.exe -d Ubuntu -- codex --dangerously-bypass-approvals-and-sandbox resume --no-alt-screen ${CURRENT}\r`);
 });
 
 test("an in-flight stale write cannot overtake the final snapshot or discard", async () => {
@@ -378,4 +455,49 @@ test("the application freezes after the final snapshot and before closing PTYs, 
   assert.ok(cleanup.indexOf("flushTerminalSnapshotsNow()") < cleanup.indexOf(".freezeForExit("));
   assert.ok(cleanup.indexOf(".freezeForExit(") < cleanup.indexOf("cleanupTerminalProcessesForExit("));
   assert.ok(cleanup.indexOf("if (canExit && await exitApp(source)) return") < cleanup.indexOf(".resumePersistence()"));
+});
+
+test("stopping a running task through the actual exit cleanup preserves restoration data", async () => {
+  const app = readFileSync(resolve(root, "src/App.tsx"), "utf8");
+  const ast = ts.createSourceFile("App.tsx", app, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  let callback;
+  const visit = node => {
+    if (ts.isVariableDeclaration(node) && node.name.getText(ast) === "runExitCleanup") callback = node.initializer.arguments[0].getText(ast);
+    ts.forEachChild(node, visit);
+  };
+  visit(ast);
+  const compiled = ts.transpileModule(`exports.cleanup = ${callback};`, {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  const h = sessionStore(), exports = {}, state = { sessions: [running()] };
+  let exited = false, closeCount = 0;
+  runInNewContext(compiled, {
+    exports,
+    exitCleanupInProgressRef: { current: false },
+    useTerminalStore: { getState: () => state }, useSessionStore: h.api,
+    flushSync: fn => fn(), setExitNotice: () => {}, setExitPhase: () => {},
+    flushTerminalSnapshotsNow: async () => {},
+    logInfo: () => {}, logWarn: () => {},
+    invoke: async () => true,
+    exitApp: async () => { exited = true; return true; },
+    cleanupTerminalProcessesForExit: load("src/lib/terminalExitCleanup.ts").cleanupTerminalProcessesForExit,
+    terminalProcessManager: {
+      closeAll: async () => {
+        closeCount++;
+        state.sessions = state.sessions.map(s => applyAgentDetection(s, { agent: null, updatedAtMs: Date.now() }));
+        await h.api.getState().saveSessions(state.sessions);
+      },
+    },
+  });
+  await Promise.all([
+    exports.cleanup("running task dialog", { closePty: true, closeAllPty: true }),
+    exports.cleanup("repeated Cmd+Q", { closePty: true, closeAllPty: true }),
+  ]);
+  assert.equal(exited, true);
+  assert.equal(closeCount, 1);
+  assert.equal(h.disk.sessions.length, 1);
+  assert.equal(h.disk.sessions[0].cliSessionId, CURRENT);
+  const restored = await restoreHarness(h.disk);
+  assert.equal(restored.writes[0].text, `codex resume --no-alt-screen ${CURRENT}\r`);
+  assert.doesNotMatch(app, /discardSessions:\s*true/);
 });
