@@ -130,7 +130,12 @@ pub async fn send_interactive_system_notification(
         .action("default", &action_label);
 
     #[cfg(target_os = "windows")]
-    if should_use_registered_windows_app_id() {
+    {
+        let icon_dir = app
+            .path()
+            .app_local_data_dir()
+            .map_err(|err| err.to_string())?;
+        register_windows_notification_identity(&app_id, &icon_dir)?;
         notification.app_id(&app_id);
     }
 
@@ -263,19 +268,28 @@ fn spawn_powershell_notification(script: &str) -> Result<(), String> {
         .map_err(|e| format!("Failed to spawn powershell.exe: {}", e))
 }
 
+/// Standalone EXEs have no installer-provided AUMID. Register our per-user identity
+/// before WinRT delivery so Show() cannot silently succeed for an unknown sender.
 #[cfg(target_os = "windows")]
-fn should_use_registered_windows_app_id() -> bool {
-    use std::path::MAIN_SEPARATOR as SEP;
-
-    let Ok(exe) = tauri::utils::platform::current_exe() else {
-        return false;
+fn register_windows_notification_identity(
+    app_id: &str,
+    icon_dir: &std::path::Path,
+) -> Result<(), String> {
+    let register = || -> Result<(), Box<dyn std::error::Error>> {
+        fs::create_dir_all(icon_dir)?;
+        let icon_path = icon_dir.join("notification-icon.png");
+        let icon = include_bytes!("../../icons/32x32.png");
+        if fs::read(&icon_path).ok().as_deref() != Some(icon.as_slice()) {
+            fs::write(&icon_path, icon)?;
+        }
+        let user = winreg::RegKey::predef(winreg::enums::HKEY_CURRENT_USER);
+        let (key, _) = user.create_subkey(format!(r"Software\Classes\AppUserModelId\{app_id}"))?;
+        key.set_value("DisplayName", &"CLI-Manager")?;
+        key.set_value("IconBackgroundColor", &"0")?;
+        key.set_value("IconUri", &icon_path.as_os_str())?;
+        Ok(())
     };
-    let Some(exe_dir) = exe.parent() else {
-        return false;
-    };
-    let curr_dir = exe_dir.display().to_string();
-    !(curr_dir.ends_with(format!("{SEP}target{SEP}debug").as_str())
-        || curr_dir.ends_with(format!("{SEP}target{SEP}release").as_str()))
+    register().map_err(|err| format!("notification_identity_registration_failed: {err}"))
 }
 
 #[cfg(not(windows))]
@@ -336,6 +350,50 @@ fn xml_escape(s: &str) -> String {
 mod tests {
     use super::*;
     use windows_sys::Win32::UI::WindowsAndMessaging::{FLASHW_STOP, FLASHW_TIMERNOFG, FLASHW_TRAY};
+
+    #[test]
+    fn standalone_notification_identity_registers_and_repairs_its_icon() {
+        let app_id = format!("com.cli-manager.notification-test.{}", uuid::Uuid::new_v4());
+        let directory = tempfile::tempdir().unwrap();
+        let user = winreg::RegKey::predef(winreg::enums::HKEY_CURRENT_USER);
+        let subkey = format!(r"Software\Classes\AppUserModelId\{app_id}");
+        register_windows_notification_identity(&app_id, directory.path()).unwrap();
+        let key = user.open_subkey(&subkey).unwrap();
+        assert_eq!(
+            key.get_value::<String, _>("DisplayName").unwrap(),
+            "CLI-Manager"
+        );
+        let icon_path = directory.path().join("notification-icon.png");
+        assert_eq!(
+            key.get_value::<String, _>("IconUri").unwrap(),
+            icon_path.to_string_lossy()
+        );
+        fs::write(&icon_path, b"outdated icon").unwrap();
+        register_windows_notification_identity(&app_id, directory.path()).unwrap();
+        assert_eq!(
+            fs::read(icon_path).unwrap(),
+            include_bytes!("../../icons/32x32.png")
+        );
+        drop(key);
+        user.delete_subkey_all(subkey).unwrap();
+    }
+
+    #[test]
+    #[ignore = "displays a real Windows toast; run explicitly for desktop verification"]
+    fn native_notification_smoke() {
+        let icon_dir = std::path::PathBuf::from(env::var_os("LOCALAPPDATA").unwrap())
+            .join("com.cli-manager.app");
+        register_windows_notification_identity("com.cli-manager.app", &icon_dir).unwrap();
+        let handle = notify_rust::Notification::new()
+            .app_id("com.cli-manager.app")
+            .summary("CLI-Manager")
+            .body("Windows 原生通知测试：任务已完成。")
+            .action("default", "查看")
+            .show()
+            .unwrap();
+        std::thread::sleep(std::time::Duration::from_secs(4));
+        drop(handle);
+    }
 
     #[test]
     fn finite_taskbar_attention_accepts_boundaries() {

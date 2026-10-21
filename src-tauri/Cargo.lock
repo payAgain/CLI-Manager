@@ -750,6 +750,7 @@ dependencies = [
  "uuid",
  "windows-native-keyring-store",
  "windows-sys 0.61.2",
+ "winreg",
  "zbus-secret-service-keyring-store",
  "zip",
 ]

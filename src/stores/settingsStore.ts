@@ -515,7 +515,7 @@ const DEFAULTS: Settings = {
   piHookBridgeEnabled: true,
   grokHookBridgeEnabled: true,
   systemNotificationsEnabled: true,
-  suppressSystemNotificationsWhenFocused: true,
+  suppressSystemNotificationsWhenFocused: false,
   systemNotificationEvents: {
     SessionStart: false,
     UserPromptSubmit: false,

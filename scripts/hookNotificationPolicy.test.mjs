@@ -12,13 +12,12 @@ const policy = {};
 runInNewContext(compile(read("../src/lib/hookNotificationPolicy.ts")), { exports: policy });
 const foreground = {
   focused: true, visible: true, minimized: false, documentVisible: true,
-  targetVisible: true, suppressWhileAppFocused: false,
+  suppressWhileAppFocused: false,
 };
 
-test("visible split panes stay quiet even when focused-window suppression is disabled", () => {
-  assert.equal(policy.suppressHookNotification(foreground), true);
-  assert.equal(policy.suppressHookNotification({ ...foreground, targetVisible: false }), false);
-  assert.equal(policy.suppressHookNotification({ ...foreground, targetVisible: false, suppressWhileAppFocused: true }), true);
+test("foreground alerts honor the suppression switch instead of silently suppressing the current terminal", () => {
+  assert.equal(policy.suppressHookNotification(foreground), false);
+  assert.equal(policy.suppressHookNotification({ ...foreground, suppressWhileAppFocused: true }), true);
 });
 
 test("unfocused, hidden, minimized and tray windows can receive OS notifications", () => {
@@ -27,34 +26,11 @@ test("unfocused, hidden, minimized and tray windows can receive OS notifications
   }
 });
 
-const pane = (id, visible = true, laidOut = true) => ({
-  dataset: { terminalSessionId: id, terminalVisible: String(visible) },
-  getClientRects: () => laidOut ? [{}] : [],
-});
-const documentWith = (panes, modal = false) => ({
-  querySelector: () => modal ? {} : null,
-  querySelectorAll: () => panes,
-});
-
-test("visibility uses the actual PTY pane across splits, Workspans, projects and remote environments", () => {
-  const doc = documentWith([
-    pane("local"), pane("ssh:1"), pane("wsl:1"), pane("worktree:1"),
-    pane("hidden-workspan", false), pane("hidden-project", true, false),
-  ]);
-  for (const id of ["local", "ssh:1", "wsl:1", "worktree:1"]) {
-    assert.equal(policy.isNotificationTerminalVisible(id, doc), true);
-  }
-  for (const id of ["hidden-workspan", "hidden-project", "external:codex:1", "missing"]) {
-    assert.equal(policy.isNotificationTerminalVisible(id, doc), false);
-  }
-  assert.equal(policy.isNotificationTerminalVisible("local", documentWith([pane("local")], true)), false);
-});
-
 // Exercise the real App sender with native APIs replaced, rather than repeating its policy in a test.
 const app = ts.createSourceFile("App.tsx", read("../src/App.tsx"), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 const sender = app.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === "sendSystemNotification").getText(app);
 function harness() {
-  const state = { focused: true, visible: true, minimized: false, documentVisible: true, targetVisible: true };
+  const state = { focused: true, visible: true, minimized: false, documentVisible: true };
   const settings = {
     systemNotificationsEnabled: true, suppressSystemNotificationsWhenFocused: false,
     systemNotificationEvents: { Stop: true, StopFailure: true, PermissionRequest: true },
@@ -76,8 +52,6 @@ function harness() {
     document: {
       hasFocus: () => state.focused,
       get visibilityState() { return state.documentVisible ? "visible" : "hidden"; },
-      querySelector: () => null,
-      querySelectorAll: () => [pane("pty", state.targetVisible)],
     },
     require: name => {
       assert.equal(name, "@tauri-apps/plugin-notification");
@@ -94,8 +68,9 @@ function harness() {
 }
 const event = (name = "Stop") => ({ event: name, source: "codex", tabId: "pty" });
 
-test("real Hook sender suppresses foreground completion, failure and permission alerts", async () => {
+test("real Hook sender suppresses foreground alerts only when requested", async () => {
   const h = harness();
+  h.settings.suppressSystemNotificationsWhenFocused = true;
   h.permission.granted = false;
   for (const name of ["Stop", "StopFailure", "PermissionRequest"]) await h.send(event(name), "pty");
   assert.equal(h.calls.length, 0);
@@ -113,9 +88,18 @@ test("background alerts use the native interactive channel and retain the exact 
   assert.equal(h.errors.length, 0);
 });
 
+test("current and remote terminal completions use native notifications when foreground suppression is off", async () => {
+  const h = harness();
+  for (const id of ["pty", "split", "workspan", "ssh:1", "wsl:1", "worktree:1", "external:codex:1"]) {
+    await h.send(event(), id);
+    assert.equal(h.calls.at(-1).command, "send_interactive_system_notification");
+    assert.equal(h.calls.at(-1).args.tabId, id);
+  }
+  assert.equal(h.calls.length, 7);
+});
+
 test("background tabs honor focus suppression and disabled event/OS settings", async () => {
   const h = harness();
-  h.state.targetVisible = false;
   await h.send(event(), "pty");
   assert.equal(h.calls.length, 1);
   h.settings.suppressSystemNotificationsWhenFocused = true;
@@ -131,6 +115,7 @@ test("background tabs honor focus suppression and disabled event/OS settings", a
 
 test("returning to the foreground during permission approval cancels delayed alerts", async () => {
   const h = harness();
+  h.settings.suppressSystemNotificationsWhenFocused = true;
   h.state.focused = false;
   h.permission.granted = false;
   h.permission.request = async () => { h.state.focused = true; return "granted"; };
@@ -152,6 +137,7 @@ test("denied permission and settings changed during permission approval stop del
 
 test("background task mode still obeys foreground visibility", async () => {
   const h = harness();
+  h.settings.suppressSystemNotificationsWhenFocused = true;
   h.context.backgroundTaskModeActive = true;
   h.settings.systemNotificationsEnabled = false;
   await h.send(event(), "pty");

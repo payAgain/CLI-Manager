@@ -44,7 +44,7 @@ import { cleanupTerminalProcessesForExit } from "./lib/terminalExitCleanup";
 import { shouldIncludeDaemonExitTask } from "./lib/terminalExitTask";
 import { requestSidebarToggle } from "./lib/sidebarCommands";
 import { startRuntimeDiagnostics } from "./lib/runtimeDiagnostics";
-import { deliverBackgroundHookNotification, isNotificationTerminalVisible, suppressHookNotification } from "./lib/hookNotificationPolicy";
+import { deliverHookNotification, suppressHookNotification } from "./lib/hookNotificationPolicy";
 import { getTerminalTheme, isLightTerminalTheme } from "./lib/terminalThemes";
 import { resolveProjectForSession } from "./lib/terminalProject";
 import { terminalProcessManager } from "./terminal/core/TerminalProcessManager";
@@ -272,7 +272,7 @@ async function sendSystemNotification(payload: CliHookPayload, tabId: string | n
     const body = getSystemNotificationBody(payload, projectName);
     const actionLabel = getHookNotificationActionLabel(payload);
 
-    await deliverBackgroundHookNotification({
+    await deliverHookNotification({
       suppressed: async () => {
         const appWindow = getCurrentWindow();
         const [focused, visible, minimized] = await Promise.all([
@@ -285,7 +285,6 @@ async function sendSystemNotification(payload: CliHookPayload, tabId: string | n
           visible,
           minimized,
           documentVisible: document.visibilityState === "visible",
-          targetVisible: isNotificationTerminalVisible(tabId, document),
           suppressWhileAppFocused: useSettingsStore.getState().suppressSystemNotificationsWhenFocused,
         });
       },
@@ -571,7 +570,7 @@ function App() {
       const tabTitle = boundTabId
         ? terminalStore.sessions.find((session) => session.id === boundTabId)?.title ?? null
         : null;
-      // Hook task alerts use the OS notification channel; foreground panes stay quiet.
+      // Hook alerts use the OS channel and the user's foreground suppression preference.
       void sendSystemNotification(event.payload, tabId, tabTitle);
     });
     const unlistenSystemNotification = listen<SystemNotificationActionPayload>(SYSTEM_NOTIFICATION_ACTION_EVENT, (event) => {

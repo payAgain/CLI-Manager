@@ -3,27 +3,16 @@ export interface HookNotificationWindowState {
   visible: boolean;
   minimized: boolean;
   documentVisible: boolean;
-  targetVisible: boolean;
   suppressWhileAppFocused: boolean;
 }
 
 export function suppressHookNotification(state: HookNotificationWindowState): boolean {
   const foreground = state.focused && state.visible && !state.minimized && state.documentVisible;
-  return foreground && (state.targetVisible || state.suppressWhileAppFocused);
+  return foreground && state.suppressWhileAppFocused;
 }
 
-export function isNotificationTerminalVisible(tabId: string, root: Pick<Document, "querySelectorAll" | "querySelector">): boolean {
-  // A modal covers the terminal even if its mounted pane retains layout state.
-  if (root.querySelector('[aria-modal="true"]')) return false;
-  return Array.from(root.querySelectorAll<HTMLElement>('[data-terminal-session-id]')).some((element) => (
-    element.dataset.terminalSessionId === tabId
-    && element.dataset.terminalVisible === "true"
-    && element.getClientRects().length > 0
-  ));
-}
-
-/** Recheck after the asynchronous permission dialog; returning to the terminal cancels delivery. */
-export async function deliverBackgroundHookNotification(options: {
+/** Recheck window state and preferences after an asynchronous permission dialog. */
+export async function deliverHookNotification(options: {
   suppressed: () => Promise<boolean>;
   permitted: () => Promise<boolean>;
   send: () => Promise<void>;
