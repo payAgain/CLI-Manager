@@ -3,8 +3,6 @@ import type { AppLanguage } from "../../lib/i18n";
 import type { HistorySessionView } from "../../lib/types";
 import { inferSubagentParentSessionId } from "../../lib/historySubagents";
 
-export type TimeGroupLabel = "Today" | "Yesterday" | "This Week" | "This Month" | "Earlier";
-
 // 模块级 formatter 缓存：toLocaleString 每次创建 ICU formatter，对长会话/列表的开销可观。
 const TIME_FORMATTERS = new Map<AppLanguage, Intl.DateTimeFormat>();
 
@@ -106,27 +104,6 @@ export function buildHistorySessionChildMap(items: HistorySessionView[]): Map<st
   }
 
   return childrenByParentKey;
-}
-
-export function toGroupLabel(ts: number, nowTs: number): TimeGroupLabel {
-  if (!Number.isFinite(ts) || ts <= 0) return "Earlier";
-  const todayStart = new Date(nowTs);
-  todayStart.setHours(0, 0, 0, 0);
-  const todayMs = todayStart.getTime();
-  if (ts >= todayMs) return "Today";
-
-  const yesterdayMs = todayMs - 24 * 60 * 60 * 1000;
-  if (ts >= yesterdayMs) return "Yesterday";
-
-  const day = todayStart.getDay();
-  const mondayOffset = day === 0 ? 6 : day - 1;
-  const weekMs = todayMs - mondayOffset * 24 * 60 * 60 * 1000;
-  if (ts >= weekMs) return "This Week";
-
-  const monthMs = new Date(todayStart.getFullYear(), todayStart.getMonth(), 1).getTime();
-  if (ts >= monthMs) return "This Month";
-
-  return "Earlier";
 }
 
 export function roleBadge(role: string): { label: string; color: string; bg: string; border: string } {

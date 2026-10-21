@@ -3,25 +3,21 @@ import { ArrowRightLeft, Bot, Check, ChevronDown, ChevronRight, Clock3, Folder, 
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode, type RefObject } from "react";
 import type { Group, HistoryIndexStatus, HistorySearchHit, HistorySessionView, HistorySourceFilter, Project } from "../../lib/types";
 import { useI18n } from "../../lib/i18n";
-import { HISTORY_SOURCE_DESCRIPTORS, HISTORY_SOURCE_DESCRIPTOR_BY_ID } from "../../lib/historySources";
+import { HISTORY_SOURCE_DESCRIPTORS, HISTORY_SOURCE_DESCRIPTOR_BY_ID, type HistorySourceId } from "../../lib/historySources";
 import { resolveCliToolIconKey, resolveHistorySourceIconKey } from "../../lib/cliTools";
 import { findWorktreeByPath } from "../../lib/terminalProject";
 import { useWorktreeStore } from "../../stores/worktreeStore";
 import { CliToolIcon } from "../CliToolIcon";
 import { Portal } from "../ui/Portal";
 import { buildHistorySessionChildMap, formatTime } from "./historyViewUtils";
-
-interface SessionGroup {
-  label: string;
-  items: HistorySessionView[];
-}
+import type { HistoryAgentGroup } from "../../lib/historyAgentGroups";
 
 type HistoryListRow =
   | { type: "loading"; id: string }
   | { type: "searching"; id: string }
   | { type: "searchHeader"; id: string; count: number }
   | { type: "searchHit"; id: string; hit: HistorySearchHit }
-  | { type: "group"; id: string; label: string }
+  | { type: "group"; id: string; source: string; count: number }
   | {
       type: "session";
       id: string;
@@ -64,7 +60,7 @@ interface HistoryListPaneProps {
   loadingMoreSessions: boolean;
   searching: boolean;
   normalizedGlobal: string;
-  groupedSessions: SessionGroup[];
+  groupedSessions: HistoryAgentGroup[];
   filteredSessionCount: number;
   hasMoreSessions: boolean;
   loadMoreSessionMode: "local" | "backend";
@@ -99,7 +95,8 @@ interface HistoryListPaneProps {
 }
 
 function rowHeight(row: HistoryListRow): number {
-  if (row.type === "group" || row.type === "searchHeader" || row.type === "searching") return 32;
+  if (row.type === "group") return 40;
+  if (row.type === "searchHeader" || row.type === "searching") return 32;
   if (row.type === "empty") return 88;
   if (row.type === "loading" || row.type === "loadMore") return 56;
   if (row.type === "searchHit") return 72;
@@ -364,6 +361,7 @@ export function HistoryListPane({
   const [contextMenu, setContextMenu] = useState<SessionContextMenu | null>(null);
   const [collapsedFilterGroups, setCollapsedFilterGroups] = useState<Set<string>>(new Set());
   const [collapsedSessionParents, setCollapsedSessionParents] = useState<Set<string>>(new Set());
+  const [collapsedAgents, setCollapsedAgents] = useState<Set<string>>(new Set());
   const [sourceMenuOpen, setSourceMenuOpen] = useState(false);
   const [projectMenuOpen, setProjectMenuOpen] = useState(false);
   const [projectSearchQuery, setProjectSearchQuery] = useState("");
@@ -465,6 +463,15 @@ export function HistoryListPane({
       const next = new Set(prev);
       if (next.has(sessionKey)) next.delete(sessionKey);
       else next.add(sessionKey);
+      return next;
+    });
+  }, []);
+
+  const toggleAgent = useCallback((source: string) => {
+    setCollapsedAgents((prev) => {
+      const next = new Set(prev);
+      if (next.has(source)) next.delete(source);
+      else next.add(source);
       return next;
     });
   }, []);
@@ -611,8 +618,8 @@ export function HistoryListPane({
     }
 
     for (const group of groupedSessions) {
-      next.push({ type: "group", id: `group:${group.label}`, label: group.label });
-      next.push(...buildSessionTreeRows(group.items, collapsedSessionParents));
+      next.push({ type: "group", id: `agent:${group.source}`, source: group.source, count: group.items.length });
+      if (!collapsedAgents.has(group.source)) next.push(...buildSessionTreeRows(group.items, collapsedSessionParents));
     }
 
     if (filteredSessionCount === 0) {
@@ -622,7 +629,7 @@ export function HistoryListPane({
       next.push({ type: "loadMore", id: "load-more" });
     }
     return next;
-  }, [collapsedSessionParents, filteredSessionCount, groupedSessions, hasMoreSessions, loadingSessions, normalizedGlobal, searchHits, searching]);
+  }, [collapsedAgents, collapsedSessionParents, filteredSessionCount, groupedSessions, hasMoreSessions, loadingSessions, normalizedGlobal, searchHits, searching]);
 
   const rowVirtualizer = useVirtualizer({
     count: rows.length,
@@ -960,6 +967,8 @@ export function HistoryListPane({
                 ? formatSessionListTitle(row.item.displayTitle, t("history.imagePlaceholder"))
                 : "";
             const sessionWorktree = row.type === "session" ? getSessionWorktree(row.item) : null;
+            const agentDescriptor = row.type === "group" ? HISTORY_SOURCE_DESCRIPTOR_BY_ID.get(row.source as HistorySourceId) : null;
+            const agentLabel = agentDescriptor ? t(agentDescriptor.labelKey) : row.type === "group" ? row.source || t("history.agentGroup.other") : "";
             return (
               <div
                 key={virtualRow.key}
@@ -1003,9 +1012,14 @@ export function HistoryListPane({
                 )}
 
                 {row.type === "group" && (
-                  <div className="ui-history-section-label ui-dev-label px-3 py-1.5 text-[11px] font-semibold tracking-[0.04em] text-text-muted">
-                    {row.label}
-                  </div>
+                  <button type="button" className="ui-history-agent-group ui-focus-ring"
+                    onClick={() => toggleAgent(row.source)} aria-expanded={!collapsedAgents.has(row.source)}
+                    aria-label={t(collapsedAgents.has(row.source) ? "history.agentGroup.expand" : "history.agentGroup.collapse", { agent: agentLabel })}>
+                    {collapsedAgents.has(row.source) ? <ChevronRight size={13} /> : <ChevronDown size={13} />}
+                    <SessionSourceIcon source={row.source} size={15} />
+                    <span className="ui-history-agent-name">{agentLabel}</span>
+                    <span className="ui-history-agent-count">{t("history.agentGroup.sessionCount", { count: row.count })}</span>
+                  </button>
                 )}
 
                 {row.type === "session" && (
@@ -1069,9 +1083,6 @@ export function HistoryListPane({
                       {selectionMode ? (
                         <div className="min-w-0 flex-1 overflow-hidden text-left">
                           <div className="flex min-w-0 items-center gap-1.5">
-                            <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-md text-primary">
-                              <SessionSourceIcon source={row.item.source} size={14} />
-                            </span>
                             {row.item.starred && <Star size={12} className="shrink-0" style={{ color: "var(--warning)" }} fill="currentColor" />}
                             {row.depth > 0 && (
                               <span
@@ -1116,9 +1127,6 @@ export function HistoryListPane({
                           className="min-w-0 flex-1 overflow-hidden text-left"
                         >
                           <div className="flex min-w-0 items-center gap-1.5">
-                            <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-md text-primary">
-                              <SessionSourceIcon source={row.item.source} size={14} />
-                            </span>
                             {row.item.starred && <Star size={12} className="shrink-0" style={{ color: "var(--warning)" }} fill="currentColor" />}
                             {row.depth > 0 && (
                               <span

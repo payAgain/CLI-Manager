@@ -30,7 +30,8 @@ import { EditAuditModal } from "./history/EditAuditModal";
 import { HistoryListPane } from "./history/HistoryListPane";
 import { SessionDetailPane, type HistoryDetailView } from "./history/SessionDetailPane";
 import { ConfirmDialog } from "./ConfirmDialog";
-import { buildHistorySessionChildMap, toGroupLabel, type TimeGroupLabel } from "./history/historyViewUtils";
+import { buildHistorySessionChildMap } from "./history/historyViewUtils";
+import { groupHistorySessionsByAgent } from "../lib/historyAgentGroups";
 import { buildSessionProcessModel, type SessionProcessModel } from "./history/sessionEvents";
 import { HistoryResumeProjectDialog } from "./history/HistoryResumeProjectDialog";
 import { useAppConfirm } from "./ui/useAppConfirm";
@@ -508,20 +509,7 @@ export function HistoryWorkspace({ active = true, docked = false, onOpenDetail }
     });
   }, [filteredSessions, selectionMode]);
 
-  const groupedSessions = useMemo(() => {
-    const order: TimeGroupLabel[] = ["Today", "Yesterday", "This Week", "This Month", "Earlier"];
-    const map = new Map<TimeGroupLabel, HistorySessionView[]>();
-    const nowTs = Date.now();
-    for (const item of visibleFilteredSessions) {
-      const label = toGroupLabel(item.updated_at, nowTs);
-      const list = map.get(label) ?? [];
-      list.push(item);
-      map.set(label, list);
-    }
-    return order
-      .map((label) => ({ label, items: map.get(label) ?? [] }))
-      .filter((group) => group.items.length > 0);
-  }, [visibleFilteredSessions]);
+  const groupedSessions = useMemo(() => groupHistorySessionsByAgent(visibleFilteredSessions), [visibleFilteredSessions]);
 
   const handleLoadMoreSessions = useCallback(() => {
     if (hasMoreVisibleSessions) {
