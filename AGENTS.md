@@ -8,6 +8,7 @@ CLI-Manager 精简版：多项目 AI CLI 终端工作台。当前开发版本为
 - 避免可选过程说明，只报告必要的状态、发现、阻碍及交付结果。
 - 每次开始只读检查并报告 Git 分支状态：git status --short --branch、git branch -vv、git rev-list --left-right --count HEAD...@{upstream}。
 - 不自动 pull、push、merge、rebase、提交或发布。用户明确授权的操作可直接执行。
+- 用户授权提交后，按功能和修改类型分批提交；每个提交只包含一个独立、可审查的改动，不把工作区内不同功能或不同类型的修改合并成一次提交。后续提交持续遵循此规则。
 - 修改前分析根因和全部调用方；优先使用可用的代码索引，否则用 rg 和源码交叉引用。不要只在症状处增加兜底。
 - 涉及状态的修复检查窗口焦点、隐藏/托盘、分屏/Workspan、本地/WSL/SSH、Worktree 和 Hook 安装状态。
 
