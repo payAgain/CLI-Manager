@@ -572,6 +572,21 @@ fn ensure_codex_sessions_root(base: PathBuf) -> PathBuf {
     }
 }
 
+fn resolve_native_codex_sessions_root(
+    codex_config_dir: Option<String>,
+    parent_transcript_path: Option<String>,
+) -> PathBuf {
+    if let Some(path) = trimmed(parent_transcript_path).map(PathBuf::from) {
+        if path.is_absolute() {
+            if let Some(root) = path.ancestors().skip(1).find(|ancestor|
+                ancestor.file_name().is_some_and(|name| name.eq_ignore_ascii_case("sessions"))) {
+                return root.to_path_buf();
+            }
+        }
+    }
+    resolve_codex_sessions_root(codex_config_dir)
+}
+
 fn resolve_wsl_codex_config_root(
     codex_config_dir: Option<String>,
     distro: &str,
@@ -1017,7 +1032,7 @@ pub async fn codex_subagent_transcript_discover(
     let sessions_root = if let Some(distro) = resolved_wsl_distro.as_deref() {
         resolve_wsl_codex_sessions_root(codex_config_dir, parent_transcript_path, distro)?
     } else {
-        resolve_codex_sessions_root(codex_config_dir)
+        resolve_native_codex_sessions_root(codex_config_dir, parent_transcript_path)
     };
     debug!(
         "[subagent_transcript:codex] discover requested: root={} parentSessionId={} agentId={} wslDistro={:?}",
@@ -1383,6 +1398,28 @@ mod tests {
     fn codex_sessions_root_does_not_duplicate_sessions() {
         let got = resolve_codex_sessions_root(Some("/home/me/.codex/sessions".to_string()));
         assert_eq!(got, PathBuf::from("/home/me/.codex/sessions"));
+    }
+
+    #[tokio::test]
+    async fn codex_discovery_uses_actual_parent_transcript_and_checks_parent_identity() {
+        let root = std::env::temp_dir().join(format!("cli-manager-codex-discovery-{}", uuid::Uuid::new_v4()));
+        let sessions = root.join("custom-codex/sessions/2026/10/21");
+        fs::create_dir_all(&sessions).unwrap();
+        let child = sessions.join("rollout-2026-10-21T15-54-48-child-thread.jsonl");
+        let parent = sessions.join("rollout-2026-10-21T15-54-46-parent-thread.jsonl");
+        fs::write(&child, serde_json::json!({
+            "type":"session_meta", "payload": {
+                "id":"child-thread", "cli_version":"0.163.0", "parent_thread_id":"parent-thread",
+                "source":{"subagent":{"thread_spawn":{"parent_thread_id":"parent-thread","depth":1}}}
+            }
+        }).to_string() + "\n").unwrap();
+        let discover = |parent_id: &str| codex_subagent_transcript_discover(
+            parent_id.into(), "child-thread".into(), Some(root.join("wrong-config").to_string_lossy().into_owned()),
+            None, Some(parent.to_string_lossy().into_owned()),
+        );
+        assert_eq!(discover("parent-thread").await.unwrap().map(PathBuf::from), Some(child));
+        assert_eq!(discover("another-parent").await.unwrap(), None);
+        fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

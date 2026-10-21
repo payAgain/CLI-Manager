@@ -45,6 +45,7 @@ import { shouldIncludeDaemonExitTask } from "./lib/terminalExitTask";
 import { requestSidebarToggle } from "./lib/sidebarCommands";
 import { startRuntimeDiagnostics } from "./lib/runtimeDiagnostics";
 import { deliverHookNotification, suppressHookNotification } from "./lib/hookNotificationPolicy";
+import { routeSubagentHook } from "./lib/subagentHookRouting";
 import { getTerminalTheme, isLightTerminalTheme } from "./lib/terminalThemes";
 import { resolveProjectForSession } from "./lib/terminalProject";
 import { terminalProcessManager } from "./terminal/core/TerminalProcessManager";
@@ -535,31 +536,12 @@ function App() {
     if (!IN_TAURI) return;
     const unlistenHook = listen<CliHookPayload>("claude-hook-notification", (event) => {
       void useReplayStore.getState().recordCliHookEvent(event.payload);
-      const isClaudeToolSubagentEvent =
-        event.payload.source === "claude" &&
-        (event.payload.event === "ToolStart" || event.payload.event === "ToolStop") &&
-        Boolean(event.payload.agentId?.trim());
-      const supportsLocalSubagentTranscript = event.payload.environmentType !== "ssh";
-
-      // SubagentStart / AgentToolStart：开/更新子 Agent 转录分屏，独立于 Tab 状态机与 toast。
-      if (supportsLocalSubagentTranscript && (event.payload.event === "SubagentStart" || event.payload.event === "AgentToolStart" || isClaudeToolSubagentEvent)) {
-        void useTerminalStore.getState().openSubagentTranscript(event.payload);
-        return;
-      }
-      if (supportsLocalSubagentTranscript && event.payload.event === "AgentToolStop") {
-        void useTerminalStore.getState().openSubagentTranscript(event.payload);
-        return;
-      }
-      if (supportsLocalSubagentTranscript && event.payload.event === "SubagentStop") {
-        if (event.payload.agentTranscriptPath?.trim() || event.payload.source === "codex") {
-          void useTerminalStore.getState().openSubagentTranscript(event.payload).finally(() => {
-            useTerminalStore.getState().finishSubagentTranscript(event.payload);
-          });
-        } else {
-          useTerminalStore.getState().finishSubagentTranscript(event.payload);
-        }
-        return;
-      }
+      const subagentStore = useTerminalStore.getState();
+      if (routeSubagentHook(event.payload, {
+        bind: (payload) => subagentStore.handleCliHookEvent(payload, { subagent: true }),
+        open: (payload) => useTerminalStore.getState().openSubagentTranscript(payload),
+        finish: (payload) => useTerminalStore.getState().finishSubagentTranscript(payload),
+      })) return;
       const boundTabId = useTerminalStore.getState().handleCliHookEvent(event.payload);
       // 任务栏提醒独立于 Tab 绑定和系统 Toast；外部 Hook 也可以提醒。
       void sendTaskbarAttention(event.payload);

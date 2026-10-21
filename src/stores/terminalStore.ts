@@ -289,7 +289,7 @@ interface TerminalStore {
   ) => Promise<boolean>;
   recordPtyOutputActivity: (sessionId: string) => void;
   markAttentionInputHandled: (sessionId: string) => void;
-  handleCliHookEvent: (payload: CliHookPayload) => string | null;
+  handleCliHookEvent: (payload: CliHookPayload, options?: { subagent: boolean }) => string | null;
   handleShellRuntimeEvent: (payload: ShellRuntimePayload) => string | null;
   /** 终端侧栏实时统计刷新序号：Hook 绑定 sessionId / 回合结束时递增，面板立即重拉。 */
   statsPanelRefreshSeq: number;
@@ -1886,7 +1886,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     set((state) => buildTabStatusUpdate(state, tabId, "hook", "running", updatedAt));
   },
 
-  handleCliHookEvent: (payload) => {
+  handleCliHookEvent: (payload, options) => {
     const state = get();
     const rawTabId = payload.tabId;
     const primaryTabId = resolvePrimaryTabId(payload.tabId, state.splits);
@@ -1994,6 +1994,8 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
         });
       }
     }
+    // Child events share the parent's conversation identity, not its task state.
+    if (options?.subagent) return tabId;
     const updatedAt = payload.timestamp ?? new Date().toISOString();
     const status = mapCliHookEvent(payload.event);
     // SessionStart 绑定 id、回合结束/失败时立刻踢侧栏重拉用量，避免等 10s 轮询才「闪一下」出来。

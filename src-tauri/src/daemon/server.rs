@@ -1026,6 +1026,16 @@ impl DaemonHost {
     }
 
     fn update_task_status_from_hook(&self, payload: &serde_json::Value) {
+        // Codex child turn hooks carry the parent session_id and tabId.
+        // Their lifecycle belongs to the transcript pane, not the parent task.
+        if payload.get("source").and_then(|v| v.as_str()) == Some("codex")
+            && payload.get("agentId").and_then(|v| v.as_str())
+                .is_some_and(|id| !id.trim().is_empty())
+            && matches!(payload.get("event").and_then(|v| v.as_str()),
+                Some("SessionStart" | "UserPromptSubmit" | "Stop" | "SubagentStart" | "SubagentStop"))
+        {
+            return;
+        }
         let Some(session_id) = payload
             .get("tabId")
             .or_else(|| payload.get("tab_id"))
@@ -3076,6 +3086,28 @@ mod tests {
         assert_eq!(map_hook_event_to_task_status("Stop"), Some("done"));
         assert_eq!(map_hook_event_to_task_status("StopFailure"), Some("failed"));
         assert_eq!(map_hook_event_to_task_status("SessionStart"), None);
+    }
+
+    #[test]
+    fn codex_child_turns_leave_parent_task_state_unchanged() {
+        let host = DaemonHost::new();
+        host.reserve_session("parent", None, None).unwrap();
+        let event = |name: &str, agent: Option<&str>| serde_json::json!({
+            "tabId": "parent", "sessionId": "parent-thread", "source": "codex",
+            "event": name, "agentId": agent,
+        });
+        host.update_task_status_from_hook(&event("Stop", None));
+        let before = host.get_session("parent").unwrap().lock().unwrap().meta.clone();
+        host.update_task_status_from_hook(&event("UserPromptSubmit", Some("child-thread")));
+        let after = host.get_session("parent").unwrap().lock().unwrap().meta.clone();
+        assert_eq!(after.task_status.as_deref(), Some("done"));
+        assert_eq!(after.task_updated_at_ms, before.task_updated_at_ms);
+        host.update_task_status_from_hook(&event("UserPromptSubmit", None));
+        host.update_task_status_from_hook(&event("Stop", Some("child-thread")));
+        let after = host.get_session("parent").unwrap().lock().unwrap().meta.clone();
+        assert_eq!(after.task_status.as_deref(), Some("running"));
+        host.update_task_status_from_hook(&event("PermissionRequest", Some("child-thread")));
+        assert_eq!(host.get_session("parent").unwrap().lock().unwrap().meta.task_status.as_deref(), Some("attention"));
     }
 
     #[cfg(unix)]
