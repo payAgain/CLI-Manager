@@ -7,6 +7,7 @@ import { projectSupportsCapability } from "../lib/projectCapabilities";
 import type { Project, TerminalSession, WorktreeIsolationStrategy, WorktreeRecord } from "../lib/types";
 import { useProjectStore } from "./projectStore";
 import { useTerminalStore } from "./terminalStore";
+import { useSettingsStore } from "./settingsStore";
 
 export interface GitWorktreeCreateResult {
   name: string;
@@ -239,6 +240,7 @@ export const useWorktreeStore = create<WorktreeStore>((set, get) => ({
   },
 
   shouldIsolateNewSession: (project, sessions) => {
+    if (!useSettingsStore.getState().projectWorktreeConfigEnabled) return "none";
     if (!projectSupportsCapability(project, "worktree")) return "none";
     const strategy = normalizeStrategy(project.worktree_strategy);
     if (strategy === "disabled") return "none";
