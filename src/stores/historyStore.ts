@@ -6,7 +6,7 @@ import { createPerfMarker, logInfo, logWarn } from "../lib/logger";
 import { resolveHistoryProjectPath } from "../lib/historyProjectPaths";
 import { buildSshAgentHistoryContext, type SshAgentHistoryContext } from "../lib/sshAgentHistory";
 import { getHistoryPathArgs } from "../lib/historyPathArgs";
-import { inferSubagentParentSessionId } from "../lib/historySubagents";
+import { buildHistorySessionChildMap } from "../lib/historySubagents";
 import { sameHistorySessionIdentity } from "../lib/historySessionIdentity";
 import { useProjectStore } from "./projectStore";
 import { useSshAgentIntegrationStore } from "./sshAgentIntegrationStore";
@@ -200,10 +200,15 @@ function normalizeSessionRef(raw: unknown): HistorySessionRef | null {
   };
 }
 
-function normalizeSummary(raw: unknown): HistorySessionSummary {
+function normalizeSummary(raw: unknown, depth = 0): HistorySessionSummary {
   const rec = (raw ?? {}) as Record<string, unknown>;
   const remoteIdentityRaw = rec.remote_identity ?? rec.remoteIdentity;
+  const subagentRaw = rec.subagent as Record<string, unknown> | null | undefined;
+  const parentId = asString(subagentRaw?.parent_session_id ?? subagentRaw?.parentSessionId).trim();
+  const parentRaw = rec.parent_session ?? rec.parentSession;
   return {
+    subagent: parentId ? { parent_session_id: parentId, nickname: asString(subagentRaw?.nickname) || null } : null,
+    parent_session: depth < 32 && parentRaw && typeof parentRaw === "object" ? normalizeSummary(parentRaw, depth + 1) : null,
     session_id: asString(rec.session_id ?? rec.sessionId),
     source: asString(rec.source) as HistorySource,
     project_key: asString(rec.project_key ?? rec.projectKey),
@@ -254,6 +259,7 @@ function normalizeDetail(raw: unknown): HistorySessionDetail {
   });
   return {
     ...summary,
+    parent_session: null,
     cwd: asString(rec.cwd ?? "") || null,
     usage: normalizeSessionUsage(rec.usage),
     tool_events: normalizeToolEvents(rec.tool_events ?? rec.toolEvents),
@@ -749,6 +755,8 @@ function toView(summary: HistorySessionSummary, meta?: SessionMeta): HistorySess
   const displayTitle = alias.trim() || summary.title;
   return {
     ...summary,
+    // The store is flat after projection; retaining pointers could resurrect a deleted parent.
+    parent_session: null,
     sessionKey: summarySessionKey(summary),
     alias,
     starred,
@@ -758,6 +766,17 @@ function toView(summary: HistorySessionSummary, meta?: SessionMeta): HistorySess
 }
 
 function applyMeta(summaries: HistorySessionSummary[], metaMap: SessionMetaMap): HistorySessionView[] {
+  // Parent context can lie outside the backend page. Expand it after the page is sliced,
+  // so it never consumes offsets or makes the lookahead record appear in the list.
+  const summariesByKey = new Map(summaries.map((summary) => [summarySessionKey(summary), summary]));
+  for (const summary of summaries) {
+    let parent = summary.parent_session;
+    for (let depth = 0; parent && depth < 32; depth += 1) {
+      const key = summarySessionKey(parent);
+      if (!summariesByKey.has(key)) summariesByKey.set(key, parent);
+      parent = parent.parent_session;
+    }
+  }
   const metaBySourceSession = new Map<string, SessionMeta>();
   const metaBySourcePath = new Map<string, SessionMeta>();
   for (const meta of Object.values(metaMap)) {
@@ -770,7 +789,7 @@ function applyMeta(summaries: HistorySessionSummary[], metaMap: SessionMetaMap):
     }
   }
 
-  const views = summaries.map((summary) => {
+  const views = [...summariesByKey.values()].map((summary) => {
     const key = summarySessionKey(summary);
     const source = summary.source.toLowerCase();
     const meta =
@@ -795,6 +814,7 @@ function sortSessionViews(views: HistorySessionView[]): HistorySessionView[] {
 
 function viewToSummary(view: HistorySessionView): HistorySessionSummary {
   return {
+    subagent: view.subagent,
     session_id: view.session_id,
     source: view.source,
     project_key: view.project_key,
@@ -828,13 +848,16 @@ async function readMetaMap(): Promise<SessionMetaMap> {
 
 function snapshotToSummary(snapshot: SessionFavoriteSnapshot): HistorySessionSummary {
   let sessionRef: HistorySessionRef | null = null;
+  let subagent: HistorySessionSummary["subagent"] = null;
   try {
     const detail = JSON.parse(snapshot.detail_json) as Record<string, unknown>;
     sessionRef = normalizeSessionRef(detail.session_ref ?? detail.sessionRef);
+    subagent = normalizeSummary(detail).subagent;
   } catch {
     sessionRef = null;
   }
   return {
+    subagent,
     session_id: snapshot.session_id,
     source: snapshot.source,
     project_key: snapshot.project_key,
@@ -2020,14 +2043,9 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
         source: target.source,
         projectKey: target.project_key,
       });
-      for (const item of get().sessions) {
-        if (
-          item.source === target.source &&
-          item.project_key === target.project_key &&
-          inferSubagentParentSessionId(item) === target.session_id
-        ) {
-          removedSessionKeys.add(item.sessionKey);
-        }
+      if (target.source === "claude") {
+        const children = buildHistorySessionChildMap(get().sessions).get(target.sessionKey) ?? [];
+        for (const item of children) removedSessionKeys.add(item.sessionKey);
       }
     }
 

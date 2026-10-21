@@ -1,7 +1,6 @@
-﻿import type { ReactNode } from "react";
+import type { ReactNode } from "react";
 import type { AppLanguage } from "../../lib/i18n";
 import type { HistorySessionView } from "../../lib/types";
-import { inferSubagentParentSessionId } from "../../lib/historySubagents";
 
 // 模块级 formatter 缓存：toLocaleString 每次创建 ICU formatter，对长会话/列表的开销可观。
 const TIME_FORMATTERS = new Map<AppLanguage, Intl.DateTimeFormat>();
@@ -76,34 +75,6 @@ export function makeSessionLabel(session: HistorySessionView): string {
     return `${session.project_key} · ${session.branch}`;
   }
   return session.project_key;
-}
-
-function sessionRelationKey(source: string, projectKey: string, sessionId: string): string {
-  return `${source}:${projectKey}:${sessionId}`;
-}
-
-export function buildHistorySessionChildMap(items: HistorySessionView[]): Map<string, HistorySessionView[]> {
-  const bySessionId = new Map<string, HistorySessionView>();
-  const childrenByParentKey = new Map<string, HistorySessionView[]>();
-
-  for (const item of items) {
-    bySessionId.set(sessionRelationKey(item.source, item.project_key, item.session_id), item);
-  }
-
-  for (const item of items) {
-    const parentSessionId = inferSubagentParentSessionId(item);
-    if (!parentSessionId) continue;
-
-    const parentKey = sessionRelationKey(item.source, item.project_key, parentSessionId);
-    const parent = bySessionId.get(parentKey);
-    if (!parent) continue;
-
-    const children = childrenByParentKey.get(parent.sessionKey) ?? [];
-    children.push(item);
-    childrenByParentKey.set(parent.sessionKey, children);
-  }
-
-  return childrenByParentKey;
 }
 
 export function roleBadge(role: string): { label: string; color: string; bg: string; border: string } {

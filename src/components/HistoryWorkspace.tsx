@@ -10,7 +10,7 @@ import { useWorktreeStore } from "../stores/worktreeStore";
 import { useExternalSessionSyncStore } from "../stores/externalSessionSyncStore";
 import { useI18n } from "../lib/i18n";
 import { getHistoryPathArgs } from "../lib/historyPathArgs";
-import { inferSubagentParentSessionId } from "../lib/historySubagents";
+import { buildHistorySessionChildMap, includeHistorySessionAncestors, inferClaudeSubagentParentSessionId } from "../lib/historySubagents";
 import {
   findLocalHistoryCwdProjects,
   matchesHistoryProjectSource,
@@ -30,7 +30,6 @@ import { EditAuditModal } from "./history/EditAuditModal";
 import { HistoryListPane } from "./history/HistoryListPane";
 import { SessionDetailPane, type HistoryDetailView } from "./history/SessionDetailPane";
 import { ConfirmDialog } from "./ConfirmDialog";
-import { buildHistorySessionChildMap } from "./history/historyViewUtils";
 import { groupHistorySessionsByAgent } from "../lib/historyAgentGroups";
 import { buildSessionProcessModel, type SessionProcessModel } from "./history/sessionEvents";
 import { HistoryResumeProjectDialog } from "./history/HistoryResumeProjectDialog";
@@ -448,7 +447,7 @@ export function HistoryWorkspace({ active = true, docked = false, onOpenDetail }
   const filteredSessions = useMemo(() => {
     const sourceFilteredSessions = sessions.filter((item) => matchesSourceFilter(item.source, sourceFilter));
     const baseSessions = favoriteOnly ? sourceFilteredSessions.filter((item) => item.starred) : sourceFilteredSessions;
-    if (!normalizedGlobal) return baseSessions;
+    if (!normalizedGlobal) return includeHistorySessionAncestors(baseSessions, sourceFilteredSessions);
     const result: HistorySessionView[] = [];
     for (const item of baseSessions) {
       const haystack = `${item.displayTitle.toLowerCase()}${item.project_key.toLowerCase()}${item.tags.join(" ").toLowerCase()}`;
@@ -456,7 +455,7 @@ export function HistoryWorkspace({ active = true, docked = false, onOpenDetail }
         result.push(item);
       }
     }
-    return result;
+    return includeHistorySessionAncestors(result, sourceFilteredSessions);
   }, [favoriteOnly, sessions, normalizedGlobal, sourceFilter]);
 
   useEffect(() => {
@@ -464,14 +463,22 @@ export function HistoryWorkspace({ active = true, docked = false, onOpenDetail }
   }, [favoriteOnly, normalizedGlobal, projectPathFilter, scopedProjectPathFilter, sourceFilter]);
 
   const visibleFilteredSessions = useMemo(
-    () => filteredSessions.slice(0, visibleSessionCount),
+    () => includeHistorySessionAncestors(filteredSessions.slice(0, visibleSessionCount), filteredSessions),
     [filteredSessions, visibleSessionCount]
   );
   const childSessionKeyMap = useMemo(() => {
     const childrenByParentKey = buildHistorySessionChildMap(filteredSessions);
     const map = new Map<string, string[]>();
     for (const [parentSessionKey, children] of childrenByParentKey.entries()) {
-      map.set(parentSessionKey, children.map((item) => item.sessionKey));
+      const keys = new Set<string>();
+      const pending = [...children];
+      while (pending.length) {
+        const child = pending.pop()!;
+        if (keys.has(child.sessionKey)) continue;
+        keys.add(child.sessionKey);
+        pending.push(...(childrenByParentKey.get(child.sessionKey) ?? []));
+      }
+      map.set(parentSessionKey, [...keys]);
     }
     return map;
   }, [filteredSessions]);
@@ -1059,8 +1066,8 @@ export function HistoryWorkspace({ active = true, docked = false, onOpenDetail }
     if (selectedSessionKeys.size === 0) return;
     const selectedItems = filteredSessions.filter((item) => selectedSessionKeys.has(item.sessionKey));
     if (selectedItems.length === 0) return;
-    // subagent 子会话由后端随父会话连带删除，禁止单独删除，不进入批量删除队列。
-    const sessionKeys = selectedItems.filter((item) => inferSubagentParentSessionId(item) === null).map((item) => item.sessionKey);
+    // Claude 子转录由后端随父文件连带删除；Codex 子线程使用独立历史文件。
+    const sessionKeys = selectedItems.filter((item) => item.source !== "claude" || inferClaudeSubagentParentSessionId(item) === null).map((item) => item.sessionKey);
     if (sessionKeys.length === 0) {
       toast.info(t("history.toast.bulkDeleteSubagentOnly"));
       return;

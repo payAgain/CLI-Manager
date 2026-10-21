@@ -1,5 +1,5 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { ArrowRightLeft, Bot, Check, ChevronDown, ChevronRight, Clock3, Folder, MessageSquare, RefreshCw, Search, Star, Terminal, Trash2, X } from "lucide-react";
+import { ArrowRightLeft, Bot, Check, ChevronDown, ChevronRight, Folder, ListChecks, MessageSquare, RefreshCw, Search, Star, Terminal, Trash2, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode, type RefObject } from "react";
 import type { Group, HistoryIndexStatus, HistorySearchHit, HistorySessionView, HistorySourceFilter, Project } from "../../lib/types";
 import { useI18n } from "../../lib/i18n";
@@ -9,7 +9,8 @@ import { findWorktreeByPath } from "../../lib/terminalProject";
 import { useWorktreeStore } from "../../stores/worktreeStore";
 import { CliToolIcon } from "../CliToolIcon";
 import { Portal } from "../ui/Portal";
-import { buildHistorySessionChildMap, formatTime } from "./historyViewUtils";
+import { formatTime } from "./historyViewUtils";
+import { buildHistorySessionHierarchy, buildHistorySessionTreeRows, inferSubagentParentSessionId, type HistorySessionTreeRow } from "../../lib/historySubagents";
 import type { HistoryAgentGroup } from "../../lib/historyAgentGroups";
 
 type HistoryListRow =
@@ -17,15 +18,8 @@ type HistoryListRow =
   | { type: "searching"; id: string }
   | { type: "searchHeader"; id: string; count: number }
   | { type: "searchHit"; id: string; hit: HistorySearchHit }
-  | { type: "group"; id: string; source: string; count: number }
-  | {
-      type: "session";
-      id: string;
-      item: HistorySessionView;
-      depth: number;
-      childCount: number;
-      parentSessionId: string | null;
-    }
+  | { type: "group"; id: string; source: string; count: number; subagentCount: number }
+  | HistorySessionTreeRow
   | { type: "empty"; id: string }
   | { type: "loadMore"; id: string };
 
@@ -93,13 +87,20 @@ interface HistoryListPaneProps {
   onStartResize: (e: ReactMouseEvent) => void;
 }
 
+function formatSessionClock(ts: number): string {
+  if (!Number.isFinite(ts) || ts <= 0) return "-";
+  const date = new Date(ts);
+  return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+}
+
 function rowHeight(row: HistoryListRow): number {
-  if (row.type === "group") return 40;
+  if (row.type === "missingParent") return 24;
+  if (row.type === "group") return 28;
   if (row.type === "searchHeader" || row.type === "searching") return 32;
   if (row.type === "empty") return 88;
   if (row.type === "loading" || row.type === "loadMore") return 56;
   if (row.type === "searchHit") return 72;
-  return row.depth > 0 ? 68 : 78;
+  return row.depth > 0 ? 32 : 46;
 }
 
 function SelectionCheckbox({
@@ -134,43 +135,6 @@ function SelectionCheckbox({
       {checked ? <Check size={12} strokeWidth={2.5} /> : null}
     </button>
   );
-}
-
-function buildSessionTreeRows(items: HistorySessionView[], collapsedParentKeys: Set<string>): HistoryListRow[] {
-  const childrenByParentKey = buildHistorySessionChildMap(items);
-  const childKeys = new Set<string>();
-  for (const children of childrenByParentKey.values()) {
-    for (const child of children) childKeys.add(child.sessionKey);
-  }
-
-  const rows: HistoryListRow[] = [];
-  for (const item of items) {
-    if (childKeys.has(item.sessionKey)) continue;
-
-    const children = childrenByParentKey.get(item.sessionKey) ?? [];
-    rows.push({
-      type: "session",
-      id: `session:${item.sessionKey}`,
-      item,
-      depth: 0,
-      childCount: children.length,
-      parentSessionId: null,
-    });
-
-    if (children.length === 0 || collapsedParentKeys.has(item.sessionKey)) continue;
-
-    for (const child of children) {
-      rows.push({
-        type: "session",
-        id: `session:${child.sessionKey}`,
-        item: child,
-        depth: 1,
-        childCount: 0,
-        parentSessionId: item.session_id,
-      });
-    }
-  }
-  return rows;
 }
 
 function buildHistoryProjectTree(groups: Group[], projects: Project[]): HistoryProjectTreeNode[] {
@@ -358,7 +322,7 @@ export function HistoryListPane({
   const { t, language } = useI18n();
   const [contextMenu, setContextMenu] = useState<SessionContextMenu | null>(null);
   const [collapsedFilterGroups, setCollapsedFilterGroups] = useState<Set<string>>(new Set());
-  const [collapsedSessionParents, setCollapsedSessionParents] = useState<Set<string>>(new Set());
+  const [expandedSessionParents, setExpandedSessionParents] = useState<Set<string>>(new Set());
   const [collapsedAgents, setCollapsedAgents] = useState<Set<string>>(new Set());
   const [projectMenuOpen, setProjectMenuOpen] = useState(false);
   const [projectSearchQuery, setProjectSearchQuery] = useState("");
@@ -369,6 +333,24 @@ export function HistoryListPane({
   const projectMenuWasOpenRef = useRef(false);
   const worktrees = useWorktreeStore((state) => state.worktrees);
   const globalQueryLength = [...globalQuery.trim()].length;
+  useEffect(() => {
+    const ancestors = new Set<string>();
+    for (const group of groupedSessions) {
+      const { parentByChildKey } = buildHistorySessionHierarchy(group.items);
+      if (normalizedGlobal || favoriteOnly) {
+        for (const parent of parentByChildKey.values()) ancestors.add(parent.sessionKey);
+      }
+      let parent = activeSessionKey ? parentByChildKey.get(activeSessionKey) : undefined;
+      while (parent && !ancestors.has(parent.sessionKey)) {
+        ancestors.add(parent.sessionKey);
+        parent = parentByChildKey.get(parent.sessionKey);
+      }
+    }
+    if (ancestors.size) setExpandedSessionParents((previous) => {
+      if ([...ancestors].every((key) => previous.has(key))) return previous;
+      return new Set([...previous, ...ancestors]);
+    });
+  }, [activeSessionKey, favoriteOnly, groupedSessions, normalizedGlobal]);
   const globalQueryTooShort = globalQueryLength > 0 && globalQueryLength < 3;
   const indexBusy = ["seeding", "scanning", "indexing"].includes(indexStatus.phase);
   const projectTree = useMemo(() => buildHistoryProjectTree(groups, projects), [groups, projects]);
@@ -449,7 +431,7 @@ export function HistoryListPane({
   }, []);
 
   const toggleSessionParent = useCallback((sessionKey: string) => {
-    setCollapsedSessionParents((prev) => {
+    setExpandedSessionParents((prev) => {
       const next = new Set(prev);
       if (next.has(sessionKey)) next.delete(sessionKey);
       else next.add(sessionKey);
@@ -591,8 +573,9 @@ export function HistoryListPane({
     }
 
     for (const group of groupedSessions) {
-      next.push({ type: "group", id: `agent:${group.source}`, source: group.source, count: group.items.length });
-      if (!collapsedAgents.has(group.source)) next.push(...buildSessionTreeRows(group.items, collapsedSessionParents));
+      next.push({ type: "group", id: `agent:${group.source}`, source: group.source, count: group.items.filter((item) => !inferSubagentParentSessionId(item)).length,
+        subagentCount: group.items.filter((item) => inferSubagentParentSessionId(item)).length });
+      if (!collapsedAgents.has(group.source)) next.push(...buildHistorySessionTreeRows(group.items, expandedSessionParents));
     }
 
     if (filteredSessionCount === 0) {
@@ -602,7 +585,7 @@ export function HistoryListPane({
       next.push({ type: "loadMore", id: "load-more" });
     }
     return next;
-  }, [collapsedAgents, collapsedSessionParents, filteredSessionCount, groupedSessions, hasMoreSessions, loadingSessions, normalizedGlobal, searchHits, searching]);
+  }, [collapsedAgents, expandedSessionParents, filteredSessionCount, groupedSessions, hasMoreSessions, loadingSessions, normalizedGlobal, searchHits, searching]);
 
   const rowVirtualizer = useVirtualizer({
     count: rows.length,
@@ -670,87 +653,51 @@ export function HistoryListPane({
   return (
     <aside
       ref={sidebarRef}
-      className="ui-history-sidebar relative flex min-h-0 min-w-[220px] max-w-[70%] flex-col"
+      className="ui-history-sidebar ui-history-sidebar-compact relative flex min-h-0 min-w-[220px] max-w-[70%] flex-col"
       style={{ width: historySidebarWidth }}
     >
-      <div className="ui-history-sidebar-top p-3">
-        <div className="flex items-center gap-2">
-          <div className="min-w-0 flex-1 truncate text-xs font-medium text-text-primary">
-            {t("workspace.historyNav")}
-          </div>
-
-          <button
-            onClick={onRefresh}
-            aria-label={t("history.refreshList")}
-            className="ui-flat-action ui-focus-ring ui-history-icon-button ui-history-list-action"
-            title={t("history.refreshList")}
-          >
+      <div className="ui-history-sidebar-top">
+        <div className="ui-history-compact-heading">
+          <span className="ui-history-compact-title">{t("workspace.historyNav")}</span>
+          <button type="button" className="ui-flat-action ui-focus-ring ui-history-icon-button"
+            onClick={() => onFavoriteOnlyChange(!favoriteOnly)} aria-pressed={favoriteOnly}
+            aria-label={favoriteOnly ? t("history.favoriteFilter.showAll") : t("history.favoriteFilter.showOnly")}
+            title={favoriteOnly ? t("history.favoriteFilter.showAll") : t("history.favoriteFilter.showOnly")}
+            style={{ color: favoriteOnly ? "var(--warning)" : undefined }}>
+            <Star size={12} fill={favoriteOnly ? "currentColor" : "none"} />
+          </button>
+          <button type="button" className="ui-flat-action ui-focus-ring ui-history-icon-button"
+            onClick={selectionMode ? onCancelSelectionMode : onEnterSelectionMode}
+            disabled={!selectionMode && filteredSessionCount === 0} aria-pressed={selectionMode}
+            aria-label={t(selectionMode ? "history.bulk.cancelSelection" : "history.bulk.enterSelection")}
+            title={t(selectionMode ? "history.bulk.cancelSelection" : "history.bulk.enterSelection")}>
+            <ListChecks size={13} />
+          </button>
+          <button type="button" onClick={onRefresh} aria-label={t("history.refreshList")}
+            className="ui-flat-action ui-focus-ring ui-history-icon-button ui-history-list-action" title={t("history.refreshList")}>
             <RefreshCw size={12} className={indexBusy ? "animate-spin" : undefined} />
           </button>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label={t("history.close")}
-            className="ui-flat-action ui-focus-ring ui-history-icon-button ui-history-close-action"
-            title={t("history.close")}
-          >
-            <X size={14} strokeWidth={2.2} aria-hidden="true" />
+          <button type="button" onClick={onClose} aria-label={t("history.close")}
+            className="ui-flat-action ui-focus-ring ui-history-icon-button ui-history-close-action" title={t("history.close")}>
+            <X size={13} />
           </button>
         </div>
-
-        <div className="ui-history-search-shell mt-2 gap-2 px-2.5 py-1.5 text-text-secondary">
-          <Search size={13} />
-          <input
-            ref={globalSearchRef}
-            value={globalQuery}
-            onChange={(e) => onGlobalQueryChange(e.target.value)}
-            aria-label={t("history.search.globalAria")}
-            placeholder={t("history.search.globalPlaceholder")}
-            className="flex-1 bg-transparent text-[12px] outline-none"
-          />
-        </div>
-        {globalQueryTooShort && (
-          <div className="px-3 pt-1 text-[10px] text-text-muted">{t("history.search.minimumChars")}</div>
-        )}
-        {indexBusy && (
-          <div className="px-3 pt-1 text-[10px] text-text-muted">
-            {t("history.index.progress", {
-              indexed: indexStatus.indexedFiles,
-              total: indexStatus.totalFiles,
-            })}
+        <div className="ui-history-compact-filters">
+          <div className="ui-history-search-shell ui-history-compact-search">
+            <Search size={12} />
+            <input ref={globalSearchRef} value={globalQuery} onChange={(e) => onGlobalQueryChange(e.target.value)}
+              aria-label={t("history.search.globalAria")} title={t("history.search.globalPlaceholder")}
+              placeholder={t("history.search.compactPlaceholder")} />
           </div>
-        )}
-        {indexStatus.phase === "error" && (
-          <div className="px-3 pt-1 text-[10px] text-danger">{t("history.index.error")}</div>
-        )}
-
-        <div ref={projectDropdownRef} className="relative mt-2">
-          <button
-            type="button"
-            onClick={() => setProjectMenuOpen((open) => !open)}
-            className="ui-history-filter ui-focus-ring flex h-8 w-full items-center gap-2 rounded-md border border-border/60 bg-transparent px-2 text-left text-xs transition-colors hover:bg-surface-container-high"
-            aria-haspopup="tree"
-            aria-expanded={projectMenuOpen}
-            title={projectPathFilter ?? t("history.allProjects")}
-          >
-            {selectedProject ? (
-              <span className="ui-tree-leading-icon">
-                <ProjectFilterIcon project={selectedProject} size={13} />
-              </span>
-            ) : (
-              <Folder size={13} className="shrink-0 text-text-muted" />
-            )}
-            <span className="min-w-0 flex-1 truncate">
-              <span className="mr-1 text-[10px] text-text-muted">{t("history.projectFilter.source")}</span>
-              <span className="text-text-primary">{selectedProjectLabel}</span>
-            </span>
-            <ChevronDown
-              size={13}
-              className="shrink-0 text-text-muted transition-transform"
-              style={{ transform: projectMenuOpen ? "rotate(180deg)" : "rotate(0deg)" }}
-            />
-          </button>
-
+          <div ref={projectDropdownRef} className="ui-history-project-filter">
+            <button type="button" onClick={() => setProjectMenuOpen((open) => !open)}
+              className="ui-history-filter ui-focus-ring ui-history-project-trigger" aria-haspopup="tree"
+              aria-expanded={projectMenuOpen} aria-label={`${t("history.projectFilter.source")}: ${selectedProjectLabel}`}
+              title={projectPathFilter ?? t("history.allProjects")}>
+              {selectedProject ? <ProjectFilterIcon project={selectedProject} size={11} /> : <Folder size={11} />}
+              <span>{selectedProjectLabel}</span>
+              <ChevronDown size={11} style={{ transform: projectMenuOpen ? "rotate(180deg)" : undefined }} />
+            </button>
           {projectMenuOpen && (
             <div className="absolute left-0 right-0 top-full z-30 mt-1 rounded-xl border border-border/70 bg-surface-container-lowest p-1 shadow-lg">
               <div className="ui-history-search-shell mb-1 gap-2 px-2 py-1.5 text-text-secondary">
@@ -803,60 +750,37 @@ export function HistoryListPane({
               </div>
             </div>
           )}
-        </div>
-
-        {selectionMode ? (
-          <div className="mt-2 rounded-xl border border-border/60 bg-surface-container-lowest p-2">
-            <div className="flex items-center justify-between gap-2">
-              <div className="text-[11px] font-semibold text-text-secondary">{t("history.bulk.selectedCount", { count: selectedCount })}</div>
-              <button type="button" onClick={onCancelSelectionMode} className="ui-flat-action h-6 px-1.5 text-[10px]">
-                {t("history.bulk.cancelSelection")}
-              </button>
-            </div>
-            <div className="mt-2 flex gap-1.5">
-              <button
-                type="button"
-                onClick={onToggleSelectAllVisible}
-                disabled={visibleSessionCount === 0}
-                className="ui-btn ui-btn-outline min-w-0 flex-1 px-1.5 py-0.5 text-[10px]"
-              >
-                {allVisibleSelected
-                  ? t("history.bulk.clearVisibleSelection")
-                  : t("history.bulk.selectVisible")}
-              </button>
-              <button
-                type="button"
-                onClick={onDeleteSelected}
-                disabled={selectedCount === 0}
-                className="ui-btn ui-btn-destructive min-w-0 flex-1 px-1.5 py-0.5 text-[10px]"
-              >
-                {t("history.bulk.deleteSelected", { count: selectedCount })}
-              </button>
-            </div>
           </div>
-        ) : (
-          <div className="mt-2 flex items-center justify-between gap-2">
-            <button
-              type="button"
-              onClick={() => onFavoriteOnlyChange(!favoriteOnly)}
-              aria-label={favoriteOnly ? t("history.favoriteFilter.showAll") : t("history.favoriteFilter.showOnly")}
-              aria-pressed={favoriteOnly}
-              className="ui-flat-action h-8 px-2 text-[11px]"
-              title={favoriteOnly ? t("history.favoriteFilter.showAll") : t("history.favoriteFilter.showOnly")}
-              style={{
-                color: favoriteOnly ? "var(--warning)" : undefined,
-                backgroundColor: favoriteOnly ? "color-mix(in srgb, var(--warning) 12%, transparent)" : undefined,
-              }}
-            >
-              <Star size={12} fill={favoriteOnly ? "currentColor" : "none"} />
+        </div>
+        {globalQueryTooShort && (
+          <div className="px-3 pt-1 text-[10px] text-text-muted">{t("history.search.minimumChars")}</div>
+        )}
+        {indexBusy && (
+          <div className="px-3 pt-1 text-[10px] text-text-muted">
+            {t("history.index.progress", {
+              indexed: indexStatus.indexedFiles,
+              total: indexStatus.totalFiles,
+            })}
+          </div>
+        )}
+        {indexStatus.phase === "error" && (
+          <div className="px-3 pt-1 text-[10px] text-danger">{t("history.index.error")}</div>
+        )}
+
+
+        {selectionMode && (
+          <div className="ui-history-compact-selection">
+            <span>{t("history.bulk.selectedCount", { count: selectedCount })}</span>
+            <button type="button" className="ui-flat-action ui-focus-ring ui-history-icon-button" onClick={onToggleSelectAllVisible}
+              disabled={visibleSessionCount === 0} aria-pressed={allVisibleSelected}
+              aria-label={t(allVisibleSelected ? "history.bulk.clearVisibleSelection" : "history.bulk.selectVisible")}
+              title={t(allVisibleSelected ? "history.bulk.clearVisibleSelection" : "history.bulk.selectVisible")}>
+              <Check size={12} />
             </button>
-            <button
-              type="button"
-              onClick={onEnterSelectionMode}
-              disabled={filteredSessionCount === 0}
-              className="ui-flat-action h-8 px-2.5 text-[11px]"
-            >
-              {t("history.bulk.enterSelection")}
+            <button type="button" className="ui-flat-action ui-focus-ring ui-history-icon-button text-danger" onClick={onDeleteSelected}
+              disabled={selectedCount === 0} aria-label={t("history.bulk.deleteSelected", { count: selectedCount })}
+              title={t("history.bulk.deleteSelected", { count: selectedCount })}>
+              <Trash2 size={12} />
             </button>
           </div>
         )}
@@ -923,162 +847,61 @@ export function HistoryListPane({
                     {collapsedAgents.has(row.source) ? <ChevronRight size={13} /> : <ChevronDown size={13} />}
                     <SessionSourceIcon source={row.source} size={15} />
                     <span className="ui-history-agent-name">{agentLabel}</span>
-                    <span className="ui-history-agent-count">{t("history.agentGroup.sessionCount", { count: row.count })}</span>
+                    {row.count > 0 && <span className="ui-history-agent-count">{t("history.agentGroup.sessionCount", { count: row.count })}</span>}
+                    {row.subagentCount > 0 && <span className="shrink-0 text-[10px] text-text-muted">{t("history.tree.childCount", { count: row.subagentCount })}</span>}
                   </button>
                 )}
 
+                {row.type === "missingParent" && (
+                  <div className="ui-history-parent-note" title={`${t("history.tree.parentUnavailable")} · ${row.parentSessionId}`}>
+                    <MessageSquare size={10} />
+                    <span>{t("history.tree.parentUnavailable")}</span>
+                  </div>
+                )}
+
                 {row.type === "session" && (
-                  <div className={row.depth > 0 ? "relative py-0.5 pr-2 pl-12" : "py-1 pr-2 pl-2"}>
-                    {row.depth > 0 && (
-                      <>
-                        <span className="absolute bottom-0 left-[24px] top-[-8px] w-px bg-border/70" aria-hidden="true" />
-                        <span className="absolute left-[24px] top-1/2 h-px w-4 bg-border/70" aria-hidden="true" />
-                        <span className="absolute left-[38px] top-1/2 h-1.5 w-1.5 -translate-y-1/2 rounded-full bg-text-muted/70" aria-hidden="true" />
-                      </>
-                    )}
-                    <div
-                      onContextMenu={(e) => handleSessionContextMenu(e, row.item)}
-                      onClick={selectionMode ? () => onToggleSessionSelection(row.item.sessionKey) : undefined}
-                      className={[
-                        "ui-list-row group/session-row flex w-full items-center gap-2 border text-left",
-                        row.depth > 0
-                          ? "min-h-[54px] rounded-md border-transparent bg-transparent px-2 py-1.5"
-                          : "min-h-[60px] rounded-md border-transparent bg-transparent px-2.5 py-2",
-                        selectionMode ? "cursor-pointer" : "",
-                      ].join(" ")}
-                      style={{ backgroundColor: row.item.sessionKey === activeSessionKey ? "var(--bg-tertiary)" : undefined }}
-                    >
-                      {row.childCount > 0 && (
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            toggleSessionParent(row.item.sessionKey);
-                          }}
-                          className="ui-history-tree-toggle mt-0.5"
-                          aria-expanded={!collapsedSessionParents.has(row.item.sessionKey)}
-                          aria-label={t(
-                            collapsedSessionParents.has(row.item.sessionKey)
-                              ? "history.tree.expandChildren"
-                              : "history.tree.collapseChildren",
-                            { count: row.childCount }
-                          )}
-                          title={t(
-                            collapsedSessionParents.has(row.item.sessionKey)
-                              ? "history.tree.expandChildren"
-                              : "history.tree.collapseChildren",
-                            { count: row.childCount }
-                          )}
-                        >
-                          {collapsedSessionParents.has(row.item.sessionKey) ? (
-                            <ChevronRight size={15} strokeWidth={2} />
-                          ) : (
-                            <ChevronDown size={15} strokeWidth={2} />
-                          )}
-                        </button>
-                      )}
-                      {selectionMode && (
-                        <SelectionCheckbox
-                          checked={selectedSessionKeys.has(row.item.sessionKey)}
-                          title={t("history.bulk.selectSessionNamed", { title: sessionDisplayTitle })}
-                          ariaLabel={t("history.bulk.selectSessionNamed", { title: sessionDisplayTitle })}
-                          onToggle={() => onToggleSessionSelection(row.item.sessionKey)}
-                        />
-                      )}
-                      {selectionMode ? (
-                        <div className="min-w-0 flex-1 overflow-hidden text-left">
-                          <div className="flex min-w-0 items-center gap-1.5">
-                            {row.item.starred && <Star size={12} className="shrink-0" style={{ color: "var(--warning)" }} fill="currentColor" />}
-                            {row.depth > 0 && (
-                              <span
-                                className="ui-history-subagent-badge"
-                                role="img"
-                                aria-label={t("history.tree.subagent")}
-                                title={t("history.tree.subagent")}
-                              >
-                                <Bot size={12} strokeWidth={1.8} />
-                              </span>
-                            )}
-                            {sessionWorktree && (
-                              <span
-                                className="shrink-0 rounded-full border border-primary/35 px-1.5 py-px text-[10px] font-semibold text-primary"
-                                title={t("history.worktreeBadgeTitle", { name: sessionWorktree.name })}
-                              >
-                                {t("history.worktreeBadge")}
-                              </span>
-                            )}
-                            <span className="truncate text-[13px] font-semibold text-text-primary">{sessionDisplayTitle}</span>
-                            {row.childCount > 0 && (
-                              <span className="shrink-0 rounded-full border border-border/70 px-1.5 py-px text-[10px] font-medium text-text-muted">
-                                {t("history.tree.childCount", { count: row.childCount })}
-                              </span>
-                            )}
-                          </div>
-                          <div className="ui-dev-label mt-1.5 flex min-w-0 items-center gap-2 text-[11px] text-text-muted">
-                            <span className="inline-flex min-w-0 items-center gap-1">
-                              <Clock3 size={11} className="shrink-0" />
-                              <span className="truncate">{formatTime(row.item.updated_at, language)}</span>
-                            </span>
-                            <span className="inline-flex shrink-0 items-center gap-1">
-                              <MessageSquare size={11} className="shrink-0" />
-                              {t("history.messageCount", { count: row.item.message_count })}
-                            </span>
-                          </div>
-                        </div>
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={() => onOpenSession(row.item.sessionKey)}
-                          className="min-w-0 flex-1 overflow-hidden text-left"
-                        >
-                          <div className="flex min-w-0 items-center gap-1.5">
-                            {row.item.starred && <Star size={12} className="shrink-0" style={{ color: "var(--warning)" }} fill="currentColor" />}
-                            {row.depth > 0 && (
-                              <span
-                                className="ui-history-subagent-badge"
-                                role="img"
-                                aria-label={t("history.tree.subagent")}
-                                title={t("history.tree.subagent")}
-                              >
-                                <Bot size={12} strokeWidth={1.8} />
-                              </span>
-                            )}
-                            {sessionWorktree && (
-                              <span
-                                className="shrink-0 rounded-full border border-primary/35 px-1.5 py-px text-[10px] font-semibold text-primary"
-                                title={t("history.worktreeBadgeTitle", { name: sessionWorktree.name })}
-                              >
-                                {t("history.worktreeBadge")}
-                              </span>
-                            )}
-                            <span className="truncate text-[13px] font-semibold text-text-primary">{sessionDisplayTitle}</span>
-                            {row.childCount > 0 && (
-                              <span className="shrink-0 rounded-full border border-border/70 px-1.5 py-px text-[10px] font-medium text-text-muted">
-                                {t("history.tree.childCount", { count: row.childCount })}
-                              </span>
-                            )}
-                          </div>
-                          <div className="ui-dev-label mt-1.5 flex min-w-0 items-center gap-2 text-[11px] text-text-muted">
-                            <span className="inline-flex min-w-0 items-center gap-1">
-                              <Clock3 size={11} className="shrink-0" />
-                              <span className="truncate">{formatTime(row.item.updated_at, language)}</span>
-                            </span>
-                            <span className="inline-flex shrink-0 items-center gap-1">
-                              <MessageSquare size={11} className="shrink-0" />
-                              {t("history.messageCount", { count: row.item.message_count })}
-                            </span>
-                          </div>
-                        </button>
-                      )}
-                      {!selectionMode && (
-                        <button
-                          type="button"
-                          onClick={() => onDeleteSession(row.item)}
-                          className="ui-history-row-delete"
-                          aria-label={t("history.deleteSessionNamed", { title: sessionDisplayTitle })}
-                          title={t("history.deleteSession")}
-                        >
-                          <X size={13} strokeWidth={1.9} />
+                  <div className="ui-history-session-row" data-child={row.depth > 0 || undefined}
+                    data-active={row.item.sessionKey === activeSessionKey || undefined}
+                    style={{ paddingLeft: 8 + Math.min(row.depth, 6) * 10 }}
+                    onContextMenu={(e) => handleSessionContextMenu(e, row.item)}
+                    onClick={selectionMode ? () => onToggleSessionSelection(row.item.sessionKey) : undefined}>
+                    {selectionMode && <SelectionCheckbox checked={selectedSessionKeys.has(row.item.sessionKey)}
+                      title={t("history.bulk.selectSessionNamed", { title: sessionDisplayTitle })}
+                      ariaLabel={t("history.bulk.selectSessionNamed", { title: sessionDisplayTitle })}
+                      onToggle={() => onToggleSessionSelection(row.item.sessionKey)} />}
+                    {row.childCount > 0 ? (
+                      <button type="button" className="ui-history-tree-toggle ui-focus-ring"
+                        onClick={(e) => { e.stopPropagation(); toggleSessionParent(row.item.sessionKey); }}
+                        aria-expanded={expandedSessionParents.has(row.item.sessionKey)}
+                        aria-label={t(expandedSessionParents.has(row.item.sessionKey) ? "history.tree.collapseChildren" : "history.tree.expandChildren", { count: row.childCount })}
+                        title={t(expandedSessionParents.has(row.item.sessionKey) ? "history.tree.collapseChildren" : "history.tree.expandChildren", { count: row.childCount })}>
+                        {expandedSessionParents.has(row.item.sessionKey) ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                      </button>
+                    ) : row.depth > 0 ? <Bot size={11} className="ui-history-row-icon" aria-label={t("history.tree.subagent")} />
+                      : <MessageSquare size={11} className="ui-history-row-icon" />}
+                    <button type="button" className="ui-history-session-open ui-focus-ring"
+                      onClick={selectionMode ? undefined : () => onOpenSession(row.item.sessionKey)}
+                      tabIndex={selectionMode ? -1 : undefined}
+                      title={[sessionDisplayTitle, row.item.subagent?.nickname, formatTime(row.item.updated_at, language), t("history.messageCount", { count: row.item.message_count })].filter(Boolean).join("\n")}>
+                      <span className="ui-history-row-primary">
+                        {row.item.starred && <Star size={10} className="shrink-0 text-warning" fill="currentColor" />}
+                        <span className="ui-history-row-title">{sessionDisplayTitle}</span>
+                        {sessionWorktree && <span className="ui-history-row-badge" title={t("history.worktreeBadgeTitle", { name: sessionWorktree.name })}>{t("history.worktreeBadge")}</span>}
+                        {row.childCount > 0 && <span className="ui-history-row-badge" title={t("history.tree.childCount", { count: row.childCount })}>{row.childCount}</span>}
+                      </span>
+                      {row.depth === 0 && <span className="ui-history-row-meta">
+                        <span>{formatTime(row.item.updated_at, language)}</span>
+                        <span className="inline-flex items-center gap-1" aria-label={t("history.messageCount", { count: row.item.message_count })}>
+                          <MessageSquare size={9} />{row.item.message_count}
+                        </span>
+                      </span>}
+                    </button>
+                    <div className="ui-history-row-trailing">
+                      {row.depth > 0 && <time className="ui-history-row-clock" title={formatTime(row.item.updated_at, language)}>{formatSessionClock(row.item.updated_at)}</time>}
+                      {!selectionMode && !row.item.read_only && (row.item.source !== "claude" || !inferSubagentParentSessionId(row.item)) && (
+                        <button type="button" onClick={() => onDeleteSession(row.item)} className="ui-history-row-delete ui-focus-ring"
+                          aria-label={t("history.deleteSessionNamed", { title: sessionDisplayTitle })} title={t("history.deleteSession")}>
+                          <X size={12} />
                         </button>
                       )}
                     </div>

@@ -1,3 +1,4 @@
+pub mod subagent;
 pub mod title;
 
 use chrono::DateTime;
@@ -5,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 
-pub const PARSER_VERSION: u32 = 2;
+pub const PARSER_VERSION: u32 = 3;
 pub const INDEX_SCHEMA_VERSION: u32 = 2;
 const SEARCH_TEXT_LIMIT: usize = 16 * 1024;
 const TITLE_LIMIT: usize = 240;
@@ -73,6 +74,8 @@ pub struct RemoteHistoryUsageFact {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct RemoteHistorySessionSummary {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subagent: Option<subagent::SubagentMetadata>,
     pub session_ref: RemoteHistorySessionRef,
     pub project_key: String,
     pub cwd: Option<String>,
@@ -164,6 +167,8 @@ pub struct RemoteHistorySyncResult {
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ParserState {
+    #[serde(default)]
+    pub subagent: Option<subagent::SubagentMetadata>,
     pub source_session_id: Option<String>,
     pub cwd: Option<String>,
     pub branch: Option<String>,
@@ -190,6 +195,9 @@ pub fn apply_jsonl_line(
     };
     if state.source_session_id.is_none() {
         state.source_session_id = session_id(&value);
+        if source == "codex" {
+            state.subagent = subagent::codex_subagent_metadata(&value);
+        }
     }
     if state.cwd.is_none() {
         state.cwd = deep_string(&value, &["cwd", "working_directory", "workingDirectory"], 0);
@@ -299,6 +307,7 @@ pub fn build_summary(
         .max_by(|left, right| left.1.cmp(right.1).then_with(|| right.0.cmp(left.0)))
         .map(|(model, _)| model.clone());
     RemoteHistorySessionSummary {
+        subagent: state.subagent.clone(),
         session_ref: RemoteHistorySessionRef {
             source_id: source.to_string(),
             source_instance_id: source_instance_id.to_string(),

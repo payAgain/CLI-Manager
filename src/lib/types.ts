@@ -556,6 +556,10 @@ export interface HistoryRemoteIdentity {
 }
 
 export interface HistorySessionSummary {
+  /** Spawned agent relationship; ordinary user forks remain independent sessions. */
+  subagent?: { parent_session_id: string; nickname?: string | null } | null;
+  /** Context outside the current page/filter; does not consume the pagination offset. */
+  parent_session?: HistorySessionSummary | null;
   session_id: string;
   source: HistorySource;
   project_key: string;

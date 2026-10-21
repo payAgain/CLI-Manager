@@ -25,6 +25,7 @@ use uuid::Uuid;
 
 mod catalog;
 mod codex_titles;
+mod subagents;
 
 use super::history_backup::{
     create_file_backup_snapshot, default_backup_root, ensure_source_mutation_unlocked,
@@ -386,6 +387,10 @@ pub struct HistoryMessage {
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HistorySessionSummary {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subagent: Option<cli_manager_history_core::subagent::SubagentMetadata>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_session: Option<Box<HistorySessionSummary>>,
     pub session_id: String,
     pub source: String,
     pub project_key: String,
@@ -482,6 +487,8 @@ pub struct HistorySessionUsage {
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HistorySessionDetail {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub subagent: Option<cli_manager_history_core::subagent::SubagentMetadata>,
     pub session_id: String,
     pub source: String,
     pub project_key: String,
@@ -1144,6 +1151,7 @@ fn finalize_opencode_detail(
         builtin_calls: sorted_tool_counts(&parsed.computed.stats.builtin_calls),
     };
     HistorySessionDetail {
+        subagent: None,
         session_id: parsed.computed.session_id,
         source: "opencode".to_string(),
         project_key: summary.project_key,
@@ -2066,6 +2074,7 @@ fn remote_detail_value(detail: RemoteHistorySessionDetail) -> Value {
         })
         .collect::<Vec<_>>();
     json!({
+        "subagent": summary.subagent,
         "sessionId": summary.session_ref.source_session_id,
         "source": summary.session_ref.source_id,
         "projectKey": summary.project_key,
@@ -2799,6 +2808,8 @@ fn summary_from_computation(
     computed: &CachedSessionComputation,
 ) -> HistorySessionSummary {
     HistorySessionSummary {
+        subagent: subagents::metadata(&file_ref.source, &file_ref.path),
+        parent_session: None,
         session_id: computed.session_id.clone(),
         source: file_ref.source.clone(),
         project_key: file_ref.project_key.clone(),
@@ -3041,6 +3052,7 @@ fn finalize_session_detail(
         builtin_calls: sorted_tool_counts(&parts.computed.stats.builtin_calls),
     };
     HistorySessionDetail {
+        subagent: subagents::metadata(&file_ref.source, &file_ref.path),
         session_id: parts.computed.session_id,
         source: file_ref.source.clone(),
         project_key: file_ref.project_key.clone(),
@@ -3618,6 +3630,8 @@ fn convert_history_session(
     let fingerprint = session_file_fingerprint(&file_ref.path);
     let title = codex_history_index_text(detail).unwrap_or_else(|| detail.title.clone());
     let summary = HistorySessionSummary {
+        subagent: None,
+        parent_session: None,
         session_id: session_id.clone(),
         source: target_source.clone(),
         project_key: file_ref.project_key.clone(),
@@ -11127,6 +11141,7 @@ mod tests {
 
     fn sample_detail(source: &str) -> HistorySessionDetail {
         HistorySessionDetail {
+            subagent: None,
             session_id: "source-session".to_string(),
             source: source.to_string(),
             project_key: "CLI-Manager".to_string(),

@@ -1015,7 +1015,9 @@ pub(super) async fn get_session_by_file_path(
     let Some(row) = row else {
         return Ok(None);
     };
-    let summary = HistorySessionSummary {
+    let mut summary = HistorySessionSummary {
+        subagent: None,
+        parent_session: None,
         session_id: row.try_get("session_id").map_err(|err| err.to_string())?,
         source: row.try_get("source").map_err(|err| err.to_string())?,
         project_key: row.try_get("project_key").map_err(|err| err.to_string())?,
@@ -1030,6 +1032,7 @@ pub(super) async fn get_session_by_file_path(
             .max(0) as usize,
         branch: row.try_get("branch").map_err(|err| err.to_string())?,
     };
+    summary.subagent = subagents::metadata(&summary.source, Path::new(&summary.file_path));
     if catalog_path_within_roots(&summary.source, &summary.file_path, roots) {
         Ok(Some(summary))
     } else {
@@ -1162,7 +1165,9 @@ fn merge_fetch_limit(limit: Option<usize>, offset: Option<usize>) -> Option<usiz
 }
 
 fn session_summary_from_row(row: SqliteRow) -> Result<HistorySessionSummary, String> {
-    Ok(HistorySessionSummary {
+    let mut summary = HistorySessionSummary {
+        subagent: None,
+        parent_session: None,
         session_id: row.try_get("session_id").map_err(|err| err.to_string())?,
         source: row.try_get("source").map_err(|err| err.to_string())?,
         project_key: row.try_get("project_key").map_err(|err| err.to_string())?,
@@ -1176,7 +1181,76 @@ fn session_summary_from_row(row: SqliteRow) -> Result<HistorySessionSummary, Str
             .map_err(|err| err.to_string())?
             .max(0) as usize,
         branch: row.try_get("branch").map_err(|err| err.to_string())?,
-    })
+    };
+    summary.subagent = subagents::metadata(&summary.source, Path::new(&summary.file_path));
+    Ok(summary)
+}
+
+async fn attach_session_parents(
+    conn: &mut SqliteConnection,
+    roots: &HistoryRoots,
+    sessions: &mut [HistorySessionSummary],
+) -> Result<(), String> {
+    let mut cache = HashMap::<(String, String, String), Option<HistorySessionSummary>>::new();
+    for session in sessions {
+        let scope = subagents::scope(&session.source, &session.file_path);
+        let mut current = session.clone();
+        let mut seen = HashSet::from([current.session_id.clone()]);
+        let mut ancestors = Vec::new();
+        while let Some(metadata) = &current.subagent {
+            if ancestors.len() >= 32 || !seen.insert(metadata.parent_session_id.clone()) {
+                break;
+            }
+            let key = (
+                session.source.clone(),
+                scope.clone(),
+                metadata.parent_session_id.clone(),
+            );
+            if !cache.contains_key(&key) {
+                let mut candidates = list_sessions_from_v2(
+                    conn,
+                    roots,
+                    Some(key.0.clone()),
+                    None,
+                    Some(key.2.clone()),
+                    None,
+                    None,
+                )
+                .await?;
+                candidates.extend(
+                    list_sessions_from_legacy_catalog(
+                        conn,
+                        roots,
+                        Some(key.0.clone()),
+                        None,
+                        Some(key.2.clone()),
+                        None,
+                        None,
+                    )
+                    .await?,
+                );
+                let parent = candidates.into_iter().find(|candidate| {
+                    candidate.session_id == key.2
+                        && subagents::scope(&candidate.source, &candidate.file_path) == scope
+                        && Path::new(&candidate.file_path).is_file()
+                        && catalog_path_within_roots(&candidate.source, &candidate.file_path, roots)
+                });
+                cache.insert(key.clone(), parent);
+            }
+            let Some(parent) = cache.get(&key).and_then(Option::as_ref) else {
+                break;
+            };
+            current = parent.clone();
+            ancestors.push(current.clone());
+        }
+        let mut parent = None;
+        for mut ancestor in ancestors.into_iter().rev() {
+            ancestor.parent_session = parent;
+            parent = Some(Box::new(ancestor));
+        }
+        session.parent_session = parent;
+    }
+    Ok(())
 }
 
 fn merge_session_summaries(
@@ -1375,7 +1449,9 @@ pub(super) async fn list_sessions(
         Some(0),
     )
     .await?;
-    Ok(merge_session_summaries(v2, legacy, limit, offset))
+    let mut sessions = merge_session_summaries(v2, legacy, limit, offset);
+    attach_session_parents(&mut conn, roots, &mut sessions).await?;
+    Ok(sessions)
 }
 
 fn fts_literal(query: &str) -> String {
@@ -1946,6 +2022,7 @@ async fn get_session_detail_from_v2_with_conn(
     }
 
     Ok(Some(HistorySessionDetail {
+        subagent: subagents::metadata(&source, Path::new(&file_path)),
         session_id: row.try_get("session_id").map_err(|err| err.to_string())?,
         source,
         project_key: row.try_get("project_key").map_err(|err| err.to_string())?,
@@ -2124,11 +2201,6 @@ async fn apply_remote_sync_with_conn(
         "messages": false,
         "diff": false,
         "onlineRequired": true,
-    }))
-    .map_err(|err| err.to_string())?;
-    let source_extension_json = serde_json::to_string(&json!({
-        "hostId": host_id,
-        "transportKind": "ssh",
     }))
     .map_err(|err| err.to_string())?;
     let raw_pointers_json = result
@@ -2424,7 +2496,14 @@ async fn apply_remote_sync_with_conn(
         .bind(result.as_of)
         .bind(&completeness_json)
         .bind(raw_pointers_json)
-        .bind(&source_extension_json)
+        .bind(
+            serde_json::to_string(&json!({
+                "hostId": host_id,
+                "transportKind": "ssh",
+                "subagent": summary.subagent,
+            }))
+            .map_err(|err| err.to_string())?,
+        )
         .bind(remote_catalog_i64(summary.index_generation)?)
         .execute(&mut *tx)
         .await
@@ -2595,7 +2674,7 @@ pub(super) async fn list_remote_cached(
                 hs.input_tokens, hs.output_tokens, hs.cache_read_tokens,
                 hs.cache_creation_tokens, hs.total_cost_usd, hs.dominant_model, hs.current_model,
                 hs.parser_version, hs.last_seen_generation, hs.raw_pointers_json,
-                hs.materialization_level, hs.freshness_state,
+                hs.materialization_level, hs.freshness_state, hs.source_extension_json,
                 COALESCE(hs.as_of, i.as_of) AS as_of, i.remote_identity_json
          FROM history_sessions hs
          JOIN history_source_instances i ON i.id = hs.source_instance_id
@@ -2614,29 +2693,28 @@ pub(super) async fn list_remote_cached(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_lowercase);
-    let mut values = Vec::new();
+    let mut values = HashMap::new();
+    let mut matching_ids = Vec::new();
     for row in rows {
         let cwd = row
             .try_get::<Option<String>, _>("cwd")
             .map_err(|err| err.to_string())?;
         let project_key: String = row.try_get("project_key").map_err(|err| err.to_string())?;
-        if normalized_project.as_ref().is_some_and(|project| {
+        let project_mismatch = normalized_project.as_ref().is_some_and(|project| {
             let cwd_matches = cwd.as_deref().is_some_and(|cwd| {
                 let cwd = normalize_history_path(cwd);
                 cwd == *project || cwd.starts_with(&format!("{project}/"))
             });
             !cwd_matches
                 && !claude_project_key_from_path(project).eq_ignore_ascii_case(&project_key)
-        }) {
-            continue;
-        }
+        });
         let source_session_id: String = row
             .try_get("source_session_id")
             .map_err(|err| err.to_string())?;
         let source_id: String = row.try_get("source_id").map_err(|err| err.to_string())?;
         let title: String = row.try_get("title").map_err(|err| err.to_string())?;
         let branch: Option<String> = row.try_get("branch").map_err(|err| err.to_string())?;
-        if normalized_query.as_ref().is_some_and(|query| {
+        let query_mismatch = normalized_query.as_ref().is_some_and(|query| {
             ![
                 source_session_id.as_str(),
                 source_id.as_str(),
@@ -2647,12 +2725,9 @@ pub(super) async fn list_remote_cached(
             ]
             .iter()
             .any(|value| value.to_lowercase().contains(query))
-        }) {
-            continue;
-        }
-        if values.len() < offset {
-            values.push(Value::Null);
-            continue;
+        });
+        if !project_mismatch && !query_mismatch {
+            matching_ids.push(source_session_id.clone());
         }
         let raw_pointers = row
             .try_get::<Option<String>, _>("raw_pointers_json")
@@ -2664,7 +2739,12 @@ pub(super) async fn list_remote_cached(
             .map_err(|err| err.to_string())?
             .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
             .unwrap_or_else(|| json!({}));
-        values.push(json!({
+        let extension = row
+            .try_get::<Option<String>, _>("source_extension_json")
+            .map_err(|err| err.to_string())?
+            .and_then(|raw| serde_json::from_str::<Value>(&raw).ok());
+        values.insert(source_session_id.clone(), json!({
+            "subagent": extension.and_then(|value| value.get("subagent").cloned()),
             "sessionId": source_session_id,
             "source": source_id,
             "projectKey": project_key,
@@ -2699,14 +2779,47 @@ pub(super) async fn list_remote_cached(
             "remoteIdentity": remote_identity,
             "readOnly": true,
         }));
-        if values.iter().filter(|value| !value.is_null()).count() >= limit {
-            break;
-        }
     }
-    Ok(values
+    Ok(remote_session_page(&values, matching_ids, limit, offset))
+}
+
+fn remote_session_page(
+    values: &HashMap<String, Value>,
+    matching_ids: Vec<String>,
+    limit: usize,
+    offset: usize,
+) -> Vec<Value> {
+    matching_ids
         .into_iter()
-        .filter(|value| !value.is_null())
-        .collect())
+        .skip(offset)
+        .take(limit)
+        .filter_map(|id| {
+            let mut session = values.get(&id)?.clone();
+            let mut current = &session;
+            let mut seen = HashSet::from([id]);
+            let mut ancestors = Vec::new();
+            while let Some(parent_id) = current
+                .pointer("/subagent/parentSessionId")
+                .and_then(Value::as_str)
+            {
+                if ancestors.len() >= 32 || !seen.insert(parent_id.to_string()) {
+                    break;
+                }
+                let Some(parent) = values.get(parent_id) else {
+                    break;
+                };
+                ancestors.push(parent.clone());
+                current = parent;
+            }
+            let mut parent = Value::Null;
+            for mut ancestor in ancestors.into_iter().rev() {
+                ancestor["parentSession"] = parent;
+                parent = ancestor;
+            }
+            session["parentSession"] = parent;
+            Some(session)
+        })
+        .collect()
 }
 
 fn opencode_catalog_document(parsed: OpenCodeParsedSession) -> CatalogDocument {
@@ -3657,6 +3770,79 @@ pub(super) async fn ensure_refresh(
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn child_page_attaches_ancestors_from_existing_index_across_worktrees() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join(".codex");
+        fs::create_dir_all(root.join("sessions")).unwrap();
+        let roots = HistoryRoots {
+            claude_config_dir: None,
+            codex_config_dir: Some(root.clone()),
+        };
+        let mut conn = SqliteConnection::connect("sqlite::memory:").await.unwrap();
+        ensure_schema(&mut conn).await.unwrap();
+        for (id, parent, project) in [
+            ("main", None, "/repo"),
+            ("child", Some("main"), "/worktree"),
+            ("nested", Some("child"), "/worktree"),
+        ] {
+            let path = root.join("sessions").join(format!("rollout-{id}.jsonl"));
+            let source = parent.map_or(
+                json!("cli"),
+                |parent| json!({"subagent":{"thread_spawn":{"parent_thread_id":parent}}}),
+            );
+            let meta =
+                json!({"type":"session_meta","payload":{"id":id,"source":source,"cwd":project}});
+            fs::write(&path, format!("{meta}\n")).unwrap();
+            let file = CatalogFile {
+                fingerprint: session_file_fingerprint(&path),
+                file_ref: SessionFileRef {
+                    source: "codex".into(),
+                    project_key: "unused".into(),
+                    path,
+                },
+            };
+            replace_document(&mut conn, &roots.cache_key(), parse_catalog_file(file))
+                .await
+                .unwrap();
+        }
+        let mut page = list_sessions_from_legacy_catalog(
+            &mut conn,
+            &roots,
+            Some("codex".into()),
+            Some("/worktree".into()),
+            Some("nested".into()),
+            Some(1),
+            Some(0),
+        )
+        .await
+        .unwrap();
+        assert_eq!(page.len(), 1);
+        attach_session_parents(&mut conn, &roots, &mut page)
+            .await
+            .unwrap();
+        let child = page[0].parent_session.as_ref().unwrap();
+        assert_eq!(child.session_id, "child");
+        assert_eq!(child.parent_session.as_ref().unwrap().session_id, "main");
+        assert_eq!(page.len(), 1, "context must not consume pagination offsets");
+    }
+
+    #[test]
+    fn ssh_child_page_keeps_ancestor_context_outside_filter_and_offset() {
+        let values = HashMap::from([
+            ("main".into(), json!({"sessionId":"main"})),
+            (
+                "child".into(),
+                json!({"sessionId":"child","subagent":{"parentSessionId":"main"}}),
+            ),
+            ("other".into(), json!({"sessionId":"other"})),
+        ]);
+        let page = remote_session_page(&values, vec!["other".into(), "child".into()], 1, 1);
+        assert_eq!(page.len(), 1);
+        assert_eq!(page[0]["sessionId"], "child");
+        assert_eq!(page[0]["parentSession"]["sessionId"], "main");
+    }
+
     async fn create_legacy_source_instances_schema(conn: &mut SqliteConnection) {
         sqlx::query(
             "CREATE TABLE history_source_instances (
@@ -3799,6 +3985,26 @@ mod tests {
         assert!(catalog_refresh_lock().try_lock().is_err());
         drop(first_refresh);
         assert!(catalog_refresh_lock().try_lock().is_ok());
+    }
+
+    #[tokio::test]
+    async fn remote_sync_keeps_subagent_metadata_in_existing_extension_column() {
+        let mut conn = SqliteConnection::connect("sqlite::memory:").await.unwrap();
+        ensure_schema(&mut conn).await.unwrap();
+        let mut result = remote_sync_result();
+        result.sessions[0].subagent = Some(cli_manager_history_core::subagent::SubagentMetadata {
+            parent_session_id: "main".into(),
+            nickname: Some("Feynman".into()),
+        });
+        apply_remote_sync_with_conn(&mut conn, "host-a", &result)
+            .await
+            .unwrap();
+        let raw: String = sqlx::query_scalar("SELECT source_extension_json FROM history_sessions WHERE source_instance_id = 'remote-instance'")
+            .fetch_one(&mut conn).await.unwrap();
+        let extension: Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(extension["hostId"], "host-a");
+        assert_eq!(extension["subagent"]["parentSessionId"], "main");
+        assert_eq!(extension["subagent"]["nickname"], "Feynman");
     }
 
     #[test]
