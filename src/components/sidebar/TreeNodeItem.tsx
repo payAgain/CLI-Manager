@@ -114,6 +114,7 @@ function TreeNodeItemImpl({
         data-tree-key={treeKey} aria-level={depth + 1} aria-selected={selected}
         tabIndex={focusedNodeKey === treeKey ? 0 : -1} onFocus={handleNodeFocus}>
         <WorkspaceCard project={project} worktree={worktree} name={worktree.name} branch={worktree.branch}
+          terminals={actions.getWorkspaceTerminals(project.id, worktree.id)}
           selected={selected} compact={compact} invalid={worktree.status === "missing"}
           onSelect={(e) => actions.onSelectWorktree(e, worktree)}
           onOpen={() => actions.onOpenWorktree(project, worktree)}
@@ -159,6 +160,7 @@ function TreeNodeItemImpl({
         </div>
         {open && <div className="ui-project-workspaces" style={{ marginLeft: depth * indentStep }}>
           <WorkspaceCard project={p} name={branch || t("workspace.primaryName")} branch={branch || (p.environment_type === "ssh" ? p.remote_path || p.path : p.path)}
+            terminals={actions.getWorkspaceTerminals(p.id)}
             primary selected={selected} compact={compact} invalid={actions.isPathInvalid(p.id)}
             onSelect={(e) => actions.onSelectProject(e, p)} onOpen={() => actions.onOpenProject(p)}
             onContextMenu={(e) => actions.onContextMenuProject(e, p)} />

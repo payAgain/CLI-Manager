@@ -1,15 +1,16 @@
 import { CliToolIcon } from "../CliToolIcon";
-import { resolveCliToolIconKey } from "../../lib/cliTools";
+import { CLI_TOOL_DESCRIPTORS, resolveCliToolIconKey } from "../../lib/cliTools";
 import type { MouseEvent } from "react";
 import { AlertTriangle, MoreHorizontal, Play, Terminal } from "../icons";
 import { useTerminalStore } from "../../stores/terminalStore";
-import type { Project, WorktreeRecord } from "../../lib/types";
+import type { Project, TerminalSession, WorktreeRecord } from "../../lib/types";
 import { useI18n } from "../../lib/i18n";
 import { projectTerminalLaunchLabel } from "../../lib/projectStartupCommand";
 
 interface WorkspaceCardProps {
   project: Project;
   worktree?: WorktreeRecord;
+  terminals: TerminalSession[];
   name: string;
   branch: string;
   selected: boolean;
@@ -21,14 +22,12 @@ interface WorkspaceCardProps {
   onContextMenu: (e: MouseEvent) => void;
 }
 
-export function WorkspaceCard({ project, worktree, name, branch, selected, primary, compact, invalid, onSelect, onOpen, onContextMenu }: WorkspaceCardProps) {
+export function WorkspaceCard({ project, terminals, name, branch, selected, primary, compact, invalid, onSelect, onOpen, onContextMenu }: WorkspaceCardProps) {
   const { t } = useI18n();
-  const sessions = useTerminalStore((s) => s.sessions);
   const statuses = useTerminalStore((s) => s.sessionStatuses);
   const notifications = useTerminalStore((s) => s.tabNotifications);
   const activeId = useTerminalStore((s) => s.activeSessionId);
   const setActive = useTerminalStore((s) => s.setActive);
-  const terminals = sessions.filter((s) => s.projectId === project.id && (s.worktreeId ?? null) === (worktree?.id ?? null) && (s.kind ?? "pty") === "pty");
   const running = terminals.some((s) => statuses[s.id] === "running");
   const error = terminals.some((s) => statuses[s.id] === "error");
   const status = error ? "error" : running ? "running" : "idle";
@@ -52,17 +51,25 @@ export function WorkspaceCard({ project, worktree, name, branch, selected, prima
         </span>
       </div>
       {!compact && <div className="ui-workspace-card-meta" title={branch}>{branch}</div>}
-      {selected && terminals.length > 0 && <div className="ui-workspace-sessions">
-        {terminals.map((session) => <button key={session.id} type="button" className="ui-workspace-session ui-focus-ring"
+      {terminals.length > 0 && <div className="ui-workspace-sessions">
+        <div className="ui-workspace-sessions-heading"><Terminal size={11} aria-hidden="true" />{t("workspace.terminalCount", { count: terminals.length })}</div>
+        {selected && !compact && terminals.map((session) => {
+          const agent = session.runtimeAgent?.tool;
+          const icon = resolveCliToolIconKey(agent);
+          const agentName = agent === "pi" ? "Pi" : CLI_TOOL_DESCRIPTORS.find(tool => tool.id === agent)?.label ?? agent;
+          const title = session.title.trim() || t("workspace.unnamedTerminal");
+          return <button key={session.id} type="button" className="ui-workspace-session ui-focus-ring"
           data-active={session.id === activeId} data-notification={notifications[session.id] ?? "none"}
+          aria-current={session.id === activeId ? "true" : undefined}
           onDoubleClick={(e) => e.stopPropagation()}
-          onClick={(e) => { e.stopPropagation(); onSelect(e); setActive(session.id); }} title={session.title}>
-          {session.runtimeAgent && resolveCliToolIconKey(session.runtimeAgent.tool)
-            ? <CliToolIcon icon={resolveCliToolIconKey(session.runtimeAgent.tool)!} size={11} />
-            : <Terminal size={11} />}
-          <span>{session.runtimeAgent ? `${session.runtimeAgent.tool} · ${session.title}` : session.title}</span>
+          onClick={(e) => { e.stopPropagation(); onSelect(e); setActive(session.id); }} title={agentName ? `${title} · ${agentName}` : title}>
+          <span className="ui-workspace-session-title">{title}</span>
+          {agentName && <span className="ui-workspace-session-agent" title={agentName}>
+            {icon && <CliToolIcon icon={icon} size={11} />}<span>{agentName}</span>
+          </span>}
           {notifications[session.id] && notifications[session.id] !== "none" && <span className="ui-workspace-session-state" />}
-        </button>)}
+        </button>;
+        })}
       </div>}
     </div>
   );

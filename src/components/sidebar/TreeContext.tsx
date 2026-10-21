@@ -1,6 +1,6 @@
 import { createContext, useContext, type MouseEvent as ReactMouseEvent } from "react";
 import type { DragEndEvent } from "@dnd-kit/core";
-import type { Project, TerminalScope, WorktreeRecord } from "../../lib/types";
+import type { Project, TerminalScope, TerminalSession, WorktreeRecord } from "../../lib/types";
 import type { SessionStatus } from "../../stores/terminalStore";
 
 export interface TreeActions {
@@ -38,6 +38,7 @@ export interface TreeActions {
   toggleCollapsed: (id: string) => void;
   getProjectStatus: (projectId: string) => SessionStatus | null;
   getProjectTerminalCount: (projectId: string) => number;
+  getWorkspaceTerminals: (projectId: string, worktreeId?: string) => TerminalSession[];
   isPathInvalid: (projectId: string) => boolean;
   onDragEnd: (event: DragEndEvent) => void;
 }

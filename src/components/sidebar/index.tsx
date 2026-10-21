@@ -29,6 +29,7 @@ import { resolveCliToolHistorySourceId } from "../../lib/cliTools";
 import { shouldSidebarBootstrapProjects } from "../../lib/projectLoadPolicy";
 import { parseProjectEnvVars } from "../../lib/projectEnv";
 import { projectWithWorktreePath } from "../../lib/terminalProject";
+import { indexWorkspaceTerminals } from "../../lib/workspaceTerminals";
 import { ALL_TERMINALS_SCOPE, collectProjectIdsForGroup, sessionMatchesTerminalScope } from "../../lib/terminalScope";
 import { projectSupportsCapability, type ProjectCapability } from "../../lib/projectCapabilities";
 import { TreeContext, worktreeListCollapseId, type TreeActions } from "./TreeContext";
@@ -86,6 +87,7 @@ const SIDEBAR_MIN_WIDTH = 168;
 const SIDEBAR_MAX_WIDTH = 500;
 const SIDEBAR_AUTO_COLLAPSE_BREAKPOINT = 900;
 const IN_TAURI = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+const EMPTY_WORKSPACE_TERMINALS: TerminalSession[] = [];
 
 function preserveSidebarScrollAfterContextMenu(event: ReactMouseEvent, markInternalScroll?: (until: number) => void) {
   const target = event.currentTarget as HTMLElement | null;
@@ -333,12 +335,17 @@ export function Sidebar({
   const [discardTarget, setDiscardTarget] = useState<{ project: Project; worktree: WorktreeRecord } | null>(null);
   const [discardTargets, setDiscardTargets] = useState<{ project: Project; worktree: WorktreeRecord }[] | null>(null);
 
+  const workspaceTerminals = useMemo(
+    () => indexWorkspaceTerminals(sessions, projects, worktrees),
+    [sessions, projects, worktrees]
+  );
   const activeSession = useMemo(
     () => sessions.find((session) => session.id === activeSessionId) ?? null,
     [activeSessionId, sessions]
   );
-  const activeSessionProjectId = activeSession?.projectId ?? null;
-  const activeSessionWorktreeId = activeSession?.worktreeId ?? null;
+  const activeWorkspace = workspaceTerminals.bySession.get(activeSessionId ?? "");
+  const activeSessionProjectId = activeWorkspace?.projectId ?? activeSession?.projectId ?? null;
+  const activeSessionWorktreeId = activeWorkspace?.worktreeId ?? activeSession?.worktreeId ?? null;
 
   useEffect(() => {
     if (projectScopedTerminalViewEnabled) return;
@@ -418,26 +425,15 @@ export function Sidebar({
   }, [fileProject]);
 
   const projectTerminalCountMap = useMemo(() => {
-    const map = new Map<string, number>();
-    for (const session of sessions) {
-      if (!session.projectId || (session.kind ?? "pty") !== "pty") continue;
-      map.set(session.projectId, (map.get(session.projectId) ?? 0) + 1);
-    }
-    return map;
-  }, [sessions]);
+    return new Map([...workspaceTerminals.byProject].map(([id, terminals]) => [id, terminals.length]));
+  }, [workspaceTerminals]);
 
   const openProjectIds = useMemo(
     () => new Set(projects.filter((project) => projectTerminalCountMap.has(project.id)).map((project) => project.id)),
     [projectTerminalCountMap, projects]
   );
 
-  const openWorktreeIds = useMemo(() => {
-    const ids = new Set<string>();
-    for (const session of sessions) {
-      if ((session.kind ?? "pty") === "pty" && session.worktreeId) ids.add(session.worktreeId);
-    }
-    return ids;
-  }, [sessions]);
+  const openWorktreeIds = useMemo(() => new Set(workspaceTerminals.byWorktree.keys()), [workspaceTerminals]);
 
   const displayedTree = useMemo(
     () => projectFilter === "open" ? filterTreeForOpenTerminals(tree, openProjectIds, openWorktreeIds) : tree,
@@ -500,26 +496,26 @@ export function Sidebar({
 
   const activateFirstProjectSession = useCallback(
     (projectId: string): boolean => {
-      const session = sessions.find((item) => item.projectId === projectId);
+      const session = workspaceTerminals.byProject.get(projectId)?.[0];
       if (!session) return false;
       if (session.id !== activeSessionId) {
         setActiveSession(session.id);
       }
       return true;
     },
-    [activeSessionId, sessions, setActiveSession]
+    [activeSessionId, workspaceTerminals, setActiveSession]
   );
 
   const activateFirstWorktreeSession = useCallback(
     (worktreeId: string): boolean => {
-      const session = sessions.find((item) => item.worktreeId === worktreeId && (item.kind ?? "pty") === "pty");
+      const session = workspaceTerminals.byWorktree.get(worktreeId)?.[0];
       if (!session) return false;
       if (session.id !== activeSessionId) {
         setActiveSession(session.id);
       }
       return true;
     },
-    [activeSessionId, sessions, setActiveSession]
+    [activeSessionId, workspaceTerminals, setActiveSession]
   );
 
   const activateFirstGroupSession = useCallback(
@@ -881,7 +877,7 @@ export function Sidebar({
   const projectStatusMap = useMemo(() => {
     const map = new Map<string, SessionStatus>();
     for (const session of sessions) {
-      const projectId = session.projectId;
+      const projectId = workspaceTerminals.bySession.get(session.id)?.projectId ?? session.projectId;
       if (!projectId) continue;
       const status = (sessionStatuses[session.id] ?? "running") as SessionStatus;
       const current = map.get(projectId);
@@ -899,7 +895,7 @@ export function Sidebar({
       map.set(projectId, "exited");
     }
     return map;
-  }, [sessions, sessionStatuses]);
+  }, [sessions, sessionStatuses, workspaceTerminals]);
 
   const getProjectStatus = useCallback(
     (projectId: string): SessionStatus | null => projectStatusMap.get(projectId) ?? null,
@@ -909,6 +905,13 @@ export function Sidebar({
   const getProjectTerminalCount = useCallback(
     (projectId: string): number => projectTerminalCountMap.get(projectId) ?? 0,
     [projectTerminalCountMap]
+  );
+  const getWorkspaceTerminals = useCallback(
+    (projectId: string, worktreeId?: string): TerminalSession[] => (
+      worktreeId ? workspaceTerminals.byWorktree.get(worktreeId)
+        : workspaceTerminals.primaryByProject.get(projectId)
+    ) ?? EMPTY_WORKSPACE_TERMINALS,
+    [workspaceTerminals]
   );
 
   const isPathInvalid = useCallback(
@@ -1870,6 +1873,7 @@ export function Sidebar({
       toggleCollapsed,
       getProjectStatus,
       getProjectTerminalCount,
+      getWorkspaceTerminals,
       isPathInvalid,
       onDragEnd: handleDragEnd,
     }),
@@ -1906,6 +1910,7 @@ export function Sidebar({
       toggleCollapsed,
       getProjectStatus,
       getProjectTerminalCount,
+      getWorkspaceTerminals,
       isPathInvalid,
       handleDragEnd,
     ]
