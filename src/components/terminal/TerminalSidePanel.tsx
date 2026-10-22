@@ -20,9 +20,10 @@ const SessionReplayPanel = lazy(() =>
   import("./SessionReplayPanel").then((module) => ({ default: module.SessionReplayPanel }))
 );
 
-export type TerminalSidePanelTab = "stats" | "replay" | "git" | "files" | "tasks";
+export type TerminalSidePanelTab = "templates" | "stats" | "replay" | "git" | "files" | "tasks";
 
 export const TERMINAL_SIDE_PANEL_TAB_ORDER: readonly TerminalSidePanelTab[] = [
+  "templates",
   "stats",
   "replay",
   "git",
@@ -39,6 +40,7 @@ interface TerminalSidePanelProps {
   projectId?: string | null;
   filesPanelContent?: ReactNode;
   auxiliaryPanelContent?: ReactNode;
+  templatesPanelContent?: ReactNode;
 }
 
 const MERGED_PANEL_WIDTH_STORAGE_KEY = "cli-manager:terminal-side-panel-width";
@@ -244,6 +246,7 @@ export function TerminalSidePanel({
   projectId,
   filesPanelContent = null,
   auxiliaryPanelContent = null,
+  templatesPanelContent = null,
 }: TerminalSidePanelProps) {
   const { t } = useI18n();
   const statsEnabled = visibleTabs.includes("stats");
@@ -278,6 +281,7 @@ export function TerminalSidePanel({
         )}
         {filesEnabled && activeTab === "files" ? filesPanelContent : null}
         {activeTab === "tasks" && auxiliaryPanelContent}
+        {activeTab === "templates" && templatesPanelContent}
       </div>
     </ResizableTerminalPanelFrame>
   );

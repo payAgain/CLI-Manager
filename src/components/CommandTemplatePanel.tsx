@@ -1,11 +1,10 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/shallow";
 import { useTemplateStore } from "../stores/templateStore";
 import { useTerminalStore } from "../stores/terminalStore";
 import { useProjectStore } from "../stores/projectStore";
-import type { CommandTemplate, Project } from "../lib/types";
+import type { CommandTemplate, Project, TerminalSession } from "../lib/types";
 import { Check, ChevronDown, Pencil, Play, Plus, Search, TerminalSquare, Trash2, X } from "./icons";
-import { Popover, PopoverTrigger, PopoverContent } from "./ui/popover";
 import { EmptyState } from "./ui/EmptyState";
 import { Input } from "./ui/input";
 import { Skeleton } from "./ui/Skeleton";
@@ -14,13 +13,16 @@ import { logError } from "../lib/logger";
 import { useI18n } from "../lib/i18n";
 import { RecentCommandTemplates } from "./RecentCommandTemplates";
 import { terminalProcessManager } from "../terminal/core/TerminalProcessManager";
+import { TerminalPanelHeader } from "./terminal/TerminalPanelHeader";
 
 type TemplateScope = "global" | "project" | "session";
 type ScopeFilter = "all" | TemplateScope;
 
-function resolveCommand(command: string, project?: Project): string {
+function resolveCommand(command: string, project?: Project, session?: TerminalSession): string {
   if (!project) return command;
-  const projectPath = project.environment_type === "ssh" ? project.remote_path : project.path;
+  const projectPath = project.environment_type === "ssh"
+    ? session?.remotePath || project.remote_path
+    : session?.cwd || project.path;
   return command
     .replace(/\$\{projectPath\}/g, projectPath)
     .replace(/\$\{projectName\}/g, project.name);
@@ -33,9 +35,9 @@ function getTemplateScope(template: CommandTemplate): TemplateScope {
 }
 
 interface CommandTemplatePanelProps {
-  popoverSide?: "top" | "right" | "bottom" | "left";
-  toneClassName?: string;
-  popoverStyle?: CSSProperties;
+  activeSessionId: string | null;
+  project?: Project | null;
+  onClose: () => void;
 }
 
 interface InlineSelectOption {
@@ -137,9 +139,9 @@ function InlinePanelSelect({ value, options, onChange, ariaLabel }: InlinePanelS
 }
 
 export function CommandTemplatePanel({
-  popoverSide = "bottom",
-  toneClassName = "",
-  popoverStyle,
+  activeSessionId: requestedSessionId,
+  project,
+  onClose,
 }: CommandTemplatePanelProps) {
   const { t } = useI18n();
   const {
@@ -153,11 +155,8 @@ export function CommandTemplatePanel({
     deleteSessionTemplate,
     pruneSessionTemplates,
   } = useTemplateStore();
-  const { sessions, activeSessionId } = useTerminalStore(
-    useShallow((s) => ({ sessions: s.sessions, activeSessionId: s.activeSessionId }))
-  );
+  const sessions = useTerminalStore(useShallow((s) => s.sessions));
   const { projects } = useProjectStore();
-  const [open, setOpen] = useState(false);
   const [view, setView] = useState<"templates" | "recent">("templates");
   const [showForm, setShowForm] = useState(false);
   const [editingTemplate, setEditingTemplate] = useState<CommandTemplate | null>(null);
@@ -169,7 +168,11 @@ export function CommandTemplatePanel({
   const [description, setDescription] = useState("");
   const [scope, setScope] = useState<TemplateScope>("global");
   const [projectId, setProjectId] = useState<string | null>(null);
-  const [panelLoading, setPanelLoading] = useState(false);
+  const [panelLoading, setPanelLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const activeSession = sessions.find(s => s.id === requestedSessionId && (!s.kind || s.kind === "pty"));
+  const activeSessionId = activeSession?.id ?? null;
+  const activeProject = project ?? projects.find(p => p.id === activeSession?.projectId);
 
   const scopeOptions: InlineSelectOption[] = [
     { value: "global", label: t("commandTemplate.scope.global") },
@@ -188,35 +191,24 @@ export function CommandTemplatePanel({
   ];
 
   useEffect(() => {
-    fetchTemplates();
-  }, [fetchTemplates]);
+    let cancelled = false;
+    void fetchTemplates().catch(error => {
+      logError("Failed to load command templates", error);
+      toast.error(t("commandTemplate.loadFailed"));
+    }).finally(() => { if (!cancelled) setPanelLoading(false); });
+    return () => { cancelled = true; };
+  }, [fetchTemplates, t]);
 
   useEffect(() => {
     pruneSessionTemplates(sessions.map((item) => item.id));
   }, [sessions, pruneSessionTemplates]);
 
   useEffect(() => {
-    if (!open) return;
-    let cancelled = false;
-    setPanelLoading(true);
-    void Promise.all([
-      fetchTemplates(),
-      new Promise<void>((resolve) => {
-        setTimeout(resolve, 180);
-      }),
-    ]).finally(() => {
-      if (!cancelled) setPanelLoading(false);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [open, fetchTemplates]);
+    closeForm();
+    setPendingDeleteTemplate(null);
+  }, [activeSessionId, activeProject?.id]);
 
-  const activeSession = sessions.find((s) => s.id === activeSessionId);
-  const activeProject = activeSession?.projectId
-    ? projects.find((p) => p.id === activeSession.projectId)
-    : undefined;
-  const visibleTemplates = getForContext(activeSession?.projectId ?? null, activeSessionId);
+  const visibleTemplates = getForContext(activeProject?.id ?? null, activeSessionId);
 
   const filteredTemplates = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
@@ -236,7 +228,7 @@ export function CommandTemplatePanel({
     setCommand("");
     setDescription("");
     setScope("global");
-    setProjectId(null);
+    setProjectId(activeProject?.id ?? null);
   };
 
   const openCreateForm = () => {
@@ -277,10 +269,10 @@ export function CommandTemplatePanel({
 
   const handleRun = async (template: CommandTemplate) => {
     if (!activeSessionId) return;
-    const resolved = resolveCommand(template.command, activeProject);
+    if (!template.command.trim()) return;
+    const resolved = resolveCommand(template.command, activeProject, activeSession);
     try {
       await terminalProcessManager.write(activeSessionId, resolved + "\r");
-      setOpen(false);
     } catch (err) {
       toast.error(t("commandTemplate.toast.runFailed"), { description: String(err) });
       logError("Failed to run command template", {
@@ -292,6 +284,7 @@ export function CommandTemplatePanel({
   };
 
   const handleSave = async () => {
+    if (saving) return;
     const nextName = name.trim();
     const nextCommand = command.trim();
     const nextDescription = description.trim();
@@ -300,6 +293,7 @@ export function CommandTemplatePanel({
     if (!editingTemplate && scope === "project" && !projectId) return;
     if (!editingTemplate && scope === "session" && !activeSessionId) return;
 
+    setSaving(true);
     try {
       if (editingTemplate) {
         if (editingTemplate.session_id) {
@@ -317,7 +311,7 @@ export function CommandTemplatePanel({
         }
       } else if (scope === "session") {
         await createSessionTemplate(activeSessionId!, {
-          project_id: activeSession?.projectId ?? null,
+          project_id: activeProject?.id ?? null,
           session_id: activeSessionId!,
           name: nextName,
           command: nextCommand,
@@ -343,6 +337,8 @@ export function CommandTemplatePanel({
         activeSessionId,
         err,
       });
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -369,59 +365,45 @@ export function CommandTemplatePanel({
     : t("commandTemplate.emptyDescription");
 
   return (
-    <Popover
-      open={open}
-      onOpenChange={(next) => {
-        setOpen(next);
-        if (!next) {
-          closeForm();
-          setPendingDeleteTemplate(null);
-        }
-      }}
-    >
-      <PopoverTrigger asChild>
-        <button
-          className={`ui-focus-ring ui-icon-action ${toneClassName}`.trim()}
-          title={popoverSide === "left" ? undefined : t("commandTemplate.title")}
-          aria-label={t("commandTemplate.openPanel")}
-        >
-          <TerminalSquare size={14} strokeWidth={1.5} />
-        </button>
-      </PopoverTrigger>
-      <PopoverContent
-        id="command-template-panel"
-        align="start"
-        side={popoverSide}
-        className="w-[360px]"
-        style={popoverStyle}
-      >
-        <div className="command-template-panel__header">
-          <div className="flex min-w-0 items-center gap-2">
-            <span className="command-template-panel__title-icon">
-              <TerminalSquare size={15} strokeWidth={1.8} />
-            </span>
-            <span className="truncate text-sm font-semibold text-on-surface">{t("commandTemplate.title")}</span>
+    <section id="command-template-panel" className="ui-command-template-sidebar ui-side-panel" aria-label={t("commandTemplate.title")}>
+        <TerminalPanelHeader
+          className="command-template-panel__header"
+          icon={<TerminalSquare size={15} strokeWidth={1.8} />}
+          title={t("commandTemplate.title")}
+          titleAccessory={view === "templates" && !showForm ? (
             <span className="command-template-panel__count" aria-label={t("commandTemplate.countLabel", { count: filteredTemplates.length })}>
               {filteredTemplates.length}
             </span>
-          </div>
-          <button
-            type="button"
-            onClick={openCreateForm}
-            className="command-template-panel__new-button ui-focus-ring"
-            aria-label={showForm && !editingTemplate ? t("commandTemplate.collapseForm") : t("commandTemplate.expandForm")}
-            title={t("settings.templates.new")}
-          >
-            <Plus size={16} strokeWidth={2} />
-            <span>{t("commandTemplate.newShort")}</span>
-          </button>
+          ) : undefined}
+          actions={(
+            <>
+              <button
+                type="button"
+                onClick={openCreateForm}
+                className="command-template-panel__new-button ui-focus-ring"
+                aria-label={showForm && !editingTemplate ? t("commandTemplate.collapseForm") : t("commandTemplate.expandForm")}
+                title={t("settings.templates.new")}
+              >
+                <Plus size={14} strokeWidth={2} />
+                <span>{t("commandTemplate.newShort")}</span>
+              </button>
+              <button type="button" className="command-template-panel__icon-button ui-focus-ring"
+                onClick={onClose} aria-label={t("commandTemplate.closePanel")} title={t("commandTemplate.closePanel")}>
+                <X size={14} />
+              </button>
+            </>
+          )}
+        />
+        <div className="command-template-panel__target" data-has-target={activeSession ? "true" : "false"} title={activeSession?.title}>
+          <TerminalSquare size={12} />
+          <span>{activeSession ? t("commandTemplate.targetTerminal", { name: activeSession.title }) : t("commandTemplate.inactiveHint")}</span>
         </div>
 
-        <div className="ui-command-template-views" role="group" aria-label={t("commandTemplate.recent.viewLabel")}>
+        <div hidden={showForm} className="ui-command-template-views" role="group" aria-label={t("commandTemplate.recent.viewLabel")}>
           <button type="button" aria-pressed={view === "templates"} onClick={() => setView("templates")}>{t("commandTemplate.recent.saved")}</button>
           <button type="button" aria-pressed={view === "recent"} onClick={() => { closeForm(); setView("recent"); }}>{t("commandTemplate.recent.title")}</button>
         </div>
-        <div className="command-template-panel__filters">
+        <div hidden={showForm} className="command-template-panel__filters ui-side-panel-toolbar">
           <div className="command-template-panel__search ui-focus-ring">
             <Search size={13} strokeWidth={1.8} />
             <input
@@ -458,12 +440,13 @@ export function CommandTemplatePanel({
           </div>
         </div>
 
-        {view === "recent" && <RecentCommandTemplates projectId={activeSession?.projectId ?? null} query={searchQuery} onSelect={(value) => {
+        <div className="command-template-panel__body ui-side-panel-scroll ui-thin-scroll">
+        {view === "recent" && !showForm && <RecentCommandTemplates projectId={activeProject?.id ?? null} query={searchQuery} onSelect={(value) => {
           resetForm();
           setCommand(value);
           setName(value.slice(0, 80));
-          setProjectId(activeSession?.projectId ?? null);
-          setScope(activeSession?.projectId ? "project" : "global");
+          setProjectId(activeProject?.id ?? null);
+          setScope(activeProject?.id ? "project" : "global");
           setView("templates");
           setScopeFilter("all");
           setSearchQuery("");
@@ -481,21 +464,25 @@ export function CommandTemplatePanel({
             </div>
             <Input
               type="text"
+              autoFocus
               placeholder={t("settings.templates.name")}
+              aria-label={t("settings.templates.name")}
               value={name}
               onChange={(e) => setName(e.target.value)}
               className="h-7 text-xs"
             />
-            <Input
-              type="text"
+            <textarea
+              rows={4}
               placeholder={t("settings.templates.commandPlaceholder")}
+              aria-label={t("settings.templates.command")}
               value={command}
               onChange={(e) => setCommand(e.target.value)}
-              className="h-7 text-xs"
+              className="ui-input ui-focus-ring w-full resize-y px-2 py-2 font-mono text-xs"
             />
             <Input
               type="text"
               placeholder={t("settings.templates.description")}
+              aria-label={t("settings.templates.description")}
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               className="h-7 text-xs"
@@ -537,17 +524,17 @@ export function CommandTemplatePanel({
               <button
                 type="button"
                 onClick={handleSave}
-                disabled={saveDisabled}
+                disabled={saveDisabled || saving}
                 className="ui-flat-action ui-primary-action h-6 px-2 text-[10px] disabled:opacity-50"
                 aria-label={t("commandTemplate.save")}
               >
-                {t("common.save")}
+                {t(saving ? "settings.templates.saving" : "common.save")}
               </button>
             </div>
           </div>
         )}
 
-        <div hidden={view !== "templates"} className="command-template-panel__list ui-thin-scroll">
+        <div hidden={view !== "templates" || showForm} className="command-template-panel__list">
           {panelLoading ? (
             <div className="space-y-3 px-3 py-3">
               {[1, 2, 3].map((item) => (
@@ -574,30 +561,19 @@ export function CommandTemplatePanel({
               return (
                 <div
                   key={template.id}
-                  role="button"
-                  tabIndex={0}
-                  className="command-template-panel__row ui-focus-ring"
-                  title={activeSessionId ? t("commandTemplate.runNamed", { name: template.name }) : t("commandTemplate.inactiveHint")}
-                  onClick={() => {
-                    void handleRun(template);
-                  }}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter" || event.key === " ") {
-                      event.preventDefault();
-                      void handleRun(template);
-                    }
-                  }}
+                  className="command-template-panel__row"
                 >
-                  <span className="command-template-panel__row-icon">
-                    <TerminalSquare size={18} strokeWidth={1.8} />
-                  </span>
-                  <span className="min-w-0 flex-1">
+                  <button type="button" className="command-template-panel__run ui-focus-ring"
+                    disabled={!activeSessionId || !template.command.trim()}
+                    aria-label={t("commandTemplate.runNamed", { name: template.name })}
+                    title={template.command || t("commandTemplate.noCommand")}
+                    onClick={() => { void handleRun(template); }}>
                     <span className="flex min-w-0 items-center gap-1.5">
-                      <span className="truncate text-xs font-semibold text-on-surface">{template.name}</span>
-                      <span className="command-template-panel__scope-pill">{scopeLabel(template)}</span>
+                      <span className="ui-side-panel-item-title truncate text-xs font-semibold text-on-surface" title={template.name}>{template.name}</span>
+                      <span className="command-template-panel__scope-pill" title={scopeLabel(template)}>{scopeLabel(template)}</span>
                     </span>
-                    <code className="block truncate pt-1 font-mono text-[10px] text-primary">{preview}</code>
-                  </span>
+                    <code className="command-template-panel__preview block truncate pt-1 font-mono text-[10px] text-text-secondary">{preview}</code>
+                  </button>
                   <span className="command-template-panel__actions" aria-hidden="false">
                     {pendingDeleteTemplate?.id === template.id ? (
                       <span className="command-template-panel__delete-confirm">
@@ -631,7 +607,7 @@ export function CommandTemplatePanel({
                       <>
                         <button
                           type="button"
-                          disabled={!activeSessionId}
+                          disabled={!activeSessionId || !template.command.trim()}
                           onClick={(event) => {
                             event.stopPropagation();
                             void handleRun(template);
@@ -675,13 +651,7 @@ export function CommandTemplatePanel({
             })
           )}
         </div>
-
-        {!activeSessionId && (
-          <div className="border-t border-border/60 px-3 py-2 text-[10px] text-on-surface-variant">
-            {t("commandTemplate.inactiveHint")}
-          </div>
-        )}
-      </PopoverContent>
-    </Popover>
+        </div>
+    </section>
   );
 }

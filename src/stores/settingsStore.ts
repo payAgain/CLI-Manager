@@ -90,7 +90,7 @@ export type SystemResourceCardKey =
   | "disk"
   | "gpu"
   | "processes";
-export type TerminalPanelWidthKey = "merged" | "stats" | "git" | "replay" | "files" | "systemResources";
+export type TerminalPanelWidthKey = "merged" | "templates" | "stats" | "git" | "replay" | "files" | "systemResources";
 export type TerminalPanelWidthSettings = Record<TerminalPanelWidthKey, number>;
 export type TerminalSettingsSectionKey = "behavior" | "paneMarker" | "shells" | "themes" | "background";
 export type TerminalSettingsSectionsExpanded = Record<TerminalSettingsSectionKey, boolean>;
@@ -108,6 +108,7 @@ export const TERMINAL_SCROLLBACK_ROWS_DEFAULT = 9000;
 export const TERMINAL_PANEL_WIDTH_MAX = 500;
 export const TERMINAL_PANEL_WIDTH_DEFAULTS: TerminalPanelWidthSettings = {
   merged: 300,
+  templates: 300,
   stats: 203,
   git: 196,
   replay: 300,
@@ -706,6 +707,7 @@ export function migrateTerminalPanelWidths(value: unknown): TerminalPanelWidthSe
   const raw = typeof value === "object" && value !== null ? value as Record<string, unknown> : {};
   return {
     merged: clampNumber(raw.merged, TERMINAL_PANEL_WIDTH_DEFAULTS.merged, TERMINAL_PANEL_WIDTH_MAX, TERMINAL_PANEL_WIDTH_DEFAULTS.merged),
+    templates: clampNumber(raw.templates, TERMINAL_PANEL_WIDTH_DEFAULTS.templates, TERMINAL_PANEL_WIDTH_MAX, TERMINAL_PANEL_WIDTH_DEFAULTS.templates),
     stats: clampNumber(raw.stats, TERMINAL_PANEL_WIDTH_DEFAULTS.stats, TERMINAL_PANEL_WIDTH_MAX, TERMINAL_PANEL_WIDTH_DEFAULTS.stats),
     git: clampNumber(raw.git, TERMINAL_PANEL_WIDTH_DEFAULTS.git, TERMINAL_PANEL_WIDTH_MAX, TERMINAL_PANEL_WIDTH_DEFAULTS.git),
     replay: clampNumber(raw.replay, TERMINAL_PANEL_WIDTH_DEFAULTS.replay, TERMINAL_PANEL_WIDTH_MAX, TERMINAL_PANEL_WIDTH_DEFAULTS.replay),
