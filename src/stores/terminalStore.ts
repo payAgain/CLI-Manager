@@ -5,6 +5,7 @@ import { parseSubagentTranscript, readSubagentTranscriptLifecycle, type Subagent
 import { acceptsAgentHook, applyAgentDetection, applyHookAgentIdentity, type AgentDetection } from "../lib/terminalAgent";
 import { create } from "zustand";
 import { applyAgentLaunchPermissions } from "../lib/agentLaunchPermissions";
+import { resolveDirectCliToolCommand } from "../lib/cliTools";
 import { invoke } from "@tauri-apps/api/core";
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { toast } from "sonner";
@@ -1298,7 +1299,8 @@ function getProjectAgentTerminalMetadata(projectId?: string, startupCmd?: string
   const project = projectId
     ? useProjectStore.getState().projects.find((item) => item.id === projectId)
     : undefined;
-  return createAgentTerminalMetadata(project, Boolean(startupCmd));
+  const directTool = resolveDirectCliToolCommand(startupCmd);
+  return createAgentTerminalMetadata(directTool ? { cli_tool: directTool } : project, Boolean(startupCmd));
 }
 
 function getRestoredAgentTerminalMetadata(
@@ -1342,7 +1344,8 @@ async function resolvePtyLaunch(options: DetachedPtyLaunchOptions, os: OsPlatfor
       ? parseProjectEnvVars(project) ?? {}
       : options.envVars ?? {};
     const toolSource = resolveSshToolSource(options.cliTool
-      ?? (project?.environment_type === "ssh" ? project.cli_tool : ""));
+      ?? resolveDirectCliToolCommand(baseStartupCmd)
+      ?? (baseStartupCmd && project?.environment_type === "ssh" ? project.cli_tool : ""));
     let agentInstallation: ReturnType<typeof useSshAgentIntegrationStore.getState>["installations"][number] | undefined;
     let hookBridgeEnabled = false;
     if (toolSource) {
@@ -1571,7 +1574,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     let launch: ResolvedPtyLaunch;
     let sessionId: string;
     try {
-      launch = await resolvePtyLaunch({ projectId, worktreeId, sshHostId, cwd, startupCmd, envVars, shell }, os);
+      launch = await resolvePtyLaunch({ projectId, worktreeId, sshHostId, cwd, remotePath: sshHostId ? cwd : undefined, startupCmd, envVars, shell }, os);
       recordCrashActivity("terminal.session_create", {
         projectId: projectId ?? null,
         worktreeId: worktreeId ?? null,

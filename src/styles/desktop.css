@@ -756,6 +756,21 @@ h3 + .ui-history-settings-description { margin-top: 8px; }
 .ui-recent-command > code { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--text-primary); font-size: var(--ui-font-caption); }
 .ui-recent-command > span { flex-shrink: 0; color: var(--text-muted); font-size: var(--ui-font-caption); }
 
+/* Terminal creation and templates share the workspace's transport and side-panel layout. */
+.ui-new-terminal-trigger { gap: 2px; width: 34px !important; }
+.ui-terminal-action-sort-item:has([data-state="open"])::after { display: none; }
+.ui-new-terminal-menu { width: 264px; max-width: calc(100vw - 16px); padding: 5px; border: 1px solid var(--term-panel-border, var(--border)); background: var(--term-panel-bg, var(--surface)); color: var(--term-panel-fg, var(--text-primary)); box-shadow: 0 8px 24px #0003; }
+.ui-new-terminal-option { display: flex; align-items: center; gap: 10px; width: 100%; padding: 9px 10px; border: 0; border-radius: 5px; background: transparent; text-align: left; }
+.ui-new-terminal-option:hover, .ui-new-terminal-option:focus-visible { background: var(--term-panel-card, var(--interactive-hover-bg)); }
+.ui-new-terminal-option > svg { flex-shrink: 0; }
+.ui-new-terminal-option > span { display: grid; gap: 3px; min-width: 0; }
+.ui-new-terminal-option strong { font-size: var(--ui-font-label); font-weight: 500; }
+.ui-new-terminal-option small { font-size: var(--ui-font-caption); color: var(--term-panel-dim, var(--text-muted)); }
+.ui-new-terminal-group { display: flex; align-items: center; justify-content: space-between; margin-top: 4px; padding: 9px 10px 5px; border-top: 1px solid var(--term-panel-border, var(--border)); color: var(--term-panel-dim, var(--text-muted)); font-size: var(--ui-font-caption); }
+.ui-new-terminal-group > button { display: grid; place-items: center; width: 22px; height: 22px; border-radius: 4px; }
+.ui-new-terminal-group > button:disabled { opacity: .4; }
+.ui-new-terminal-agents { max-height: min(380px, 55vh); overflow-y: auto; }
+.ui-new-terminal-agents > p { padding: 10px; font-size: var(--ui-font-caption); line-height: 1.7; color: var(--term-panel-dim, var(--text-muted)); }
 /* Shared sidebar anatomy: stable headings, quiet sections and readable list rows. */
 .ui-side-panel, .ui-terminal-side-panel-frame, .subagent-transcript-shell { --ui-panel-rule: color-mix(in srgb, var(--term-panel-border, var(--border)) 60%, transparent); }
 .ui-side-panel { min-width: 0; color: var(--term-panel-fg, var(--text-primary)); font-size: var(--ui-font-label); }

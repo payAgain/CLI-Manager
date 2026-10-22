@@ -140,6 +140,12 @@ export const CLI_TOOL_DESCRIPTORS: readonly CliToolDescriptor[] = [
 
 export const CLI_TOOL_COMMANDS = CLI_TOOL_DESCRIPTORS.map((tool) => tool.command);
 
+/** Direct Agent launches have a known executable; arbitrary shell text is not an Agent selection. */
+export function resolveDirectCliToolCommand(command: string | null | undefined): string | undefined {
+  const executable = command?.trim().split(/\s+/, 1)[0]?.toLowerCase().replace(/\.(?:exe|cmd|ps1)$/, "");
+  return CLI_TOOL_DESCRIPTORS.find(tool => tool.command === executable)?.command;
+}
+
 const HISTORY_SOURCE_ICON_KEYS: Record<HistorySourceId, CliToolIconKey> = {
   claude: "claude-code",
   codex: "codex",

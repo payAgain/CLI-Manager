@@ -49,6 +49,8 @@ import { collectWorkspanSessionIds, type TerminalWorkspan } from "../stores/term
 import { SplitTerminalView } from "./SplitTerminalView";
 import { XTermTerminal } from "./XTermTerminal";
 import { CommandTemplatePanel } from "./CommandTemplatePanel";
+import { NewTerminalMenu } from "./terminal/NewTerminalMenu";
+import { resolveNewTerminalCommand, resolveNewTerminalContext } from "../lib/newTerminal";
 import { useBackgroundOperationStore } from "../stores/backgroundOperationStore";
 import { useSshAgentIntegrationStore } from "../stores/sshAgentIntegrationStore";
 import type { BackgroundTaskMeta } from "./BackgroundTasksPanel";
@@ -63,9 +65,9 @@ import { FileExplorerSidebar } from "./files/LazyFileExplorerSidebar";
 import { openWindowsTerminal } from "../lib/externalTerminal";
 import { normalizeDirectCodexStartupCommand, resolveProjectStartupCommand } from "../lib/projectStartupCommand";
 import { projectSupportsCapability, resolveProjectCapabilities, type ProjectCapability } from "../lib/projectCapabilities";
-import { resolveCliToolIconKey, type CliToolIconKey } from "../lib/cliTools";
+import { resolveCliToolIconKey, type CliToolDescriptor, type CliToolIconKey } from "../lib/cliTools";
 import { parseProjectEnvVars } from "../lib/projectEnv";
-import { Activity, Terminal, TerminalSquare, Sparkles, Plus, ListClockIcon, X, Copy, Maximize2, Minimize2, ChevronDown, ChevronRight, BarChart3, GitBranch, Folder, FolderOpen, Hash, Check, Cloud, Undo2 } from "./icons";
+import { Activity, Terminal, TerminalSquare, Sparkles, ListClockIcon, X, Copy, Maximize2, Minimize2, ChevronDown, ChevronRight, BarChart3, GitBranch, Folder, FolderOpen, Hash, Check, Cloud, Undo2 } from "./icons";
 import { WorktreeIcon } from "./WorktreeIcon";
 import { VendorIcon, inferVendor, type VendorKey } from "./VendorIcon";
 import { CliToolIcon } from "./CliToolIcon";
@@ -100,6 +102,7 @@ import { ConfirmDialog } from "./ConfirmDialog";
 import { getTerminalTheme, isLightTerminalTheme } from "../lib/terminalThemes";
 import { getTerminalSidePanelSkinStyle } from "./stats/termStatsUi";
 import {
+  findWorktreeForSession,
   projectWithWorktreePath,
   isSameProjectFileContext,
   resolveProjectForSessionFileContext,
@@ -2466,6 +2469,7 @@ export function TerminalTabs({
   const dismissWorktreeDepsPrompt = useWorktreeStore((s) => s.dismissDepsPrompt);
   const removeWorktree = useWorktreeStore((s) => s.removeWorktree);
   const useExternalTerminal = useSettingsStore((s) => s.useExternalTerminal);
+  const defaultShell = useSettingsStore((s) => s.defaultShell);
   const fontSize = useSettingsStore((s) => s.fontSize);
   const fontFamily = useSettingsStore((s) => s.fontFamily);
   const resolvedTheme = useSettingsStore((s) => s.resolvedTheme);
@@ -2541,6 +2545,7 @@ export function TerminalTabs({
   const [replayOpen, setReplayOpen] = useState(false);
   const [filesOpen, setFilesOpen] = useState(false);
   const [tasksPanelOpen, setTasksPanelOpen] = useState(false);
+  const creatingTerminalRef = useRef(false);
   const [finishTarget, setFinishTarget] = useState<{ project: Project; worktree: WorktreeRecord } | null>(null);
   const [discardTarget, setDiscardTarget] = useState<{ project: Project; worktree: WorktreeRecord } | null>(null);
   const [activeToolbarDragId, setActiveToolbarDragId] = useState<string | null>(null);
@@ -2689,6 +2694,10 @@ export function TerminalTabs({
   const panelProject = panelSession?.projectId ? projectById.get(panelSession.projectId) ?? null : scopedProject;
   const panelCapabilities = resolveProjectCapabilities(panelProject);
   const panelGitSupported = panelCapabilities.git || panelProject?.environment_type === "ssh";
+  const activeWorktree = useMemo(
+    () => findWorktreeForSession(activeSession, sessions, worktrees),
+    [activeSession, sessions, worktrees]
+  );
   const filePanelProject = useMemo(
     () => resolveProjectForSessionFileContext(activeSession, sessions, projects, projectById, worktrees)
       ?? (scopedProject ? (scopedWorktree ? projectWithWorktreePath(scopedProject, scopedWorktree) : scopedProject) : null),
@@ -2697,6 +2706,14 @@ export function TerminalTabs({
   const sidePanelProjectPath = panelProject?.environment_type === "ssh"
     ? panelProject.remote_path.trim() || null
     : panelSession?.cwd?.trim() || filePanelProject?.path.trim() || null;
+  const newTerminalContext = useMemo(() => resolveNewTerminalContext(
+    activeSession?.kind === "subagent-transcript"
+      ? panelSession?.kind === "subagent-transcript" ? null : panelSession
+      : activeSession,
+    filePanelProject ?? panelProject,
+    activeWorktree ?? scopedWorktree,
+    defaultShell,
+  ), [activeSession, activeWorktree, defaultShell, filePanelProject, panelProject, panelSession, scopedWorktree]);
   const workspanTabModels = useMemo(() => visibleWorkspanLayouts.map(({ workspan, sessionIds, closeSessionIds }) => {
     const memberSessions = sessionIds
       .map((sessionId) => sessions.find((session) => session.id === sessionId))
@@ -2985,32 +3002,31 @@ export function TerminalTabs({
     return Date.now() < closeConfirmOutsideGuardUntilRef.current;
   }, []);
 
-  const handleNewTab = useCallback(async () => {
-    if (rejectMissingSessionWorktree(activeSession)) return;
-    const newTerminalContext =
-      activeSession?.kind === "subagent-transcript"
-        ? { cwd: undefined, title: "Terminal" }
-        : activeSession?.kind === "file-editor"
-          ? { cwd: activeSession.fileEditor?.projectPath, title: "Terminal" }
-          : { cwd: activeSession?.cwd, title: activeSession?.title ?? "Terminal" };
-    const activeProject = activeSession?.projectId ? projectById.get(activeSession.projectId) : null;
-    if (useExternalTerminal) {
-      if (rejectUnsupportedCapability(activeProject, "externalTerminal")) return;
-      await openWindowsTerminal([{ title: newTerminalContext.title, cwd: newTerminalContext.cwd ?? undefined }]);
+  const handleCreateTerminal = useCallback(async (tool: CliToolDescriptor | null) => {
+    if (creatingTerminalRef.current) return;
+    if (rejectMissingWorktree(newTerminalContext.worktreeId ? worktreeById.get(newTerminalContext.worktreeId) : null)) return;
+    const startupCmd = tool ? resolveNewTerminalCommand(newTerminalContext, tool.command) : "";
+    const title = tool?.label ?? newTerminalContext.title;
+    creatingTerminalRef.current = true;
+    try {
+      if (useExternalTerminal) {
+        if (newTerminalContext.remote) {
+          toast.info(t("remoteCapabilities.unsupportedTitle"), { description: t("remoteCapabilities.unsupportedDescription") });
+          return;
+        }
+        if (rejectUnsupportedCapability(newTerminalContext.project, "externalTerminal")) return;
+        await openWindowsTerminal([{ title, cwd: newTerminalContext.cwd, shell: newTerminalContext.shell, startupCmd }]);
+      } else {
+        await createSession(newTerminalContext.projectId, newTerminalContext.cwd, title, startupCmd,
+          newTerminalContext.envVars, newTerminalContext.shell, undefined, newTerminalContext.worktreeId, newTerminalContext.sshHostId);
+      }
       closeHistory();
       setActiveWorkspaceTab("terminal");
-      return;
+    } finally {
+      creatingTerminalRef.current = false;
     }
-    const isRemoteProject = activeProject?.environment_type === "ssh";
-    await createSession(
-      isRemoteProject ? activeProject.id : undefined,
-      newTerminalContext.cwd ?? undefined,
-      newTerminalContext.title,
-      isRemoteProject ? "" : undefined,
-    );
-    closeHistory();
-    setActiveWorkspaceTab("terminal");
-  }, [activeSession, closeHistory, createSession, projectById, rejectMissingSessionWorktree, rejectUnsupportedCapability, useExternalTerminal]);
+  }, [closeHistory, createSession, newTerminalContext, rejectMissingWorktree, rejectUnsupportedCapability, t, useExternalTerminal, worktreeById]);
+  const handleNewTab = useCallback(() => handleCreateTerminal(null), [handleCreateTerminal]);
 
   const handleOpenScopedTerminal = useCallback(async () => {
     if (!scopedProject || useExternalTerminal) return;
@@ -3876,13 +3892,7 @@ export function TerminalTabs({
     };
     const buttonMap: Record<string, ReactNode> = {
       new: (
-        <button
-          onClick={handleNewTab}
-          className="ui-focus-ring ui-icon-action ui-primary-action ui-action-new"
-          aria-label={t("terminal.toolbar.newTerminal")}
-        >
-          <Plus size={15} strokeWidth={2} />
-        </button>
+        <NewTerminalMenu context={newTerminalContext} onCreate={handleCreateTerminal} style={terminalActionSidebarStyle} />
       ),
       templates: (
         <CommandTemplatePanel
@@ -4046,6 +4056,8 @@ export function TerminalTabs({
     filesPanelActive,
     gitPanelActive,
     handleNewTab,
+    handleCreateTerminal,
+    newTerminalContext,
     handleOpenHistoryTab,
     handleToggleFilesPanel,
     handleToggleGitChangesPanel,
