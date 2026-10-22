@@ -1,6 +1,6 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { ArrowRightLeft, Bot, Check, ChevronDown, ChevronRight, Folder, ListChecks, MessageSquare, RefreshCw, Search, Star, Terminal, Trash2, X } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode, type RefObject } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type ReactNode, type RefObject } from "react";
 import type { Group, HistoryIndexStatus, HistorySearchHit, HistorySessionView, HistorySourceFilter, Project } from "../../lib/types";
 import { useI18n } from "../../lib/i18n";
 import { HISTORY_SOURCE_DESCRIPTOR_BY_ID, type HistorySourceId } from "../../lib/historySources";
@@ -94,13 +94,13 @@ function formatSessionClock(ts: number): string {
 }
 
 function rowHeight(row: HistoryListRow): number {
-  if (row.type === "missingParent") return 24;
-  if (row.type === "group") return 28;
+  if (row.type === "missingParent") return 38;
+  if (row.type === "group") return 44;
   if (row.type === "searchHeader" || row.type === "searching") return 32;
   if (row.type === "empty") return 88;
   if (row.type === "loading" || row.type === "loadMore") return 56;
   if (row.type === "searchHit") return 72;
-  return row.depth > 0 ? 32 : 46;
+  return (row.depth > 0 ? 54 : 62) + (row.familyEnd ? 8 : 0);
 }
 
 function SelectionCheckbox({
@@ -653,7 +653,8 @@ export function HistoryListPane({
   return (
     <aside
       ref={sidebarRef}
-      className="ui-history-sidebar ui-history-sidebar-compact relative flex min-h-0 min-w-[220px] max-w-[70%] flex-col"
+      className="ui-history-sidebar ui-history-sidebar-compact history-hierarchy relative flex min-h-0 min-w-[220px] max-w-[70%] flex-col"
+      data-layout="family-tree"
       style={{ width: historySidebarWidth }}
     >
       <div className="ui-history-sidebar-top">
@@ -786,7 +787,7 @@ export function HistoryListPane({
         )}
       </div>
 
-      <div ref={sessionListRef} onScroll={onSessionListScroll} className="flex-1 overflow-y-auto">
+      <div ref={sessionListRef} onScroll={onSessionListScroll} className="history-hierarchy-scroll flex-1 overflow-y-auto">
         <div className="relative w-full" style={{ height: rowVirtualizer.getTotalSize() }}>
           {rowVirtualizer.getVirtualItems().map((virtualRow) => {
             const row = rows[virtualRow.index];
@@ -803,7 +804,11 @@ export function HistoryListPane({
                 key={virtualRow.key}
                 ref={rowVirtualizer.measureElement}
                 data-index={virtualRow.index}
-                className="absolute left-0 top-0 w-full"
+                className={`history-hierarchy-item absolute left-0 top-0 w-full${row.type === "session" || row.type === "missingParent" ? " history-family-fragment" : ""}`}
+                data-family={row.type === "session" || row.type === "missingParent" ? row.familyKey : undefined}
+                data-family-start={row.type === "session" || row.type === "missingParent" ? row.familyStart || undefined : undefined}
+                data-family-end={row.type === "session" || row.type === "missingParent" ? row.familyEnd || undefined : undefined}
+                data-family-expanded={row.type === "session" || row.type === "missingParent" ? row.familyExpanded || undefined : undefined}
                 style={{
                   transform: `translateY(${virtualRow.start}px)`,
                 }}
@@ -841,65 +846,79 @@ export function HistoryListPane({
                 )}
 
                 {row.type === "group" && (
-                  <button type="button" className="ui-history-agent-group ui-focus-ring"
+                  <button type="button" className="history-agent-section ui-focus-ring"
                     onClick={() => toggleAgent(row.source)} aria-expanded={!collapsedAgents.has(row.source)}
                     aria-label={t(collapsedAgents.has(row.source) ? "history.agentGroup.expand" : "history.agentGroup.collapse", { agent: agentLabel })}>
-                    {collapsedAgents.has(row.source) ? <ChevronRight size={13} /> : <ChevronDown size={13} />}
-                    <SessionSourceIcon source={row.source} size={15} />
-                    <span className="ui-history-agent-name">{agentLabel}</span>
-                    {row.count > 0 && <span className="ui-history-agent-count">{t("history.agentGroup.sessionCount", { count: row.count })}</span>}
-                    {row.subagentCount > 0 && <span className="shrink-0 text-[10px] text-text-muted">{t("history.tree.childCount", { count: row.subagentCount })}</span>}
+                    <span className="history-agent-identity">
+                      {collapsedAgents.has(row.source) ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
+                      <SessionSourceIcon source={row.source} size={14} />
+                      <span>{agentLabel}</span>
+                    </span>
+                    <span className="history-agent-counts">
+                      {row.count > 0 && <span>{t("history.agentGroup.sessionCount", { count: row.count })}</span>}
+                      {row.subagentCount > 0 && <span>{t("history.tree.childCount", { count: row.subagentCount })}</span>}
+                    </span>
                   </button>
                 )}
 
                 {row.type === "missingParent" && (
-                  <div className="ui-history-parent-note" title={`${t("history.tree.parentUnavailable")} · ${row.parentSessionId}`}>
-                    <MessageSquare size={10} />
+                  <div className="history-missing-parent" title={`${t("history.tree.parentUnavailable")} · ${row.parentSessionId}`}>
+                    <MessageSquare size={12} />
                     <span>{t("history.tree.parentUnavailable")}</span>
                   </div>
                 )}
 
                 {row.type === "session" && (
-                  <div className="ui-history-session-row" data-child={row.depth > 0 || undefined}
+                  <div className="history-session-row" data-child={row.depth > 0 || undefined}
                     data-active={row.item.sessionKey === activeSessionKey || undefined}
-                    style={{ paddingLeft: 8 + Math.min(row.depth, 6) * 10 }}
+                    data-expanded={row.childCount > 0 && expandedSessionParents.has(row.item.sessionKey) || undefined}
+                    style={{ "--history-depth": row.depth } as CSSProperties}
                     onContextMenu={(e) => handleSessionContextMenu(e, row.item)}
                     onClick={selectionMode ? () => onToggleSessionSelection(row.item.sessionKey) : undefined}>
-                    {selectionMode && <SelectionCheckbox checked={selectedSessionKeys.has(row.item.sessionKey)}
-                      title={t("history.bulk.selectSessionNamed", { title: sessionDisplayTitle })}
-                      ariaLabel={t("history.bulk.selectSessionNamed", { title: sessionDisplayTitle })}
-                      onToggle={() => onToggleSessionSelection(row.item.sessionKey)} />}
+                    <span className="history-session-selection" aria-hidden="true" />
+                    <span className="history-session-guides" aria-hidden="true">
+                      {row.branches.map((continues, level) => <span key={level} className="history-tree-guide"
+                        data-current={level === row.branches.length - 1 || undefined}
+                        data-continues={continues || undefined}
+                        style={{ "--history-guide-level": level } as CSSProperties} />)}
+                    </span>
                     {row.childCount > 0 ? (
-                      <button type="button" className="ui-history-tree-toggle ui-focus-ring"
+                      <button type="button" className="history-session-toggle ui-focus-ring"
                         onClick={(e) => { e.stopPropagation(); toggleSessionParent(row.item.sessionKey); }}
                         aria-expanded={expandedSessionParents.has(row.item.sessionKey)}
                         aria-label={t(expandedSessionParents.has(row.item.sessionKey) ? "history.tree.collapseChildren" : "history.tree.expandChildren", { count: row.childCount })}
                         title={t(expandedSessionParents.has(row.item.sessionKey) ? "history.tree.collapseChildren" : "history.tree.expandChildren", { count: row.childCount })}>
                         {expandedSessionParents.has(row.item.sessionKey) ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
                       </button>
-                    ) : row.depth > 0 ? <Bot size={11} className="ui-history-row-icon" aria-label={t("history.tree.subagent")} />
-                      : <MessageSquare size={11} className="ui-history-row-icon" />}
-                    <button type="button" className="ui-history-session-open ui-focus-ring"
+                    ) : <span className="history-session-node" aria-hidden="true">
+                      {row.depth > 0 ? <Bot size={13} /> : <MessageSquare size={13} />}
+                    </span>}
+                    <button type="button" className="history-session-open ui-focus-ring"
                       onClick={selectionMode ? undefined : () => onOpenSession(row.item.sessionKey)}
                       tabIndex={selectionMode ? -1 : undefined}
+                      aria-current={row.item.sessionKey === activeSessionKey ? "true" : undefined}
                       title={[sessionDisplayTitle, row.item.subagent?.nickname, formatTime(row.item.updated_at, language), t("history.messageCount", { count: row.item.message_count })].filter(Boolean).join("\n")}>
-                      <span className="ui-history-row-primary">
+                      <span className="history-session-primary">
                         {row.item.starred && <Star size={10} className="shrink-0 text-warning" fill="currentColor" />}
-                        <span className="ui-history-row-title">{sessionDisplayTitle}</span>
-                        {sessionWorktree && <span className="ui-history-row-badge" title={t("history.worktreeBadgeTitle", { name: sessionWorktree.name })}>{t("history.worktreeBadge")}</span>}
-                        {row.childCount > 0 && <span className="ui-history-row-badge" title={t("history.tree.childCount", { count: row.childCount })}>{row.childCount}</span>}
+                        <span className="history-session-title">{sessionDisplayTitle}</span>
                       </span>
-                      {row.depth === 0 && <span className="ui-history-row-meta">
-                        <span>{formatTime(row.item.updated_at, language)}</span>
-                        <span className="inline-flex items-center gap-1" aria-label={t("history.messageCount", { count: row.item.message_count })}>
-                          <MessageSquare size={9} />{row.item.message_count}
+                      <span className="history-session-meta">
+                        {row.depth > 0 && <span className="history-session-kind">{t("history.tree.subagent")}</span>}
+                        <time title={formatTime(row.item.updated_at, language)}>{row.depth > 0 ? formatSessionClock(row.item.updated_at) : formatTime(row.item.updated_at, language)}</time>
+                        <span className="history-session-message-count" aria-label={t("history.messageCount", { count: row.item.message_count })} title={t("history.messageCount", { count: row.item.message_count })}>
+                          <MessageSquare size={10} />{row.item.message_count}
                         </span>
-                      </span>}
+                        {sessionWorktree && <span className="history-session-worktree" title={t("history.worktreeBadgeTitle", { name: sessionWorktree.name })}>{t("history.worktreeBadge")}</span>}
+                        {row.childCount > 0 && <span className="history-session-children"><Bot size={11} />{t("history.tree.childCount", { count: row.childCount })}</span>}
+                      </span>
                     </button>
-                    <div className="ui-history-row-trailing">
-                      {row.depth > 0 && <time className="ui-history-row-clock" title={formatTime(row.item.updated_at, language)}>{formatSessionClock(row.item.updated_at)}</time>}
-                      {!selectionMode && !row.item.read_only && (row.item.source !== "claude" || !inferSubagentParentSessionId(row.item)) && (
-                        <button type="button" onClick={() => onDeleteSession(row.item)} className="ui-history-row-delete ui-focus-ring"
+                    <div className="history-session-actions">
+                      {selectionMode ? <SelectionCheckbox checked={selectedSessionKeys.has(row.item.sessionKey)}
+                        title={t("history.bulk.selectSessionNamed", { title: sessionDisplayTitle })}
+                        ariaLabel={t("history.bulk.selectSessionNamed", { title: sessionDisplayTitle })}
+                        onToggle={() => onToggleSessionSelection(row.item.sessionKey)} />
+                      : !row.item.read_only && (row.item.source !== "claude" || !inferSubagentParentSessionId(row.item)) && (
+                        <button type="button" onClick={() => onDeleteSession(row.item)} className="history-session-delete ui-focus-ring"
                           aria-label={t("history.deleteSessionNamed", { title: sessionDisplayTitle })} title={t("history.deleteSession")}>
                           <X size={12} />
                         </button>

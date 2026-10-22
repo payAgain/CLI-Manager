@@ -103,9 +103,19 @@ export function includeHistorySessionAncestors(items: HistorySessionView[], allI
   return [...result.values()];
 }
 
-export type HistorySessionTreeRow =
+interface HistorySessionTreePosition {
+  familyKey: string;
+  familyStart: boolean;
+  familyEnd: boolean;
+  familyExpanded: boolean;
+  /** One continuation flag per ancestor column, including this row's own branch. */
+  branches: boolean[];
+}
+
+export type HistorySessionTreeRow = HistorySessionTreePosition & (
   | { type: "session"; id: string; item: HistorySessionView; depth: number; childCount: number; parentSessionId: string | null }
-  | { type: "missingParent"; id: string; parentSessionId: string };
+  | { type: "missingParent"; id: string; parentSessionId: string }
+);
 
 export function buildHistorySessionTreeRows(items: HistorySessionView[], expandedParentKeys: Set<string>): HistorySessionTreeRow[] {
   const { roots, childrenByParentKey } = buildHistorySessionHierarchy(items);
@@ -119,20 +129,28 @@ export function buildHistorySessionTreeRows(items: HistorySessionView[], expande
     families.set(key, family);
   }
   for (const [key, family] of families) {
+    const familyStart = rows.length;
+    const position = { familyKey: key, familyStart: false, familyEnd: false, familyExpanded: false };
     const missingParentId = inferSubagentParentSessionId(family[0]);
-    if (missingParentId) rows.push({ type: "missingParent", id: key, parentSessionId: missingParentId });
-    for (const root of family) {
-      const stack = [{ item: root, depth: missingParentId ? 1 : 0 }];
+    if (missingParentId) rows.push({ type: "missingParent", id: key, parentSessionId: missingParentId, ...position, branches: [] });
+    for (const [rootIndex, root] of family.entries()) {
+      const stack = [{ item: root, depth: missingParentId ? 1 : 0,
+        branches: missingParentId ? [rootIndex < family.length - 1] : [] }];
       while (stack.length) {
-        const { item, depth } = stack.pop()!;
+        const { item, depth, branches } = stack.pop()!;
         const children = childrenByParentKey.get(item.sessionKey) ?? [];
         rows.push({ type: "session", id: `session:${item.sessionKey}`, item, depth, childCount: children.length,
-          parentSessionId: inferSubagentParentSessionId(item) });
+          parentSessionId: inferSubagentParentSessionId(item), ...position, branches });
         if (expandedParentKeys.has(item.sessionKey)) {
-          for (const child of [...children].reverse()) stack.push({ item: child, depth: depth + 1 });
+          for (let index = children.length - 1; index >= 0; index -= 1) {
+            stack.push({ item: children[index], depth: depth + 1, branches: [...branches, index < children.length - 1] });
+          }
         }
       }
     }
+    rows[familyStart].familyStart = true;
+    rows[rows.length - 1].familyEnd = true;
+    for (let index = familyStart; index < rows.length; index += 1) rows[index].familyExpanded = rows.length - familyStart > 1;
   }
   return rows;
 }

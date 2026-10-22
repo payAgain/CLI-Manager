@@ -78,6 +78,40 @@ test("missing parents remain a separate task group, and corrupt cycles never hid
   assert.deepEqual(cycleRows.filter(row => row.type === "session").map(row => row.item.session_id).sort(), ["a", "b", "self"]);
 });
 
+test("virtualized family rows retain ancestor continuations and exact group boundaries", () => {
+  const parent = session("main");
+  const first = session("first", "main");
+  const nested = session("nested", "first");
+  const last = session("last", "main");
+  const standalone = session("standalone");
+  const items = [parent, first, nested, last, standalone];
+  const rows = buildHistorySessionTreeRows(items, new Set([parent.sessionKey, first.sessionKey]));
+  assert.deepEqual(rows.map(row => [row.item.session_id, row.branches, row.familyStart, row.familyEnd]), [
+    ["main", [], true, false],
+    ["first", [true], false, false],
+    ["nested", [true, false], false, false],
+    ["last", [false], false, true],
+    ["standalone", [], true, true],
+  ]);
+  assert.equal(new Set(rows.slice(0, 4).map(row => row.familyKey)).size, 1);
+  assert.equal(rows.slice(0, 4).every(row => row.familyExpanded), true);
+  assert.equal(rows[4].familyExpanded, false);
+  const collapsed = buildHistorySessionTreeRows(items, new Set());
+  assert.equal(collapsed[0].familyEnd, true);
+  assert.equal(collapsed[0].familyExpanded, false);
+});
+
+test("missing-parent families connect orphan siblings without leaking into the next family", () => {
+  const rows = buildHistorySessionTreeRows([session("a", "missing"), session("b", "missing"), session("other")], new Set());
+  assert.equal(rows[0].type, "missingParent");
+  assert.equal(rows[0].familyStart, true);
+  assert.deepEqual(rows[1].branches, [true]);
+  assert.deepEqual(rows[2].branches, [false]);
+  assert.equal(rows[2].familyEnd, true);
+  assert.equal(rows[3].familyStart, true);
+  assert.notEqual(rows[2].familyKey, rows[3].familyKey);
+});
+
 test("Claude path compatibility is independent of Codex's non-cascading file deletion", () => {
   const child = session("child", null, { source: "claude", file_path: "C:\\Users\\dev\\.claude\\projects\\app\\main\\subagents\\agent-child.jsonl" });
   const parent = session("main", null, { source: "claude", file_path: "c:/Users/dev/.claude/projects/app/main.jsonl" });
