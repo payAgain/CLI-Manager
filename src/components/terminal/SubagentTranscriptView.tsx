@@ -6,7 +6,6 @@ import { debugConsoleWarn } from "../../lib/debugConsole";
 import { resolveSubagentPresentation, subagentTaskSummary } from "../../lib/subagentPresentation";
 import { copyTextToClipboard } from "../../lib/systemClipboard";
 import { useI18n } from "../../lib/i18n";
-import { getTerminalTheme, isLightTerminalTheme } from "../../lib/terminalThemes";
 import { useSettingsStore } from "../../stores/settingsStore";
 import { useTerminalStore } from "../../stores/terminalStore";
 import { SubagentReaderSectionView } from "./SubagentReader";
@@ -69,9 +68,6 @@ function capRenderedMessages(messages: SubagentTranscriptMessage[]) {
 export function SubagentTranscriptView({ sessionId, title, isVisible }: Props) {
   const { t } = useI18n();
   const resolvedTheme = useSettingsStore((s) => s.resolvedTheme);
-  const terminalThemeName = useSettingsStore((s) => s.terminalThemeName);
-  const lightThemePalette = useSettingsStore((s) => s.lightThemePalette);
-  const darkThemePalette = useSettingsStore((s) => s.darkThemePalette);
   const displayMode = useSettingsStore((s) => s.subagentTranscriptMode);
   const updateSetting = useSettingsStore((s) => s.update);
   // 隐藏时返回 undefined（稳定值）：转录追加不再触发本组件重渲染。
@@ -88,6 +84,9 @@ export function SubagentTranscriptView({ sessionId, title, isVisible }: Props) {
   const parentStatus = useTerminalStore((s) => parentId ? s.tabStatuses[parentId]?.hook : undefined);
   const displayStatus = status ?? (ended ? "completed" : sourceKind === "pending" ? "pending" : "unknown");
   const parentStopped = !ended && (parentStatus === "done" || parentStatus === "failed");
+  const [metadataSession, setMetadataSession] = useState<string | null>(null);
+  const metadataExpanded = metadataSession === sessionId;
+  const metadataId = `subagent-${sessionId}-metadata`;
 
   const parseCacheRef = useRef<TranscriptParseCache | null>(null);
   const [parseSnapshot, setParseSnapshot] = useState<TranscriptParseCache | null>(null);
@@ -162,15 +161,9 @@ export function SubagentTranscriptView({ sessionId, title, isVisible }: Props) {
     }
   };
 
-  const terminalCodeTheme = useMemo<"light" | "dark">(() => {
-    const terminalTheme = getTerminalTheme(
-      terminalThemeName,
-      resolvedTheme,
-      lightThemePalette,
-      darkThemePalette
-    );
-    return isLightTerminalTheme(terminalTheme) ? "light" : "dark";
-  }, [darkThemePalette, lightThemePalette, resolvedTheme, terminalThemeName]);
+  // This reader uses the app surface; a separately chosen terminal palette must
+  // not make code unreadable when the app and terminal use different themes.
+  const terminalCodeTheme = resolvedTheme === "light" ? "light" : "dark";
   const scrollRef = useRef<HTMLDivElement>(null);
   const scrollContentRef = useRef<HTMLDivElement>(null);
   const scrollbarTrackRef = useRef<HTMLDivElement>(null);
@@ -292,19 +285,13 @@ export function SubagentTranscriptView({ sessionId, title, isVisible }: Props) {
       style={{ backgroundColor: TERM.bg, color: TERM.fg }}
     >
       <header className="subagent-transcript-header" aria-label={presentation.title}>
-        <div className="subagent-transcript-context">
-          <span className="subagent-transcript-readonly"
-            title={[presentation.title, parentTitle, t(ended ? "subagentTranscript.resultRetained" : "subagentTranscript.executionHint")].filter(Boolean).join("\n")}>
-            {t("subagentTranscript.readOnly")}
-          </span>
-          {agentId && <button type="button" className="ui-focus-ring subagent-transcript-id" onClick={() => void copyId()}
-            aria-label={t("subagentTranscript.copyId")} title={`${t("subagentTranscript.copyId")} · ${agentId}`}>
-            <span>{presentation.shortId}</span><Copy size={11} aria-hidden="true" />
-          </button>}
+        <div className="sr-reader-heading">
+          <strong title={presentation.title}>{presentation.title}</strong>
         </div>
         <div className="subagent-transcript-controls">
-          <span className="subagent-transcript-status" data-status={displayStatus}>
-            <i aria-hidden="true" />{t(`subagentTranscript.status.${displayStatus}`)}
+          <span className="subagent-transcript-status" data-status={displayStatus}
+            title={t(`subagentTranscript.status.${displayStatus}`)} aria-label={t(`subagentTranscript.status.${displayStatus}`)}>
+            <i aria-hidden="true" /><span>{t(`subagentTranscript.status.${displayStatus}`)}</span>
           </span>
           <div className="subagent-transcript-mode" role="group" aria-label={t("subagentTranscript.mode.label")}>
             {(["summary", "full"] as const).map(mode => <button key={mode} type="button"
@@ -328,12 +315,31 @@ export function SubagentTranscriptView({ sessionId, title, isVisible }: Props) {
             onClick={() => { const el = scrollRef.current; if (el) { atBottomRef.current = true; el.scrollTop = el.scrollHeight; syncScrollbar(); } }}>
             <ArrowDown size={14} aria-hidden="true" />
           </button>
-          {messages.length > 0 && !hasReasoning && <span className="subagent-transcript-info" tabIndex={0}
-            aria-label={t("subagentTranscript.reasoningUnavailable")} title={t("subagentTranscript.reasoningUnavailableHint")}>
+          <button className="subagent-transcript-action sr-metadata-toggle" type="button"
+            aria-label={t("subagentTranscript.reader.details")} title={t("subagentTranscript.reader.details")}
+            aria-expanded={metadataExpanded} aria-controls={metadataId}
+            onClick={() => setMetadataSession(metadataExpanded ? null : sessionId)}>
             <Info size={13} aria-hidden="true" />
-          </span>}
+          </button>
         </div>
       </header>
+      <div id={metadataId} className="sr-reader-metadata" hidden={!metadataExpanded}>
+        <strong>{presentation.title}</strong>
+        {parentTitle && <p>{t("subagentTranscript.reader.parent", { title: parentTitle })}</p>}
+        <div className="subagent-transcript-context">
+          <span className="subagent-transcript-readonly"
+            title={t(ended ? "subagentTranscript.resultRetained" : "subagentTranscript.executionHint")}>
+            {t("subagentTranscript.readOnly")}
+          </span>
+          {agentId && <button type="button" className="ui-focus-ring subagent-transcript-id" onClick={() => void copyId()}
+            aria-label={t("subagentTranscript.copyId")} title={`${t("subagentTranscript.copyId")} · ${agentId}`}>
+            <span>{agentId}</span><Copy size={11} aria-hidden="true" />
+          </button>}
+        </div>
+        {messages.length > 0 && !hasReasoning && <p title={t("subagentTranscript.reasoningUnavailableHint")}>
+          {t("subagentTranscript.reasoningUnavailable")}
+        </p>}
+      </div>
       {parentStopped && <div className="subagent-transcript-notice" role="status">{t("subagentTranscript.parentStopped")}</div>}
       <div className="relative min-h-0 flex-1">
         <div ref={scrollRef} onScroll={handleScroll} className="ui-terminal-native-scroll h-full min-h-0 overflow-x-hidden overflow-y-auto subagent-transcript-scroll sr-scroll">
