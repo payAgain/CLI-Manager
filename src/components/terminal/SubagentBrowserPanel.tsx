@@ -146,7 +146,7 @@ export function SubagentBrowserPanel({ session, project, refreshSeq = 0 }: { ses
       {selected ? <button className="ui-focus-ring ui-icon-action" aria-label={t("terminal.subagents.back")} onClick={() => { generation.current += 1; setSelected(null); setMessages([]); setLoading(false); }}><ArrowLeft size={13} /></button> : <Bot size={14} />}
       <h3 className="min-w-0 truncate text-xs font-medium" title={selectedTitle}>{selectedTitle || t("terminal.subagents.title")}</h3>
       {!selected && !loading && <span className="text-[11px] tabular-nums text-text-muted">{records.length}</span>}
-      {session && <span className="min-w-0 flex-1 truncate text-right text-[11px] text-text-muted" title={session.title}>{session.title}</span>}
+      {session && <span className="subagent-browser-parent" title={session.title}>{t("subagentTranscript.reader.parent", { title: session.title })}</span>}
     </header>
     <div className="pb-1">
       {error && <p role="alert" className="p-2 text-xs text-danger">{t("terminal.subagents.error")}</p>}

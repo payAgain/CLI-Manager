@@ -955,21 +955,24 @@ h3 + .ui-history-settings-description { margin-top: 8px; }
   --interactive-selected-bg: color-mix(in srgb, var(--term-panel-fg) 8%, transparent);
 }
 .subagent-browser-panel { border-color: var(--ui-panel-rule); }
-.subagent-browser-header { min-height: 40px; flex-wrap: wrap; gap: 5px 7px; padding: 9px 12px; }
+.subagent-browser-header { min-height: 40px; flex-wrap: wrap; gap: 6px 7px; padding: 12px; }
 .subagent-browser-header h3 { margin: 0; font-size: var(--ui-font-label); font-weight: 500; }
-.subagent-browser-row { position: relative; display: flex; min-width: 0; align-items: center; gap: 2px; margin: 2px 6px; border-radius: 4px; }
+.subagent-browser-parent { width: 100%; overflow: hidden; padding-left: 21px; color: var(--text-muted); font-size: var(--ui-font-caption); line-height: 17px; text-overflow: ellipsis; white-space: nowrap; }
+.subagent-browser-row { position: relative; display: flex; min-width: 0; align-items: center; gap: 2px; margin: 4px 6px; border-radius: 4px; }
 .subagent-browser-row:hover { background: var(--interactive-hover-bg); }
-.subagent-browser-row[data-selected="true"] { background: var(--interactive-selected-bg); box-shadow: inset 1px 0 var(--text-secondary); }
-.subagent-browser-open { display: flex; width: 100%; min-width: 0; flex: 1; align-items: center; gap: 9px; padding: 9px 7px; border: 0; border-radius: 4px; background: transparent; color: var(--text-secondary); text-align: left; cursor: pointer; }
-.subagent-browser-label { display: flex; min-width: 0; flex: 1; flex-direction: column; gap: 4px; }
-.subagent-browser-title { overflow: hidden; color: var(--text-primary); font-size: var(--ui-font-label); line-height: 18px; text-overflow: ellipsis; white-space: nowrap; }
-.subagent-browser-identity { display: flex; min-width: 0; align-items: center; gap: 10px; color: var(--text-muted); font-size: var(--ui-font-caption); line-height: 16px; }
-.subagent-browser-short-id { font-variant-numeric: tabular-nums; }
-.subagent-browser-status { display: inline-flex; min-width: 0; align-items: center; gap: 5px; }
+.subagent-browser-row[data-selected="true"] { background: var(--interactive-selected-bg); box-shadow: inset 2px 0 var(--accent); }
+.subagent-browser-open { display: flex; width: 100%; min-width: 0; flex: 1; align-items: flex-start; gap: 9px; padding: 10px 8px; border: 0; border-radius: 4px; background: transparent; color: var(--text-secondary); text-align: left; cursor: pointer; }
+.subagent-browser-open > svg { margin-top: 3px; }
+.subagent-browser-label { display: flex; min-width: 0; flex: 1; flex-direction: column; gap: 7px; }
+.subagent-browser-title { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow-wrap: anywhere; color: var(--text-primary); font-size: max(13px, var(--ui-font-label)); font-weight: 500; line-height: 20px; }
+.subagent-browser-identity { display: flex; min-width: 0; flex-wrap: wrap; align-items: center; gap: 4px 10px; color: var(--text-muted); font-size: var(--ui-font-caption); line-height: 16px; }
+.subagent-browser-short-id { font-family: var(--font-ui-mono); font-variant-numeric: tabular-nums; }
+.subagent-browser-status { display: inline-flex; flex-shrink: 0; align-items: center; gap: 5px; white-space: nowrap; }
 .subagent-browser-status > i { width: 5px; height: 5px; flex-shrink: 0; border-radius: 50%; background: currentColor; }
-.subagent-browser-status[data-status="running"] > i { color: var(--success); }
-.subagent-browser-status[data-status="failed"] > i { color: var(--danger); }
-.subagent-browser-status[data-status="interrupted"] > i { color: var(--warning); }
+.subagent-browser-status[data-status="running"] { color: var(--accent); }
+.subagent-browser-status[data-status="completed"] { color: var(--success); }
+.subagent-browser-status[data-status="failed"] { color: var(--danger); }
+.subagent-browser-status[data-status="interrupted"] { color: var(--warning); }
 .subagent-browser-copy { display: grid; width: 26px; height: 28px; flex-shrink: 0; place-items: center; margin-right: 4px; border: 0; border-radius: 4px; background: transparent; color: var(--text-muted); cursor: pointer; opacity: 0; }
 .subagent-browser-row:hover .subagent-browser-copy, .subagent-browser-row:focus-within .subagent-browser-copy { opacity: 1; }
 .subagent-browser-copy:hover { background: var(--interactive-hover-bg); color: var(--text-primary); }
