@@ -5,7 +5,7 @@ import { useWorktreeStore } from "../stores/worktreeStore";
 import type { TerminalScope } from "../lib/types";
 import { useI18n } from "../lib/i18n";
 import { useProjectBranch } from "../hooks/useProjectBranch";
-import { MemoryUsage } from "./sidebar/MemoryUsage";
+import { BottomResourceDock } from "./terminal/BottomResourceDock";
 
 export function WorkspaceStatusBar({ terminalScope }: { terminalScope?: TerminalScope }) {
   const { t } = useI18n();
@@ -23,13 +23,13 @@ export function WorkspaceStatusBar({ terminalScope }: { terminalScope?: Terminal
   const count = sessions.filter((s) => (s.kind ?? "pty") === "pty").length;
   const environment = project?.environment_type ?? active?.environmentType ?? "local";
   return (
-    <footer className="ui-workspace-statusbar" aria-label={t("workspace.statusBar")}>
+    <footer className="ui-workspace-statusbar" data-status-layout="aligned" aria-label={t("workspace.statusBar")}>
       <span className="ui-status-project" title={active?.cwd || project?.path}><span className="ui-status-ready-dot" />{project?.name ?? t("workspace.ready")}</span>
       {branch && <span className="ui-status-branch"><GitBranch size={11} />{branch}</span>}
       <div className="ui-status-spacer" />
-      <MemoryUsage collapsed={false} />
-      <span title={t("memory.terminals", { count })}><Terminal size={12} />{count}</span>
-      <span><Monitor size={12} />{environment === "local" ? t("workspace.localHost") : environment.toUpperCase()}</span>
+      <BottomResourceDock />
+      <span className="ui-status-context" title={t("memory.terminals", { count })}><Terminal size={13} strokeWidth={1.5} />{count}</span>
+      <span className="ui-status-context"><Monitor size={13} strokeWidth={1.5} />{environment === "local" ? t("workspace.localHost") : environment.toUpperCase()}</span>
     </footer>
   );
 }

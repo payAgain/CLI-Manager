@@ -1,4 +1,4 @@
-import { Fragment, type CSSProperties, type ReactNode, useCallback, useId, useMemo, useState } from "react";
+import { type CSSProperties, type ReactNode, useCallback, useId, useMemo, useState } from "react";
 import {
   Activity,
   AppWindow,
@@ -27,7 +27,6 @@ import {
   type SystemResourceCardKey,
 } from "../../stores/settingsStore";
 import {
-  Donut,
   EmptyHint,
   TERM_PANEL,
   panelColorTint,
@@ -40,6 +39,9 @@ interface SystemResourcesPanelProps {
   visible?: boolean;
   embedded?: boolean;
   dashboard?: boolean;
+  card?: SystemResourceCardKey;
+  data?: ReturnType<typeof useSystemResources>;
+  hideHeader?: boolean;
 }
 
 const PANEL_ACCENT = TERM_PANEL.green;
@@ -48,7 +50,7 @@ const NETWORK_UPLOAD_COLOR = `color-mix(in srgb, ${TERM_PANEL.green} 84%, ${TERM
 const NETWORK_DOWNLOAD_COLOR = `color-mix(in srgb, ${TERM_PANEL.blue} 82%, ${TERM_PANEL.cyan})`;
 const DISK_READ_COLOR = `color-mix(in srgb, ${TERM_PANEL.green} 84%, ${TERM_PANEL.fg})`;
 const DISK_WRITE_COLOR = `color-mix(in srgb, ${TERM_PANEL.blue} 82%, ${TERM_PANEL.cyan})`;
-const MODULE_TITLE_COLOR = TERM_PANEL.green;
+const MODULE_TITLE_COLOR = TERM_PANEL.fg;
 const SYSTEM_RESOURCES_RUNTIME_CACHE_KEY = "system-resources-panel";
 
 const PANEL_SCROLLBAR_STYLE = {
@@ -142,25 +144,22 @@ function ResourceCard({
   children: ReactNode;
 }) {
   return (
-    <section className="shrink-0 rounded-xl border p-3 transition-colors duration-300" style={CARD_STYLE}>
-      <div className="mb-3 flex items-center justify-between gap-2">
+    <section className="ui-system-resource-card shrink-0" style={CARD_STYLE}>
+      <div className="ui-system-resource-card__heading">
         <div className="flex min-w-0 items-center gap-2">
           <span
-            className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border"
+            className="ui-system-resource-card__icon"
             style={{
               color: accent,
-              backgroundColor: TERM_PANEL.cardInner,
-              borderColor: panelColorTint(accent, 18, TERM_PANEL.border),
-              boxShadow: "none",
             }}
           >
             {icon}
           </span>
-          <span className="truncate text-[13px] font-bold tracking-wide" style={{ color: MODULE_TITLE_COLOR }}>
+          <h3 className="truncate text-[13px] font-medium" style={{ color: MODULE_TITLE_COLOR }}>
             {title}
-          </span>
+          </h3>
         </div>
-        {right ? <div className="min-w-0 shrink-0">{right}</div> : null}
+        {right ? <div className="ui-system-resource-card__value">{right}</div> : null}
       </div>
       {children}
     </section>
@@ -172,54 +171,6 @@ function InlineEmpty({ text }: { text: string }) {
     <div className="rounded-lg border px-2.5 py-2 text-[11px]" style={{ borderColor: TERM_PANEL.border, color: TERM_PANEL.dim }}>
       {text}
     </div>
-  );
-}
-
-function MetricLine({ label, value, color = TERM_PANEL.fg }: { label: string; value: string; color?: string }) {
-  return (
-    <div className="flex items-center justify-between gap-3 border-b py-1.5 last:border-b-0" style={{ borderColor: panelColorTint(TERM_PANEL.border, 72) }}>
-      <span className="truncate text-[11px]" style={{ color: TERM_PANEL.dim }}>{label}</span>
-      <span className="shrink-0 text-right text-[12px] font-semibold tabular-nums" style={{ color }}>{value}</span>
-    </div>
-  );
-}
-
-function LegendMetricLine({
-  label,
-  value,
-  total,
-  color,
-}: {
-  label: string;
-  value: number;
-  total: number;
-  color: string;
-}) {
-  return (
-    <div
-      className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-2 border-b py-1.5 last:border-b-0"
-      style={{ borderColor: panelColorTint(TERM_PANEL.border, 72) }}
-    >
-      <span className="flex min-w-0 items-center gap-1.5 text-[11px]" style={{ color: TERM_PANEL.dim }}>
-        <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ backgroundColor: color }} />
-        <span className="truncate">{label}</span>
-      </span>
-      <span className="shrink-0 text-right text-[12px] font-semibold tabular-nums" style={{ color }}>{formatBytes(value)}</span>
-      <span className="w-10 shrink-0 text-right text-[10px] tabular-nums" style={{ color: TERM_PANEL.dim }}>
-        {formatPercent((value / Math.max(1, total)) * 100)}
-      </span>
-    </div>
-  );
-}
-
-function StatusPill({ children, color = PANEL_SOFT_FG }: { children: ReactNode; color?: string }) {
-  return (
-    <span
-      className="rounded-md border px-2.5 py-1 text-[11px] font-semibold tabular-nums"
-      style={{ borderColor: TERM_PANEL.border, color, backgroundColor: TERM_PANEL.cardInner }}
-    >
-      {children}
-    </span>
   );
 }
 
@@ -256,9 +207,9 @@ function TrendChart({
   height = 58,
   max,
   split = false,
-  areaOpacity = 0.94,
-  fadeStartOpacity = 0.66,
-  fadeEndOpacity = 0.06,
+  areaOpacity = 0.16,
+  fadeStartOpacity = 0.4,
+  fadeEndOpacity = 0.02,
 }: {
   series: TrendSeries[];
   height?: number;
@@ -334,7 +285,7 @@ function TrendChart({
   };
 
   return (
-    <div className="relative overflow-hidden rounded-lg border" style={{ height, borderColor: TERM_PANEL.border, backgroundColor: TERM_PANEL.cardInner }}>
+    <div className="ui-resource-trend relative overflow-hidden" style={{ height, borderColor: TERM_PANEL.border, backgroundColor: TERM_PANEL.cardInner }}>
       <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="h-full w-full">
         <defs>
           <linearGradient id={`${gradientId}-fade`} x1="0" y1="0" x2="0" y2="1">
@@ -387,31 +338,20 @@ function SystemCard({ snapshot }: { snapshot: SystemResourceSnapshot }) {
       icon={<Server size={15} />}
       title={t("systemResources.system")}
       accent={MODULE_TITLE_COLOR}
-      right={snapshot.ipAddress ? (
-        <button
-          type="button"
-          onClick={copyIp}
-          className="ui-focus-ring inline-flex max-w-[150px] items-center gap-1 rounded-md border px-2 py-1 text-[11px] tabular-nums"
-          style={{ color: TERM_PANEL.fg, borderColor: TERM_PANEL.border, backgroundColor: TERM_PANEL.cardInner }}
-          title={t("systemResources.copyIp")}
-          aria-label={t("systemResources.copyIp")}
-        >
-          <span className="truncate">{snapshot.ipAddress}</span>
-          <Copy size={11} className="shrink-0" />
-        </button>
-      ) : null}
     >
-      <div className="grid grid-cols-2 gap-2">
-        <StatusPill>{snapshot.osName || "-"}</StatusPill>
-        <StatusPill>{t("systemResources.cpuTopology", {
+      <dl className="ui-resource-system-metrics">
+        <div><dt>{t("systemResources.os")}</dt><dd title={snapshot.osName}>{snapshot.osName || "—"}</dd></div>
+        <div><dt>{t("systemResources.host")}</dt><dd title={snapshot.hostName ?? undefined}>{snapshot.hostName || "—"}</dd></div>
+        <div><dt>{t("systemResources.cpu")}</dt><dd>{t("systemResources.cpuTopology", {
           cores: snapshot.cpu.physicalCoreCount,
           threads: snapshot.cpu.logicalProcessorCount,
-        })}</StatusPill>
-      </div>
-      <div className="mt-3 grid gap-x-3 gap-y-1" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 220px), 1fr))" }}>
-        <MetricLine label={t("systemResources.host")} value={snapshot.hostName ?? "-"} />
-        <MetricLine label={t("systemResources.uptime")} value={formatUptime(snapshot.uptimeSeconds)} />
-      </div>
+        })}</dd></div>
+        <div><dt>{t("systemResources.uptime")}</dt><dd>{formatUptime(snapshot.uptimeSeconds)}</dd></div>
+        <div><dt>{t("systemResources.ip")}</dt><dd>{snapshot.ipAddress ? <button type="button" onClick={copyIp}
+          className="ui-resource-copy-ip ui-focus-ring" title={t("systemResources.copyIp")} aria-label={t("systemResources.copyIp")}>
+          {snapshot.ipAddress}<Copy size={11} aria-hidden="true" />
+        </button> : "—"}</dd></div>
+      </dl>
     </ResourceCard>
   );
 }
@@ -432,17 +372,14 @@ function CpuCard({ snapshot, history }: { snapshot: SystemResourceSnapshot; hist
     >
       <TrendChart
         series={[{ points, color: PANEL_ACCENT }]}
-        height={70}
+        height={72}
         max={100}
-        areaOpacity={0.95}
-        fadeStartOpacity={0.72}
-        fadeEndOpacity={0.1}
       />
 
       <button
         type="button"
         onClick={() => setCoresExpanded((value) => !value)}
-        className="ui-focus-ring mt-3 flex w-full items-center justify-between rounded-lg border px-2.5 py-1.5 text-[11px] font-semibold"
+        className="ui-resource-threads-trigger ui-focus-ring"
         style={{ borderColor: TERM_PANEL.border, backgroundColor: TERM_PANEL.cardInner, color: PANEL_SOFT_FG }}
         aria-expanded={coresExpanded}
         aria-controls={corePanelId}
@@ -501,123 +438,41 @@ function CpuCard({ snapshot, history }: { snapshot: SystemResourceSnapshot; hist
 
 function MemoryCard({ snapshot }: { snapshot: SystemResourceSnapshot }) {
   const { t } = useI18n();
-  const total = Math.max(1, snapshot.memory.totalBytes);
+  const total = snapshot.memory.totalBytes;
   const used = Math.min(total, Math.max(0, snapshot.memory.usedBytes));
-  const available = Math.max(0, snapshot.memory.availableBytes);
-  const cached = Math.max(0, snapshot.memory.cachedBytes ?? total - used - available);
-  const free = Math.max(0, snapshot.memory.freeBytes ?? 0);
-  const ratio = clampRatio(used / total);
-  const memoryRows = [
-    { label: t("systemResources.used"), value: used, color: TERM_PANEL.red },
-    { label: t("systemResources.cache"), value: cached, color: TERM_PANEL.yellow },
-    { label: t("systemResources.free"), value: free, color: TERM_PANEL.green },
-    { label: t("systemResources.available"), value: available, color: PANEL_SOFT_FG },
-  ];
-
+  const percent = clampRatio(used / Math.max(1, total)) * 100;
   return (
-    <ResourceCard
-      icon={<MemoryStick size={15} />}
-      title={t("systemResources.memory")}
-      accent={MODULE_TITLE_COLOR}
-      right={<span className="text-[12px] tabular-nums" style={{ color: TERM_PANEL.dim }}><span style={{ color: TERM_PANEL.fg }}>{formatBytes(used)}</span> / {formatBytes(total)}</span>}
-    >
-      <div className="grid grid-cols-[86px_minmax(0,1fr)] items-center gap-6">
-        <Donut
-          size={86}
-          thickness={10}
-          segments={memoryRows.map((row) => ({ value: row.value, color: row.color }))}
-        >
-          <div className="text-center leading-tight">
-            <div className="text-[18px] font-bold tabular-nums" style={{ color: TERM_PANEL.fg }}>{formatPercent(ratio * 100)}</div>
-            <div className="text-[10px] tabular-nums" style={{ color: TERM_PANEL.dim }}>{formatBytes(used)}</div>
-          </div>
-        </Donut>
-        <div className="min-w-0">
-          {memoryRows.map((row) => (
-            <LegendMetricLine
-              key={row.label}
-              label={row.label}
-              value={row.value}
-              total={total}
-              color={row.color}
-            />
-          ))}
+    <ResourceCard icon={<MemoryStick size={15} />} title={t("resources.systemMemory")}
+      right={<strong style={{ color: usageTextColor(percent) }}>{total > 0 ? formatPercent(percent) : "—"}</strong>}>
+      {total <= 0 ? <InlineEmpty text={t("systemResources.unavailable")} /> : <>
+        <div className="ui-resource-capacity"><strong>{formatBytes(used)}</strong><span>/ {formatBytes(total)}</span></div>
+        <p className="ui-resource-description">{t("systemResources.used")} / {t("systemResources.total")}</p>
+        <div className="ui-resource-capacity-bar" role="meter" aria-label={t("systemResources.memory")} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(percent)}>
+          <span style={{ width: percent + "%", background: usageColor(percent) }} />
         </div>
-      </div>
+        <dl className="ui-resource-metrics">
+          <div><dt>{t("systemResources.available")}</dt><dd>{formatBytes(snapshot.memory.availableBytes)}</dd></div>
+          <div><dt>{t("systemResources.cache")}</dt><dd>{formatBytes(snapshot.memory.cachedBytes)}</dd></div>
+          <div><dt>{t("systemResources.free")}</dt><dd>{formatBytes(snapshot.memory.freeBytes)}</dd></div>
+        </dl>
+      </>}
     </ResourceCard>
   );
 }
 
 function NetworkCard({ snapshot, history }: { snapshot: SystemResourceSnapshot; history: SystemResourceSnapshot[] }) {
   const { t } = useI18n();
-  const uploadPoints = history.length > 0 ? history.map((item) => item.network.uploadBytesPerSec) : [snapshot.network.uploadBytesPerSec];
-  const downloadPoints = history.length > 0 ? history.map((item) => item.network.downloadBytesPerSec) : [snapshot.network.downloadBytesPerSec];
-  const uploadMax = Math.max(1, ...uploadPoints);
-  const downloadMax = Math.max(1, ...downloadPoints);
-  const todayLabel = t("systemResources.todayTotal");
-
+  const samples = history.length ? history : [snapshot];
   return (
-    <ResourceCard
-      icon={<Network size={15} />}
-      title={t("systemResources.network")}
-      accent={MODULE_TITLE_COLOR}
-      right={(
-        <span className="flex items-center gap-3 text-[10px]">
-          <span className="inline-flex items-center gap-1.5 leading-none" style={{ color: NETWORK_UPLOAD_COLOR }}>
-            <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ backgroundColor: NETWORK_UPLOAD_COLOR }} />
-            <span>{t("systemResources.upload")}</span>
-          </span>
-          <span className="inline-flex items-center gap-1.5 leading-none" style={{ color: NETWORK_DOWNLOAD_COLOR }}>
-            <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ backgroundColor: NETWORK_DOWNLOAD_COLOR }} />
-            <span>{t("systemResources.download")}</span>
-          </span>
-        </span>
-      )}
-    >
-      <div className="grid grid-cols-[minmax(0,1fr)_80px] items-stretch gap-3">
-        <TrendChart
-          height={80}
-          split
-          areaOpacity={0.98}
-          fadeStartOpacity={0.72}
-          fadeEndOpacity={0.08}
-          series={[
-            { points: uploadPoints, color: NETWORK_UPLOAD_COLOR, mode: "up", max: uploadMax },
-            { points: downloadPoints, color: NETWORK_DOWNLOAD_COLOR, mode: "down", max: downloadMax },
-          ]}
-        />
-        <div
-          className="flex min-w-0 flex-col justify-center gap-2 border-l pl-3"
-          style={{ borderColor: TERM_PANEL.border }}
-        >
-          <div
-            className="min-w-0"
-            title={`${t("systemResources.upload")} ${formatRate(snapshot.network.uploadBytesPerSec)} · ${todayLabel} ${formatBytes(snapshot.network.todayUploadedBytes)}`}
-            aria-label={`${t("systemResources.upload")} ${formatRate(snapshot.network.uploadBytesPerSec)} ${todayLabel} ${formatBytes(snapshot.network.todayUploadedBytes)}`}
-          >
-            <div className="flex min-w-0 items-center gap-1 text-[11px] font-semibold" style={{ color: NETWORK_UPLOAD_COLOR }}>
-              <Upload size={12} className="shrink-0" />
-              <span className="truncate tabular-nums">{formatRate(snapshot.network.uploadBytesPerSec)}</span>
-            </div>
-            <div className="mt-0.5 truncate text-[10px] tabular-nums" style={{ color: TERM_PANEL.dim }}>
-              {formatBytes(snapshot.network.todayUploadedBytes)}
-            </div>
-          </div>
-          <div
-            className="min-w-0"
-            title={`${t("systemResources.download")} ${formatRate(snapshot.network.downloadBytesPerSec)} · ${todayLabel} ${formatBytes(snapshot.network.todayDownloadedBytes)}`}
-            aria-label={`${t("systemResources.download")} ${formatRate(snapshot.network.downloadBytesPerSec)} ${todayLabel} ${formatBytes(snapshot.network.todayDownloadedBytes)}`}
-          >
-            <div className="flex min-w-0 items-center gap-1 text-[11px] font-semibold" style={{ color: NETWORK_DOWNLOAD_COLOR }}>
-              <Download size={12} className="shrink-0" />
-              <span className="truncate tabular-nums">{formatRate(snapshot.network.downloadBytesPerSec)}</span>
-            </div>
-            <div className="mt-0.5 truncate text-[10px] tabular-nums" style={{ color: TERM_PANEL.dim }}>
-              {formatBytes(snapshot.network.todayDownloadedBytes)}
-            </div>
-          </div>
-        </div>
-      </div>
+    <ResourceCard icon={<Network size={15} />} title={t("systemResources.network")}>
+      <dl className="ui-resource-metrics ui-resource-metrics--pair">
+        <div><dt><Upload size={11} />{t("systemResources.upload")}</dt><dd style={{ color: NETWORK_UPLOAD_COLOR }}>{formatRate(snapshot.network.uploadBytesPerSec)}</dd><small>{t("systemResources.todayTotal")} · {formatBytes(snapshot.network.todayUploadedBytes)}</small></div>
+        <div><dt><Download size={11} />{t("systemResources.download")}</dt><dd style={{ color: NETWORK_DOWNLOAD_COLOR }}>{formatRate(snapshot.network.downloadBytesPerSec)}</dd><small>{t("systemResources.todayTotal")} · {formatBytes(snapshot.network.todayDownloadedBytes)}</small></div>
+      </dl>
+      <TrendChart height={72} series={[
+        { points: samples.map(item => item.network.uploadBytesPerSec), color: NETWORK_UPLOAD_COLOR },
+        { points: samples.map(item => item.network.downloadBytesPerSec), color: NETWORK_DOWNLOAD_COLOR },
+      ]} />
     </ResourceCard>
   );
 }
@@ -625,179 +480,45 @@ function NetworkCard({ snapshot, history }: { snapshot: SystemResourceSnapshot; 
 function DiskCard({ snapshot }: { snapshot: SystemResourceSnapshot; history: SystemResourceSnapshot[] }) {
   const { t } = useI18n();
   const totals = getDiskTotals(snapshot);
-  const ratio = clampRatio(totals.usedBytes / Math.max(1, totals.totalBytes));
-  const usagePercent = ratio * 100;
-  const color = usagePercent >= 94 ? TERM_PANEL.red : usagePercent >= 86 ? TERM_PANEL.yellow : PANEL_ACCENT;
-  const percentColor = usagePercent >= 94 ? TERM_PANEL.red : usagePercent >= 86 ? TERM_PANEL.yellow : TERM_PANEL.fg;
-  const readColor = DISK_READ_COLOR;
-  const writeColor = DISK_WRITE_COLOR;
-  const fileSystemType = Array.from(
-    new Set(snapshot.disks.map((disk) => disk.fileSystem.trim()).filter(Boolean))
-  ).join(" / ") || t("systemResources.unavailable");
-  const usedBarBackground =
-    usagePercent >= 75
-      ? `linear-gradient(90deg, ${PANEL_ACCENT} 0%, ${PANEL_ACCENT} 82%, ${TERM_PANEL.yellow} 82%, ${TERM_PANEL.yellow} 100%)`
-      : color;
-  const diskRows = [
-    { label: t("systemResources.used"), value: formatDiskBytes(totals.usedBytes), color: PANEL_ACCENT },
-    { label: t("systemResources.available"), value: formatDiskBytes(totals.availableBytes), color: PANEL_SOFT_FG },
-    { label: t("systemResources.diskType"), value: fileSystemType, color: TERM_PANEL.yellow },
-  ];
-
+  const percent = clampRatio(totals.usedBytes / Math.max(1, totals.totalBytes)) * 100;
   return (
-    <ResourceCard
-      icon={<HardDrive size={15} />}
-      title={t("systemResources.disk")}
-      accent={MODULE_TITLE_COLOR}
-      right={snapshot.disks.length > 0 ? <span className="text-[12px] tabular-nums" style={{ color: TERM_PANEL.dim }}><span style={{ color: TERM_PANEL.fg }}>{formatDiskBytes(totals.usedBytes)}</span> / {formatDiskBytes(totals.totalBytes)}</span> : null}
-    >
-      {snapshot.disks.length === 0 ? (
-        <InlineEmpty text={t("systemResources.unavailable")} />
-      ) : (
-        <div className="flex flex-wrap items-center gap-3">
-          <div className="flex w-[86px] shrink-0 items-center justify-center">
-            <Donut
-              size={86}
-              thickness={8}
-              segments={[
-                { value: totals.usedBytes, color },
-                { value: totals.availableBytes, color: TERM_PANEL.track },
-              ]}
-            >
-              <div className="text-center leading-tight">
-                <div className="text-[19px] font-bold tabular-nums" style={{ color: percentColor }}>{formatPercent(usagePercent)}</div>
-                <div className="text-[10px]" style={{ color: TERM_PANEL.dim }}>{t("systemResources.used")}</div>
-              </div>
-            </Donut>
-          </div>
-
-          <div className="grid min-w-[104px] flex-1 grid-cols-[auto_auto] items-center justify-end gap-x-5 gap-y-2 pr-2 text-[11px]">
-            {diskRows.map((row) => (
-              <Fragment key={row.label}>
-                <span className="flex min-w-0 items-center gap-1.5" style={{ color: TERM_PANEL.dim }}>
-                  <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ backgroundColor: row.color }} />
-                  <span className="truncate">{row.label}</span>
-                </span>
-                <span className="max-w-[92px] truncate text-right text-[12px] font-semibold tabular-nums" style={{ color: TERM_PANEL.dim }}>{row.value}</span>
-              </Fragment>
-            ))}
-          </div>
-
-          <div className="min-w-[132px] flex-[1.15] border-l pl-3" style={{ borderColor: TERM_PANEL.border }}>
-            <div className="mb-2 flex items-center justify-between gap-2 text-[11px]">
-              <span className="truncate font-semibold" style={{ color: TERM_PANEL.fg }}>{t("systemResources.total")}</span>
-              <span className="shrink-0 tabular-nums" style={{ color: TERM_PANEL.dim }}>{formatPercent(usagePercent)}</span>
-            </div>
-            <div className="mb-3 h-1.5 overflow-hidden rounded-full" style={{ backgroundColor: TERM_PANEL.track }}>
-              <div
-                className="h-full rounded-full"
-                style={{
-                  width: `${usagePercent.toFixed(1)}%`,
-                  background: usedBarBackground,
-                }}
-              />
-            </div>
-            <div className="grid grid-cols-2 gap-2">
-              <div className="rounded-lg border p-2" style={{ borderColor: TERM_PANEL.border, backgroundColor: TERM_PANEL.cardInner }}>
-                <div className="text-[10px]" style={{ color: TERM_PANEL.dim }}>{t("systemResources.readPerSecond")}</div>
-                <div className="mt-0.5 text-[12px] font-semibold tabular-nums" style={{ color: readColor }}>{formatDiskBytes(totals.readBytesPerSec)}</div>
-              </div>
-              <div className="rounded-lg border p-2" style={{ borderColor: TERM_PANEL.border, backgroundColor: TERM_PANEL.cardInner }}>
-                <div className="text-[10px]" style={{ color: TERM_PANEL.dim }}>{t("systemResources.writePerSecond")}</div>
-                <div className="mt-0.5 text-[12px] font-semibold tabular-nums" style={{ color: writeColor }}>{formatDiskBytes(totals.writeBytesPerSec)}</div>
-              </div>
-            </div>
-          </div>
+    <ResourceCard icon={<HardDrive size={15} />} title={t("systemResources.disk")}
+      right={<strong>{snapshot.disks.length ? formatPercent(percent) : "—"}</strong>}>
+      {!snapshot.disks.length ? <InlineEmpty text={t("systemResources.unavailable")} /> : <>
+        <div className="ui-resource-capacity"><strong>{formatDiskBytes(totals.usedBytes)}</strong><span>/ {formatDiskBytes(totals.totalBytes)}</span></div>
+        <p className="ui-resource-description">{t("systemResources.used")} / {t("systemResources.total")}</p>
+        <div className="ui-resource-capacity-bar" role="meter" aria-label={t("systemResources.disk")} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(percent)}>
+          <span style={{ width: percent + "%", background: percent >= 94 ? TERM_PANEL.red : percent >= 86 ? TERM_PANEL.yellow : PANEL_ACCENT }} />
         </div>
-      )}
+        <dl className="ui-resource-metrics">
+          <div><dt>{t("systemResources.available")}</dt><dd>{formatDiskBytes(totals.availableBytes)}</dd></div>
+          <div><dt>{t("systemResources.readPerSecond")}</dt><dd style={{ color: DISK_READ_COLOR }}>{formatRate(totals.readBytesPerSec)}</dd></div>
+          <div><dt>{t("systemResources.writePerSecond")}</dt><dd style={{ color: DISK_WRITE_COLOR }}>{formatRate(totals.writeBytesPerSec)}</dd></div>
+        </dl>
+        <div className="ui-resource-volumes">
+          {snapshot.disks.map(disk => <div key={disk.mountPoint + disk.name}><span title={disk.name}>{disk.mountPoint || disk.name}<small>{disk.fileSystem}</small></span><strong>{formatDiskBytes(disk.usedBytes)} / {formatDiskBytes(disk.totalBytes)}</strong></div>)}
+        </div>
+      </>}
     </ResourceCard>
   );
 }
 
 function GpuCard({ snapshot, history }: { snapshot: SystemResourceSnapshot; history: SystemResourceSnapshot[] }) {
   const { t } = useI18n();
-  const points = history
-    .map((item) => item.gpu?.usagePercent)
-    .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+  const values = history.map(item => item.gpu?.usagePercent).filter((value): value is number => typeof value === "number" && Number.isFinite(value));
   const usage = snapshot.gpu?.usagePercent ?? 0;
-  const displayPoints = points.length > 0 ? points : [usage];
-  const average = displayPoints.reduce((sum, value) => sum + value, 0) / Math.max(1, displayPoints.length);
-  const peak = Math.max(usage, ...displayPoints);
-  const color = usageColor(usage);
-  const segmentCount = 18;
-  const activeSegments = Math.round(clampRatio(usage / 100) * segmentCount);
-  const loadState =
-    usage >= 86
-      ? t("systemResources.gpuLoadCritical")
-      : usage >= 62
-        ? t("systemResources.gpuLoadHigh")
-        : usage >= 25
-          ? t("systemResources.gpuLoadNormal")
-          : t("systemResources.gpuLoadLow");
-
+  const points = values.length ? values : [usage];
+  const average = points.reduce((sum, value) => sum + value, 0) / points.length;
   return (
-    <ResourceCard
-      icon={<Gauge size={15} />}
-      title={t("systemResources.gpu")}
-      accent={MODULE_TITLE_COLOR}
-      right={snapshot.gpu ? (
-        <span className="inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-[11px] font-semibold" style={{ color, borderColor: panelColorTint(color, 28, TERM_PANEL.border), backgroundColor: TERM_PANEL.cardInner }}>
-          <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: color }} />
-          {loadState}
-        </span>
-      ) : null}
-    >
-      {!snapshot.gpu ? (
-        <InlineEmpty text={t("systemResources.gpuUnavailable")} />
-      ) : (
-        <div className="space-y-3">
-          <div className="grid grid-cols-[88px_minmax(0,1fr)] gap-3">
-            <div className="flex min-h-[88px] flex-col justify-between rounded-lg border p-2.5" style={{ borderColor: panelColorTint(color, 24, TERM_PANEL.border), backgroundColor: TERM_PANEL.cardInner }}>
-              <div className="text-[10px] font-semibold uppercase" style={{ color: TERM_PANEL.dim }}>{t("systemResources.gpuLoad")}</div>
-              <div>
-                <div className="text-[28px] font-bold leading-none tabular-nums" style={{ color: usageTextColor(usage) }}>{formatPercent(usage)}</div>
-                <div className="mt-1 text-[10px]" style={{ color: TERM_PANEL.dim }}>{t("systemResources.current")}</div>
-              </div>
-            </div>
-            <div className="min-w-0 space-y-2">
-              <div className="text-[10px]" style={{ color: TERM_PANEL.dim }}>{t("systemResources.gpuTrend")}</div>
-              <TrendChart series={[{ points: displayPoints, color: TERM_PANEL.magenta }]} height={46} max={100} areaOpacity={0.88} fadeStartOpacity={0.62} fadeEndOpacity={0.08} />
-              <div className="grid grid-cols-2 gap-2">
-                <div className="min-w-0 rounded-lg border px-2 py-1.5" style={{ borderColor: TERM_PANEL.border, backgroundColor: TERM_PANEL.cardInner }}>
-                  <div className="truncate text-[10px]" style={{ color: TERM_PANEL.dim }}>{t("systemResources.average")}</div>
-                  <div className="mt-0.5 text-[12px] font-semibold tabular-nums" style={{ color: usageTextColor(average) }}>{formatPercent(average)}</div>
-                </div>
-                <div className="min-w-0 rounded-lg border px-2 py-1.5" style={{ borderColor: TERM_PANEL.border, backgroundColor: TERM_PANEL.cardInner }}>
-                  <div className="truncate text-[10px]" style={{ color: TERM_PANEL.dim }}>{t("systemResources.peak")}</div>
-                  <div className="mt-0.5 text-[12px] font-semibold tabular-nums" style={{ color: usageTextColor(peak) }}>{formatPercent(peak)}</div>
-                </div>
-              </div>
-            </div>
-          </div>
-          <div className="rounded-lg border p-2" style={{ borderColor: TERM_PANEL.border, backgroundColor: TERM_PANEL.cardInner }}>
-            <div className="mb-2 flex items-center justify-between text-[10px]" style={{ color: TERM_PANEL.dim }}>
-              <span>{t("systemResources.gpuThreshold")}</span>
-              <span className="tabular-nums">0 / 50 / 100</span>
-            </div>
-            <div className="grid gap-[3px]" style={{ gridTemplateColumns: `repeat(${segmentCount}, minmax(0, 1fr))` }}>
-              {Array.from({ length: segmentCount }).map((_, index) => {
-                const segmentRatio = (index + 1) / segmentCount;
-                const active = index < activeSegments;
-                return (
-                  <span
-                    key={index}
-                    className="h-[18px] rounded-[2px]"
-                    style={{
-                      backgroundColor: active ? cpuSegmentColor(segmentRatio) : panelColorTint(TERM_PANEL.fg, 10, TERM_PANEL.bg),
-                      opacity: active ? 0.96 : 0.55,
-                    }}
-                  />
-                );
-              })}
-            </div>
-          </div>
-        </div>
-      )}
+    <ResourceCard icon={<Gauge size={15} />} title={t("systemResources.gpu")}
+      right={snapshot.gpu ? <strong style={{ color: usageTextColor(usage) }}>{formatPercent(usage)}</strong> : null}>
+      {!snapshot.gpu ? <InlineEmpty text={t("systemResources.gpuUnavailable")} /> : <>
+        <TrendChart series={[{ points, color: TERM_PANEL.magenta }]} height={72} max={100} />
+        <dl className="ui-resource-metrics ui-resource-metrics--pair">
+          <div><dt>{t("systemResources.average")}</dt><dd>{formatPercent(average)}</dd></div>
+          <div><dt>{t("systemResources.peak")}</dt><dd>{formatPercent(Math.max(usage, ...points))}</dd></div>
+        </dl>
+      </>}
     </ResourceCard>
   );
 }
@@ -811,7 +532,7 @@ function ProcessCard({ snapshot }: { snapshot: SystemResourceSnapshot }) {
       {rows.length === 0 ? (
         <InlineEmpty text={t("systemResources.noProcesses")} />
       ) : (
-        <div className="overflow-hidden rounded-lg border" style={{ borderColor: TERM_PANEL.border }}>
+        <div className="ui-resource-processes" style={{ borderColor: TERM_PANEL.border }}>
           <div className="grid grid-cols-[42px_42px_minmax(0,1fr)_44px] gap-2 border-b px-2 py-1.5 text-[10px] font-semibold" style={{ color: TERM_PANEL.dim, borderColor: TERM_PANEL.border, backgroundColor: TERM_PANEL.cardInner }}>
             <span>CPU</span>
             <span>{t("systemResources.memoryShort")}</span>
@@ -848,17 +569,18 @@ function ProcessCard({ snapshot }: { snapshot: SystemResourceSnapshot }) {
   );
 }
 
-export function SystemResourcesPanel({ open, visible = true, embedded = false, dashboard = false }: SystemResourcesPanelProps) {
+export function SystemResourcesPanel({ open, visible = true, embedded = false, dashboard = false, card, data, hideHeader = false }: SystemResourcesPanelProps) {
   const { t } = useI18n();
   const panelActive = open && visible;
   const cardVisibility = useSettingsStore((s) => s.systemResourceCardVisibility);
   const cardOrder = useSettingsStore((s) => s.systemResourceCardOrder);
 
   const orderedCards = useMemo(() => {
+    if (card) return [card];
     const configured = cardOrder.filter((key): key is SystemResourceCardKey => SYSTEM_RESOURCE_CARD_KEYS.includes(key));
     const missing = SYSTEM_RESOURCE_CARD_KEYS.filter((key) => !configured.includes(key));
     return [...configured, ...missing].filter((key) => cardVisibility[key]);
-  }, [cardOrder, cardVisibility]);
+  }, [card, cardOrder, cardVisibility]);
 
   const samplingOptions = useMemo<SystemResourceSnapshotOptions>(() => ({
     fullDetail: true,
@@ -871,12 +593,13 @@ export function SystemResourcesPanel({ open, visible = true, embedded = false, d
     processes: cardVisibility.processes,
   }), [cardVisibility]);
 
-  const { snapshot, history, loading, error, refresh } = useSystemResources(
-    panelActive && orderedCards.length > 0,
+  const ownData = useSystemResources(
+    panelActive && !data && orderedCards.length > 0,
     samplingOptions,
     2500,
     SYSTEM_RESOURCES_RUNTIME_CACHE_KEY
   );
+  const { snapshot, history, loading, error, refresh } = data ?? ownData;
 
   const sampleTime = useMemo(() => {
     if (!snapshot?.sampledAt) return null;
@@ -890,7 +613,7 @@ export function SystemResourcesPanel({ open, visible = true, embedded = false, d
 
   if (!panelActive) return null;
 
-  const containerClassName = embedded
+  const containerClassName = card && embedded ? "ui-system-resource-detail font-sans" : embedded
     ? "flex h-full min-h-0 flex-col overflow-hidden font-sans"
     : "relative z-[1] flex w-[280px] shrink-0 flex-col overflow-hidden border-l border-border font-sans";
 
@@ -926,7 +649,7 @@ export function SystemResourcesPanel({ open, visible = true, embedded = false, d
         ...PANEL_SCROLLBAR_STYLE,
       }}
     >
-      <TerminalPanelHeader
+      {!hideHeader && <TerminalPanelHeader
         icon={<Server size={15} />}
         title={t("systemResources.title")}
         titleAccessory={(
@@ -952,12 +675,12 @@ export function SystemResourcesPanel({ open, visible = true, embedded = false, d
           </button>
           </>
         )}
-      />
+      />}
 
       {dashboard && <ResourceCardSettings />}
 
       <div
-        className={`ui-thin-scroll min-h-0 flex-1 overflow-y-auto p-2 ${dashboard ? "ui-resource-dashboard-cards" : "flex flex-col gap-2.5"}`}
+        className={card && embedded ? "ui-resource-detail-content" : `ui-thin-scroll min-h-0 flex-1 overflow-y-auto p-2 ${dashboard ? "ui-resource-dashboard-cards" : "flex flex-col gap-2.5"}`}
       >
 
       {orderedCards.length === 0 ? (

@@ -2,12 +2,12 @@ import { ArrowDown, ArrowUp, Settings2 } from "lucide-react";
 import { useI18n, type TranslationKey } from "../../lib/i18n";
 import { SYSTEM_RESOURCE_CARD_KEYS, useSettingsStore, type SystemResourceCardKey } from "../../stores/settingsStore";
 
-const LABELS: Record<SystemResourceCardKey, TranslationKey> = {
-  system: "systemResources.system", cpu: "systemResources.cpu", memory: "systemResources.memory",
+export const RESOURCE_CARD_LABELS: Record<SystemResourceCardKey, TranslationKey> = {
+  system: "systemResources.system", cpu: "systemResources.cpu", memory: "resources.systemMemory",
   network: "systemResources.network", disk: "systemResources.disk", gpu: "systemResources.gpu", processes: "systemResources.topProcesses",
 };
 
-export function ResourceCardSettings() {
+export function ResourceCardSettings({ expanded = false }: { expanded?: boolean }) {
   const { t } = useI18n();
   const order = useSettingsStore((s) => s.systemResourceCardOrder);
   const visibility = useSettingsStore((s) => s.systemResourceCardVisibility);
@@ -18,11 +18,11 @@ export function ResourceCardSettings() {
     void update("systemResourceCardOrder", next);
   };
   return (
-    <details className="ui-resource-card-settings">
+    <details className="ui-resource-card-settings" open={expanded || undefined}>
       <summary><Settings2 size={13} /><span>{t("resources.customize")}</span><span className="ui-resource-card-count">{order.filter((key) => visibility[key]).length}/{order.length}</span></summary>
       <div className="ui-resource-card-settings-list">
         {order.map((key, index) => {
-          const item = t(LABELS[key]);
+          const item = t(RESOURCE_CARD_LABELS[key]);
           return (
             <div className="ui-resource-card-setting" key={key}>
               <span>{item}</span>
