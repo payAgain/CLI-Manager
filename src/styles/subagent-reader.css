@@ -7,6 +7,8 @@
   --sr-muted: var(--text-muted);
   --sr-rule: color-mix(in srgb, var(--border) 65%, transparent);
   --sr-inset: color-mix(in srgb, var(--text-primary) 5%, var(--surface));
+  --sr-detail-font-size: max(11px, calc(var(--sr-font-size) - 1px));
+  --sr-caption-font-size: max(10px, calc(var(--sr-font-size) - 2px));
   font-family: var(--font-ui-sans);
 }
 .subagent-transcript-view[data-layout="reader"] [hidden] { display: none !important; }
@@ -32,17 +34,20 @@
 
 /* At 808px: 2 × 32px gutters + 744px of text. Wider panes cap at 760px. */
 .subagent-transcript-view[data-layout="reader"] .sr-scroll { padding: 20px 32px 48px; }
-.subagent-transcript-view[data-layout="reader"] .sr-document { width: 100%; max-width: 760px; margin: 0 auto; }
+.subagent-transcript-view[data-layout="reader"] .sr-document { width: 100%; max-width: 760px; margin: 0 auto; font-family: var(--sr-font-family); font-size: var(--sr-font-size); }
+/* App's UI font override and syntax highlighting set explicit fonts on controls/code.
+   Keep those elements on the same terminal font as the surrounding transcript. */
+.subagent-transcript-view[data-layout="reader"] .sr-document :is(button, pre, code) { font-family: var(--sr-font-family) !important; }
 .subagent-transcript-view[data-layout="reader"] .sr-document > section + section { margin-top: 20px; }
 .subagent-transcript-view[data-layout="reader"] .sr-task { padding: 0; }
 .subagent-transcript-view[data-layout="reader"] .sr-section-toggle {
   display: flex; width: 100%; min-width: 0; min-height: 28px; align-items: center; gap: 8px;
   padding: 0; border: 0; background: transparent; color: var(--sr-muted);
-  font-family: inherit; font-size: max(12px, var(--ui-font-label)); font-weight: 400; text-align: left; cursor: pointer;
+  font-family: inherit; font-size: var(--sr-detail-font-size); font-weight: 400; text-align: left; cursor: pointer;
 }
 .subagent-transcript-view[data-layout="reader"] .sr-section-toggle > svg { flex-shrink: 0; }
 .subagent-transcript-view[data-layout="reader"] .sr-section-label { flex-shrink: 0; font-weight: 500; white-space: nowrap; }
-.subagent-transcript-view[data-layout="reader"] .sr-section-action { margin-left: auto; flex-shrink: 0; white-space: nowrap; font-size: var(--ui-font-caption); opacity: 0; }
+.subagent-transcript-view[data-layout="reader"] .sr-section-action { margin-left: auto; flex-shrink: 0; white-space: nowrap; font-size: var(--sr-caption-font-size); opacity: 0; }
 .subagent-transcript-view[data-layout="reader"] .sr-section-toggle:hover .sr-section-action,
 .subagent-transcript-view[data-layout="reader"] .sr-section-toggle:focus-visible .sr-section-action { opacity: 1; }
 .subagent-transcript-view[data-layout="reader"] .sr-task .sr-section-body { margin-top: 8px; padding: 12px 16px; border-radius: 4px; background: var(--sr-inset); }
@@ -62,11 +67,11 @@
 .subagent-transcript-view[data-layout="reader"] .sr-message[data-expanded="true"] > .sr-fragment-toggle > svg { transform: rotate(90deg); }
 .subagent-transcript-view[data-layout="reader"] .sr-message[data-expanded="false"] > .sr-fragment-toggle {
   position: static; width: 100%; height: auto; min-height: 30px; justify-content: flex-start; gap: 7px;
-  font-size: var(--ui-font-label); text-align: left; opacity: 1;
+  font-size: var(--sr-detail-font-size); text-align: left; opacity: 1;
 }
 .subagent-transcript-view[data-layout="reader"] .sr-fragment-toggle > svg { flex-shrink: 0; }
 .subagent-transcript-view[data-layout="reader"] .sr-fragment-preview { min-width: 0; overflow: hidden; color: var(--sr-secondary); text-overflow: ellipsis; white-space: nowrap; }
-.subagent-transcript-view[data-layout="reader"] .sr-fragment-action { margin-left: auto; flex-shrink: 0; font-size: var(--ui-font-caption); }
+.subagent-transcript-view[data-layout="reader"] .sr-fragment-action { margin-left: auto; flex-shrink: 0; font-size: var(--sr-caption-font-size); }
 
 /* A quiet line, not a card between every pair of paragraphs. */
 .subagent-transcript-view[data-layout="reader"] .sr-process { margin-block: 14px; }
@@ -75,21 +80,21 @@
 .subagent-transcript-view[data-layout="reader"] .sr-process-toggle {
   display: flex; width: 100%; min-width: 0; min-height: 32px; align-items: center; gap: 8px;
   padding: 4px 0; border: 0; border-radius: 3px; background: transparent;
-  color: var(--sr-muted); font-family: inherit; font-size: max(13px, var(--ui-font-label)); text-align: left; cursor: pointer;
+  color: var(--sr-muted); font-family: inherit; font-size: var(--sr-detail-font-size); text-align: left; cursor: pointer;
 }
 .subagent-transcript-view[data-layout="reader"] .sr-process-toggle > svg { flex-shrink: 0; }
 .subagent-transcript-view[data-layout="reader"] .sr-process-toggle > .sr-disclosure { margin-left: auto; }
 .subagent-transcript-view[data-layout="reader"] .sr-process-counts { flex-shrink: 0; line-height: 1.6; font-variant-numeric: tabular-nums; }
 .subagent-transcript-view[data-layout="reader"] .sr-process-preview { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.subagent-transcript-view[data-layout="reader"] .sr-process-pending { flex-shrink: 0; font-size: var(--ui-font-caption); }
-.subagent-transcript-view[data-layout="reader"] .sr-process-failed { display: inline-flex; flex-shrink: 0; align-items: center; gap: 4px; color: var(--danger); font-size: var(--ui-font-caption); }
+.subagent-transcript-view[data-layout="reader"] .sr-process-pending { flex-shrink: 0; font-size: var(--sr-caption-font-size); }
+.subagent-transcript-view[data-layout="reader"] .sr-process-failed { display: inline-flex; flex-shrink: 0; align-items: center; gap: 4px; color: var(--danger); font-size: var(--sr-caption-font-size); }
 .subagent-transcript-view[data-layout="reader"] .sr-process-body { margin: 8px 0 4px 6px; padding: 0 0 0 16px; border-left: 1px solid var(--sr-rule); list-style: none; }
 .subagent-transcript-view[data-layout="reader"] .sr-operation { margin: 0; padding: 0; list-style: none; }
 .subagent-transcript-view[data-layout="reader"] .sr-operation + .sr-operation { margin-top: 4px; }
 .subagent-transcript-view[data-layout="reader"] .sr-operation-toggle {
   display: flex; width: 100%; min-width: 0; min-height: 32px; align-items: center; gap: 8px;
   padding: 4px 0; border: 0; background: transparent; color: var(--sr-muted);
-  font-family: inherit; font-size: var(--ui-font-label); text-align: left; cursor: pointer;
+  font-family: inherit; font-size: var(--sr-detail-font-size); text-align: left; cursor: pointer;
 }
 .subagent-transcript-view[data-layout="reader"] .sr-operation-toggle > svg { flex-shrink: 0; }
 .subagent-transcript-view[data-layout="reader"] .sr-operation-name { flex-shrink: 0; max-width: 42%; overflow: hidden; color: var(--sr-secondary); text-overflow: ellipsis; white-space: nowrap; }
@@ -98,16 +103,16 @@
 .subagent-transcript-view[data-layout="reader"] .sr-operation[data-failed="true"] .sr-operation-status { color: var(--danger); }
 .subagent-transcript-view[data-layout="reader"] .sr-operation-body { padding: 8px 0 12px 20px; }
 .subagent-transcript-view[data-layout="reader"] .sr-operation-body section + section { margin-top: 12px; }
-.subagent-transcript-view[data-layout="reader"] .sr-operation-body h4 { margin: 0 0 5px; color: var(--sr-muted); font-size: var(--ui-font-caption); font-weight: 500; }
-.subagent-transcript-view[data-layout="reader"] .sr-operation-body pre { max-height: 320px; overflow: auto; margin: 0; padding: 10px 12px; border-radius: 4px; background: var(--sr-inset); color: var(--sr-secondary); font-family: var(--font-ui-mono); font-size: var(--ui-font-label); line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
+.subagent-transcript-view[data-layout="reader"] .sr-operation-body h4 { margin: 0 0 5px; color: var(--sr-muted); font-size: var(--sr-caption-font-size); font-weight: 500; }
+.subagent-transcript-view[data-layout="reader"] .sr-operation-body pre { max-height: 320px; overflow: auto; margin: 0; padding: 10px 12px; border-radius: 4px; background: var(--sr-inset); color: var(--sr-secondary); font-size: var(--sr-detail-font-size); line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
 .subagent-transcript-view[data-layout="reader"] .sr-detail-limit,
-.subagent-transcript-view[data-layout="reader"] .sr-omitted { margin: 10px 0; color: var(--sr-muted); font-size: var(--ui-font-label); line-height: 1.6; }
+.subagent-transcript-view[data-layout="reader"] .sr-omitted { margin: 10px 0; color: var(--sr-muted); font-size: var(--sr-detail-font-size); line-height: 1.6; }
 .subagent-transcript-view[data-layout="reader"] button:hover { color: var(--sr-ink); }
 .subagent-transcript-view[data-layout="reader"] .sr-fragment-toggle:hover { background: var(--interactive-hover-bg); }
 .subagent-transcript-view[data-layout="reader"] button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 /* Local typography: continuous lines, distinct paragraphs, neutral code. */
-.subagent-transcript-view[data-layout="reader"] .sr-markdown.ui-markdown-terminal { --md-text: var(--sr-ink); --md-muted: var(--sr-secondary); color: var(--sr-ink); font-family: var(--font-ui-sans); font-size: max(16px, var(--ui-font-reading)); font-weight: 400; line-height: 1.65; }
+.subagent-transcript-view[data-layout="reader"] .sr-markdown.ui-markdown-terminal { --md-text: var(--sr-ink); --md-muted: var(--sr-secondary); color: var(--sr-ink); font-family: inherit; font-size: var(--sr-font-size); font-weight: 400; line-height: 1.6; }
 .subagent-transcript-view[data-layout="reader"] .sr-markdown.ui-markdown-terminal .ui-markdown-p,
 .subagent-transcript-view[data-layout="reader"] .sr-markdown.ui-markdown-terminal .ui-markdown-em { color: var(--sr-ink); }
 .subagent-transcript-view[data-layout="reader"] .sr-markdown.ui-markdown-terminal .ui-markdown-del { color: var(--sr-muted); }
@@ -121,7 +126,7 @@
 .subagent-transcript-view[data-layout="reader"] .sr-markdown.ui-markdown-terminal .ui-markdown-h6 { font-size: 1em; }
 .subagent-transcript-view[data-layout="reader"] .sr-markdown.ui-markdown-terminal .ui-markdown-h:first-child { margin-top: 0; }
 .subagent-transcript-view[data-layout="reader"] .sr-markdown.ui-markdown-terminal .ui-markdown-strong { color: var(--sr-ink); font-weight: 600; }
-.subagent-transcript-view[data-layout="reader"] .sr-markdown.ui-markdown-terminal .ui-markdown-inline-code { padding: 0.08em 0.28em; border-radius: 3px; background: var(--sr-inset); color: inherit; font-size: 0.9em; box-decoration-break: clone; -webkit-box-decoration-break: clone; }
+.subagent-transcript-view[data-layout="reader"] .sr-markdown.ui-markdown-terminal .ui-markdown-inline-code { padding: 0.08em 0.28em; border-radius: 3px; background: var(--sr-inset); color: inherit; font-size: 1em; box-decoration-break: clone; -webkit-box-decoration-break: clone; }
 .subagent-transcript-view[data-layout="reader"] .sr-markdown.ui-markdown-terminal ul,
 .subagent-transcript-view[data-layout="reader"] .sr-markdown.ui-markdown-terminal ol { margin: 0 0 1em; padding-left: 1.5em; }
 .subagent-transcript-view[data-layout="reader"] .sr-markdown.ui-markdown-terminal li { margin-block: 0; }
@@ -136,11 +141,11 @@
 .subagent-transcript-view[data-layout="reader"] .sr-markdown.ui-markdown-terminal .ui-markdown-table th { background: var(--sr-inset); color: var(--sr-ink); font-weight: 600; }
 .subagent-transcript-view[data-layout="reader"] .sr-markdown.ui-markdown-terminal .ui-markdown-table tbody tr:nth-child(even) { background: transparent; }
 .subagent-transcript-view[data-layout="reader"] .sr-markdown.ui-markdown-terminal .ui-markdown-code-block { background: var(--sr-inset); border-color: var(--sr-rule); }
-.subagent-transcript-view[data-layout="reader"] .sr-markdown.ui-markdown-terminal .ui-markdown-code-block pre { min-width: 0; font-size: max(13px, var(--ui-font-label)) !important; }
+.subagent-transcript-view[data-layout="reader"] .sr-markdown.ui-markdown-terminal .ui-markdown-code-block pre { min-width: 0; font-size: 1em !important; }
 .subagent-transcript-view[data-layout="reader"] .sr-markdown.ui-markdown-terminal .ui-markdown-code-header { background: transparent; color: var(--sr-muted); font-weight: 400; text-transform: none; }
 .subagent-transcript-view[data-layout="reader"] .sr-markdown.ui-markdown-terminal > :last-child { margin-bottom: 0; }
 .subagent-transcript-view[data-layout="reader"] .sr-task-markdown.ui-markdown-terminal,
-.subagent-transcript-view[data-layout="reader"] .sr-reasoning.ui-markdown-terminal { font-size: max(13px, var(--ui-font-label)); color: var(--sr-secondary); }
+.subagent-transcript-view[data-layout="reader"] .sr-reasoning.ui-markdown-terminal { font-size: var(--sr-detail-font-size); color: var(--sr-secondary); }
 .subagent-transcript-view[data-layout="reader"] .sr-task-markdown.ui-markdown-terminal .ui-markdown-p,
 .subagent-transcript-view[data-layout="reader"] .sr-reasoning.ui-markdown-terminal .ui-markdown-p { color: var(--sr-secondary); }
 

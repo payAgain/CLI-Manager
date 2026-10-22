@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 import { ArrowDown, ArrowUpLeft, Copy, GitBranch, Info } from "lucide-react";
 import { toast } from "sonner";
 import { buildSubagentReaderSections, mergeSubagentMessages, parseSubagentTranscript, type SubagentReaderSection, type SubagentTranscriptCursor, type SubagentTranscriptMessage } from "../../lib/subagentTranscript";
 import { debugConsoleWarn } from "../../lib/debugConsole";
 import { resolveSubagentPresentation, subagentTaskSummary } from "../../lib/subagentPresentation";
 import { copyTextToClipboard } from "../../lib/systemClipboard";
+import { normalizeTerminalFontFamily } from "../../lib/terminalFontFamily";
 import { useI18n } from "../../lib/i18n";
 import { useSettingsStore } from "../../stores/settingsStore";
 import { useTerminalStore } from "../../stores/terminalStore";
@@ -68,6 +69,8 @@ function capRenderedMessages(messages: SubagentTranscriptMessage[]) {
 export function SubagentTranscriptView({ sessionId, title, isVisible }: Props) {
   const { t } = useI18n();
   const resolvedTheme = useSettingsStore((s) => s.resolvedTheme);
+  const fontFamily = useSettingsStore((s) => s.fontFamily);
+  const fontSize = useSettingsStore((s) => s.fontSize);
   const displayMode = useSettingsStore((s) => s.subagentTranscriptMode);
   const updateSetting = useSettingsStore((s) => s.update);
   // 隐藏时返回 undefined（稳定值）：转录追加不再触发本组件重渲染。
@@ -282,7 +285,12 @@ export function SubagentTranscriptView({ sessionId, title, isVisible }: Props) {
     <div
       className="subagent-transcript-shell subagent-transcript-view flex h-full min-h-0 flex-col text-xs"
       data-layout="reader"
-      style={{ backgroundColor: TERM.bg, color: TERM.fg }}
+      style={{
+        backgroundColor: TERM.bg,
+        color: TERM.fg,
+        "--sr-font-family": normalizeTerminalFontFamily(fontFamily),
+        "--sr-font-size": `${fontSize}px`,
+      } as CSSProperties}
     >
       <header className="subagent-transcript-header" aria-label={presentation.title}>
         <div className="sr-reader-heading">
