@@ -928,7 +928,10 @@ export const useReplayStore = create<ReplayStore>((set, get) => ({
         if (!snapshot.patch.trim() && !snapshot.patchTruncated) return null;
 
         const lastSnapshot = await getLastSnapshotPayload(sessionKey);
-        if (!snapshot.patchTruncated && lastSnapshot?.patch === snapshot.patch && lastSnapshot?.head === snapshot.head) {
+        // Restoring an older session must publish a new checkpoint for the worktree,
+        // even when that session's own last snapshot already contains this patch.
+        const explicitRestore = reason === "rollback" || reason === "fork";
+        if (!explicitRestore && !snapshot.patchTruncated && lastSnapshot?.patch === snapshot.patch && lastSnapshot?.head === snapshot.head) {
           logReplayOomDiagnostic("captureCodeSnapshot.skippedDuplicate", {
             sessionKey,
             projectPath: normalizedProjectPath,
