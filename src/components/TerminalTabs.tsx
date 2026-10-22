@@ -29,6 +29,7 @@ import { useProjectStore } from "../stores/projectStore";
 import { useSshHostStore } from "../stores/sshHostStore";
 import { useFileExplorerStore } from "../stores/fileExplorerStore";
 import { useI18n, type TranslationKey } from "../lib/i18n";
+import { resolveSubagentPresentation } from "../lib/subagentPresentation";
 import { logError } from "../lib/logger";
 import {
   DND_ACTIVATION_CONSTRAINT,
@@ -602,6 +603,16 @@ function SortableTab({
     const transcript = state.subagentTranscripts[id];
     return transcript?.status ?? (transcript?.ended ? "completed" : undefined);
   });
+  const displayTitle = useTerminalStore((state) => {
+    if (sessionKind !== "subagent-transcript") return title;
+    const session = state.sessions.find(item => item.id === id);
+    const transcript = state.subagentTranscripts[id];
+    return resolveSubagentPresentation({
+      session,
+      nickname: transcript?.lifecycle?.nickname,
+      fallbackTitle: t("subagentTranscript.title"),
+    }).title;
+  });
   const displayNotification: TabNotificationState = subagentStatus === undefined ? notification
     : subagentStatus === "running" ? "running" : subagentStatus === "completed" ? "done"
       : subagentStatus === "failed" ? "failed" : subagentStatus === "interrupted" ? "attention" : "none";
@@ -610,7 +621,7 @@ function SortableTab({
     data: {
       type: "session",
       paneId,
-      overlay: { title, notification: displayNotification, vendor, cliToolIcon },
+      overlay: { title: displayTitle, notification: displayNotification, vendor, cliToolIcon },
     },
     transition: DND_SORTABLE_TRANSITION,
   });
@@ -787,7 +798,7 @@ function SortableTab({
                   aria-label={t(`terminal.ssh.connection.${hoverInfo.connectionState}` as TranslationKey)}
                 />
               )}
-              <span className="ui-terminal-tab-title min-w-0 flex-1 truncate tracking-[0.01em]">{title}</span>
+              <span className="ui-terminal-tab-title min-w-0 flex-1 truncate" title={displayTitle}>{displayTitle}</span>
             </>
           )}
           <button
@@ -796,8 +807,8 @@ function SortableTab({
             onPointerDown={(e) => { e.stopPropagation(); hideHoverCard(); }}
             onDoubleClick={(e) => e.stopPropagation()}
             className="ui-terminal-tab-close ml-1 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-on-surface-variant transition-[background-color,color,opacity,box-shadow] hover:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--interactive-focus-ring)]"
-            aria-label={t("terminal.tab.close", { title })}
-            title={t("terminal.tab.close", { title })}
+            aria-label={t("terminal.tab.close", { title: displayTitle })}
+            title={t("terminal.tab.close", { title: displayTitle })}
           >
             <X size={13} strokeWidth={2.2} aria-hidden="true" />
           </button>
@@ -1322,6 +1333,10 @@ function PaneTabBar({
     .filter((session) => !visibleSessionIds || (session && visibleSessionIds.has(session.id)))
     .filter((session): session is TerminalSession => Boolean(session));
   const paneSessionIds = paneSessions.map((session) => session.id);
+  const subagentNicknames = useTerminalStore(useShallow(state => paneSessionIds.map(id => state.subagentTranscripts[id]?.lifecycle?.nickname)));
+  const paneTitles = new Map(paneSessions.map((session, index) => [session.id, session.kind === "subagent-transcript"
+    ? resolveSubagentPresentation({ session, nickname: subagentNicknames[index], fallbackTitle: t("subagentTranscript.title") }).title
+    : session.title]));
   const activePaneTabId =
     activeSessionId && paneSessionIds.includes(activeSessionId)
       ? activeSessionId
@@ -1335,7 +1350,7 @@ function PaneTabBar({
     ? t("terminal.toolbar.exitTerminalFullscreen")
     : t("terminal.toolbar.enterTerminalFullscreen");
   const tabScrollSignature = paneSessions
-    .map((session) => `${session.id}:${session.title}:${tabNotifications[session.id] ?? "none"}`)
+    .map((session) => `${session.id}:${paneTitles.get(session.id)}:${tabNotifications[session.id] ?? "none"}`)
     .join("|");
 
   const updateTabScrollState = useCallback(() => {
@@ -1698,7 +1713,7 @@ function PaneTabBar({
                         activatePaneSessionAt(index);
                         setTabListOpen(false);
                       }}
-                      title={session.title}
+                      title={paneTitles.get(session.id)}
                     >
                       <span
                         className="ui-tab-runtime-dot h-2 w-2 shrink-0 rounded-full"
@@ -1706,7 +1721,7 @@ function PaneTabBar({
                         style={{ backgroundColor: TAB_NOTIFICATION_COLORS[notification], color: TAB_NOTIFICATION_COLORS[notification] }}
                         aria-hidden="true"
                       />
-                      <span className="min-w-0 flex-1 truncate">{session.title}</span>
+                      <span className="min-w-0 flex-1 truncate">{paneTitles.get(session.id)}</span>
                     </button>
                   );
                 })}

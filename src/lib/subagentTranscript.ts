@@ -294,3 +294,58 @@ export function buildSubagentTranscriptRows(
   }
   return rows;
 }
+
+export interface SubagentReaderText {
+  kind: "text";
+  id: number;
+  messages: SubagentTranscriptMessage[];
+}
+
+export type SubagentReaderSection =
+  | { kind: "task"; id: number; message: SubagentTranscriptMessage }
+  | { kind: "response"; id: number; parts: (SubagentReaderText | SubagentTranscriptActivity)[] };
+
+/**
+ * A user task starts a reading section. Assistant text stays in chronological
+ * order around compact activity disclosures, without a new role heading for
+ * each fragment. Display mode never changes these keys or message identities.
+ */
+export function buildSubagentReaderSections(
+  messages: SubagentTranscriptMessage[],
+  previousSections: SubagentReaderSection[] = [],
+): SubagentReaderSection[] {
+  const sections: SubagentReaderSection[] = [];
+  // The existing render cap can remove a response's first message while the
+  // user is reading later paragraphs. Overlap keeps its disclosure mounted.
+  const responseIds = new Map<number, number>();
+  const partIds = new Map<number, number>();
+  for (const section of previousSections) {
+    if (section.kind !== "response") continue;
+    for (const part of section.parts) {
+      for (const message of part.messages) {
+        responseIds.set(message.id, section.id);
+        partIds.set(message.id, part.id);
+      }
+    }
+  }
+  let response: Extract<SubagentReaderSection, { kind: "response" }> | undefined;
+  for (const row of buildSubagentTranscriptRows(messages, "summary")) {
+    if (row.kind === "item" && row.message.role === "user") {
+      sections.push({ kind: "task", id: row.id, message: row.message });
+      response = undefined;
+      continue;
+    }
+    if (!response) {
+      response = { kind: "response", id: responseIds.get(row.id) ?? row.id, parts: [] };
+      sections.push(response);
+    }
+    if (row.kind === "activity") {
+      response.parts.push({ ...row, id: partIds.get(row.id) ?? row.id });
+      continue;
+    }
+    const previous = response.parts[response.parts.length - 1];
+    if (previous?.kind === "text") previous.messages.push(row.message);
+    else response.parts.push({ kind: "text", id: partIds.get(row.id) ?? row.id, messages: [row.message] });
+  }
+  return sections;
+}

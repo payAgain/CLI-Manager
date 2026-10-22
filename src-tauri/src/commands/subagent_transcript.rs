@@ -1327,6 +1327,76 @@ fn read_rollout_header(path: &Path) -> Option<Value> {
     serde_json::from_str(&line).ok()
 }
 
+fn claude_subagent_task_title(text: &str) -> Option<String> {
+    let mut remaining = text;
+    let mut environment_prefix = false;
+    for _ in 0..32 {
+        let candidate = cli_manager_history_core::title::title_candidate_from_text(remaining)?;
+        let field = candidate.split_once(':');
+        let context_line = field.is_some_and(|(label, value)| {
+            let label = label.trim().to_ascii_lowercase();
+            let value = value.trim();
+            let path = value.starts_with('/')
+                || value.starts_with('\\')
+                || value.starts_with("~/")
+                || (value.as_bytes().get(1) == Some(&b':')
+                    && value.as_bytes().first().is_some_and(u8::is_ascii_alphabetic));
+            (path
+                && matches!(
+                    label.as_str(),
+                    "repo" | "repository" | "repository root" | "project root" | "cwd"
+                        | "working directory" | "current working directory"
+                ))
+                || (environment_prefix && matches!(label.as_str(), "branch" | "git branch"))
+        });
+        if !context_line {
+            return Some(candidate.chars().take(160).collect());
+        }
+        // Only recognized leading environment fields are removed. A real task
+        // beginning "Repo: inspect ..." remains a valid title.
+        environment_prefix = true;
+        remaining = &remaining[remaining.find(&candidate)? + candidate.len()..];
+    }
+    None
+}
+
+fn read_claude_subagent_title(path: &Path) -> Option<String> {
+    use std::io::BufRead;
+    // Titles are a preview, not another history scan. The UNC path also works
+    // for WSL without launching one subprocess for each child transcript.
+    const TITLE_PREFIX_MAX_BYTES: u64 = 64 * 1024;
+    let reader = std::io::BufReader::new(File::open(path).ok()?.take(TITLE_PREFIX_MAX_BYTES));
+    for line in reader.lines().take(32) {
+        let Ok(record) = serde_json::from_str::<Value>(&line.ok()?) else {
+            continue;
+        };
+        if record.get("type").and_then(Value::as_str) != Some("user")
+            || record.get("isMeta").and_then(Value::as_bool) == Some(true)
+        {
+            continue;
+        }
+        let Some(content) = record.get("message").and_then(|message| message.get("content")) else {
+            continue;
+        };
+        let text = if let Some(text) = content.as_str() {
+            text.to_string()
+        } else if let Some(blocks) = content.as_array() {
+            blocks
+                .iter()
+                .filter(|block| block.get("type").and_then(Value::as_str) == Some("text"))
+                .filter_map(|block| block.get("text").and_then(Value::as_str))
+                .collect::<Vec<_>>()
+                .join("\n")
+        } else {
+            continue;
+        };
+        if let Some(title) = claude_subagent_task_title(&text) {
+            return Some(title);
+        }
+    }
+    None
+}
+
 fn is_safe_session_id(id: &str) -> bool {
     id.chars().next().is_some_and(|c| c.is_ascii_alphanumeric())
         && id
@@ -1581,7 +1651,7 @@ fn list_subagent_records(
         validate_child_transcript_path(&path, Some(parent_session_id), Some(id), Some(&config))?;
         records.push(SubagentTranscriptRecord {
             agent_id: id.to_string(),
-            title: id.to_string(),
+            title: read_claude_subagent_title(Path::new(&path)).unwrap_or_else(|| id.to_string()),
             transcript_path: path,
             parent_transcript_path: Some(parent.clone()),
         });
@@ -2022,6 +2092,65 @@ mod tests {
     }
 
     #[test]
+    fn subagent_browser_titles_skip_environment_prefaces_without_changing_real_tasks() {
+        for context in [
+            "Repo: E:\\Work\\CLI-Manager\nBranch: master",
+            "Repository root: /work/repo\nGit branch: feature/reader",
+            "Working directory: \\\\wsl.localhost\\Ubuntu\\home\\user\\repo",
+        ] {
+            assert!(claude_subagent_task_title(context).is_none());
+            assert_eq!(
+                claude_subagent_task_title(&format!("{context}\n\nCompare terminal restore behavior"))
+                    .as_deref(),
+                Some("Compare terminal restore behavior")
+            );
+        }
+        assert_eq!(
+            claude_subagent_task_title("Repo: inspect how project paths are resolved").as_deref(),
+            Some("Repo: inspect how project paths are resolved")
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("agent-child.jsonl");
+        let records = [
+            serde_json::json!({"type":"user", "isMeta":true, "message":{"content":"Internal context"}}),
+            serde_json::json!({"type":"user", "message":{"content":"Repo: E:\\Work\\CLI-Manager\nBranch: master"}}),
+            serde_json::json!({"type":"user", "message":{"content":[{"type":"tool_result", "content":"Tool output is not a task"}]}}),
+            serde_json::json!({"type":"user", "message":{"content":[{"type":"text", "text":"Compare terminal restore behavior"}]}}),
+        ];
+        fs::write(
+            &path,
+            records.iter().map(Value::to_string).collect::<Vec<_>>().join("\n"),
+        )
+        .unwrap();
+        assert_eq!(
+            read_claude_subagent_title(&path).as_deref(),
+            Some("Compare terminal restore behavior")
+        );
+    }
+
+    #[test]
+    fn subagent_browser_title_preview_is_bounded_and_ignores_non_user_output() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("agent-child.jsonl");
+        fs::write(
+            &path,
+            "{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":\"Internal output\"}}\n",
+        )
+        .unwrap();
+        assert!(read_claude_subagent_title(&path).is_none());
+        let task = "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"Review terminal focus\"}}\n";
+        fs::write(&path, format!("{}\n{task}", " ".repeat(64 * 1024))).unwrap();
+        assert!(read_claude_subagent_title(&path).is_none());
+        fs::write(&path, format!("{}{task}", "{}\n".repeat(32))).unwrap();
+        assert!(read_claude_subagent_title(&path).is_none());
+        fs::write(&path, task).unwrap();
+        assert_eq!(
+            read_claude_subagent_title(&path).as_deref(),
+            Some("Review terminal focus")
+        );
+    }
+
+    #[test]
     fn subagent_browser_finds_claude_results_in_a_custom_config_without_hooks() {
         let dir = tempfile::tempdir().unwrap();
         let cwd = "/work/repo";
@@ -2032,7 +2161,11 @@ mod tests {
             .join("main")
             .join("subagents");
         fs::create_dir_all(&child_dir).unwrap();
-        fs::write(child_dir.join("agent-child.jsonl"), "{}\n").unwrap();
+        fs::write(
+            child_dir.join("agent-child.jsonl"),
+            "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"Review terminal focus\"}}\n",
+        )
+        .unwrap();
         fs::write(child_dir.join("notes.txt"), "ignored").unwrap();
         let records = list_subagent_records(
             "claude",
@@ -2045,6 +2178,7 @@ mod tests {
         .unwrap();
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].agent_id, "child");
+        assert_eq!(records[0].title, "Review terminal focus");
         assert!(records[0].transcript_path.ends_with("agent-child.jsonl"));
         let opened = resolve_transcript_path(
             Some(records[0].transcript_path.clone()),

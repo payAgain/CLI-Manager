@@ -1,12 +1,15 @@
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
-import { ArrowDown, ArrowUpLeft, Brain, Check, ChevronRight, Circle, CircleX, FileText, GitBranch, Globe, MessageSquare, Terminal, Wrench } from "lucide-react";
-import { buildSubagentTranscriptRows, mergeSubagentMessages, parseSubagentTranscript, subagentToolSummary, type SubagentTranscriptActivity, type SubagentTranscriptCursor, type SubagentTranscriptMessage } from "../../lib/subagentTranscript";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { ArrowDown, ArrowUpLeft, Copy, GitBranch, Info } from "lucide-react";
+import { toast } from "sonner";
+import { buildSubagentReaderSections, mergeSubagentMessages, parseSubagentTranscript, type SubagentReaderSection, type SubagentTranscriptCursor, type SubagentTranscriptMessage } from "../../lib/subagentTranscript";
 import { debugConsoleWarn } from "../../lib/debugConsole";
+import { resolveSubagentPresentation, subagentTaskSummary } from "../../lib/subagentPresentation";
+import { copyTextToClipboard } from "../../lib/systemClipboard";
 import { useI18n } from "../../lib/i18n";
 import { getTerminalTheme, isLightTerminalTheme } from "../../lib/terminalThemes";
 import { useSettingsStore } from "../../stores/settingsStore";
 import { useTerminalStore } from "../../stores/terminalStore";
-import { MarkdownContent } from "../ui/MarkdownContent";
+import { SubagentReaderSectionView } from "./SubagentReader";
 import { TERM } from "../stats/termStatsUi";
 
 interface Props {
@@ -28,7 +31,6 @@ interface TranscriptParseCache {
 
 const TRANSCRIPT_PARSE_MAX_CHARS = 2 * 1024 * 1024;
 const MAX_RENDERED_MESSAGES = 300;
-const MAX_TOOL_DETAIL_CHARS = 64 * 1024;
 const EMPTY_MESSAGES: SubagentTranscriptMessage[] = [];
 const MIN_SUBAGENT_SCROLLBAR_THUMB = 24;
 
@@ -58,105 +60,6 @@ function capRenderedMessages(messages: SubagentTranscriptMessage[]) {
   return { messages: overflow > 0 ? messages.slice(overflow) : messages, overflow };
 }
 
-interface TranscriptMessageRowProps {
-  message: SubagentTranscriptMessage;
-  terminalCodeTheme: "light" | "dark";
-}
-
-const TranscriptMessageRow = memo(function TranscriptMessageRow({ message, terminalCodeTheme }: TranscriptMessageRowProps) {
-  const { t } = useI18n();
-  const [expanded, setExpanded] = useState(message.kind === "reasoning");
-  const tool = message.kind === "tool" || message.kind === "tool-result";
-  if (tool || message.kind === "reasoning") {
-    const ToolIcon = /search|browse|web/i.test(message.toolName ?? "") ? Globe
-      : /read|write|edit|file/i.test(message.toolName ?? "") ? FileText
-        : /exec|shell|command|terminal/i.test(message.toolName ?? "") ? Terminal : Wrench;
-    const completed = message.output !== undefined;
-    const label = tool
-      ? message.toolName?.split(".").pop() ?? t("subagentTranscript.toolResult")
-      : t("subagentTranscript.reasoning");
-    return (
-      <li className="subagent-transcript-tool" data-failed={message.failed || undefined} data-reasoning={!tool || undefined}>
-        <details open={expanded} onToggle={(event) => setExpanded(event.currentTarget.open)}>
-          <summary>
-            <ChevronRight className="subagent-transcript-disclosure" size={12} aria-hidden="true" />
-            {tool ? <ToolIcon size={13} aria-hidden="true" /> : <Brain size={13} aria-hidden="true" />}
-            <span className="subagent-transcript-tool-name">{label}</span>
-            {(tool || !expanded) && <span className="subagent-transcript-tool-summary">
-              {tool ? subagentToolSummary(message) : message.text.replace(/\*\*([^*]+)\*\*/g, "$1").slice(0, 100)}
-            </span>}
-            {tool && <span className="subagent-transcript-tool-status" title={t(message.failed ? "subagentTranscript.toolFailed" : completed ? "subagentTranscript.toolCompleted" : "subagentTranscript.toolStarted")}>
-              {message.failed ? <CircleX size={12} aria-hidden="true" /> : completed ? <Check size={12} aria-hidden="true" /> : <Circle size={9} aria-hidden="true" />}
-            </span>}
-          </summary>
-          {expanded && <div className="subagent-transcript-tool-details">
-            {message.arguments && <section>
-              <h4>{t("subagentTranscript.arguments")}</h4>
-              <pre>{message.arguments.slice(0, MAX_TOOL_DETAIL_CHARS)}</pre>
-            </section>}
-            {message.output !== undefined && <section>
-              <h4>{t("subagentTranscript.output")}</h4>
-              <pre>{message.output.slice(0, MAX_TOOL_DETAIL_CHARS) || t("subagentTranscript.noOutput")}</pre>
-            </section>}
-            {!tool && <MarkdownContent content={message.text.slice(0, MAX_TOOL_DETAIL_CHARS)} variant="terminal" compact
-              terminalCodeTheme={terminalCodeTheme} className="subagent-transcript-markdown" />}
-            {Math.max(message.arguments?.length ?? 0, message.output?.length ?? 0, message.text.length) > MAX_TOOL_DETAIL_CHARS
-              && <p className="subagent-transcript-detail-limit">{t("subagentTranscript.detailLimit")}</p>}
-          </div>}
-        </details>
-      </li>
-    );
-  }
-  return (
-    <li className="subagent-transcript-message" data-role={message.role}>
-      <div className="subagent-transcript-role">
-        <MessageSquare size={12} aria-hidden="true" />
-        {t(message.role === "user" ? "subagentTranscript.task" : "subagentTranscript.reply")}
-      </div>
-      <MarkdownContent content={message.text} variant="terminal" compact
-        terminalCodeTheme={terminalCodeTheme} className="subagent-transcript-markdown" />
-    </li>
-  );
-});
-
-const TranscriptActivityRow = memo(function TranscriptActivityRow({ activity, terminalCodeTheme }: {
-  activity: SubagentTranscriptActivity;
-  terminalCodeTheme: "light" | "dark";
-}) {
-  const { t } = useI18n();
-  const [expanded, setExpanded] = useState(false);
-  const counts = [
-    activity.toolCount > 0 && t("subagentTranscript.activity.tools", { count: activity.toolCount }),
-    activity.reasoningCount > 0 && t("subagentTranscript.activity.reasoning", { count: activity.reasoningCount }),
-  ].filter(Boolean).join(" · ");
-  const categories = activity.categories.map(category => t(`subagentTranscript.activity.${category}`));
-  if (activity.pendingCount > 0) categories.push(t("subagentTranscript.activity.pending", { count: activity.pendingCount }));
-  const preview = activity.latestReasoning?.replace(/\*\*([^*]+)\*\*/g, "$1").replace(/\s+/g, " ").slice(0, 240);
-  return (
-    <li className="subagent-transcript-activity">
-      <details open={expanded} onToggle={event => setExpanded(event.currentTarget.open)}>
-        <summary>
-          <ChevronRight className="subagent-transcript-disclosure" size={12} aria-hidden="true" />
-          {activity.toolCount > 0 ? <Wrench size={13} aria-hidden="true" /> : <Brain size={13} aria-hidden="true" />}
-          <span className="subagent-transcript-activity-heading">
-            <span>{counts}</span>
-            {categories.length > 0 && <small>{categories.join(" · ")}</small>}
-          </span>
-          {activity.failedCount > 0 && <span className="subagent-transcript-activity-failed">
-            <CircleX size={11} aria-hidden="true" />{t("subagentTranscript.activity.failed", { count: activity.failedCount })}
-          </span>}
-        </summary>
-        {expanded && <ul className="subagent-transcript-activity-details">
-          {activity.messages.map(message => <TranscriptMessageRow key={message.id} message={message} terminalCodeTheme={terminalCodeTheme} />)}
-        </ul>}
-      </details>
-      {!expanded && preview && <p className="subagent-transcript-reasoning-preview">
-        <Brain size={12} aria-hidden="true" /><span>{preview}</span>
-      </p>}
-    </li>
-  );
-});
-
 /**
  * 子 Agent 转录只读视图：渲染由后端 tail 推送、累积在 store 的转录内容。
  * 仅当用户停在底部时自动跟随滚动，避免打断向上翻阅。
@@ -178,6 +81,7 @@ export function SubagentTranscriptView({ sessionId, title, isVisible }: Props) {
   const sourceKind = useTerminalStore((s) => s.subagentTranscripts[sessionId]?.source.kind);
   const status = useTerminalStore((s) => s.subagentTranscripts[sessionId]?.status);
   const nickname = useTerminalStore((s) => s.subagentTranscripts[sessionId]?.lifecycle?.nickname);
+  const session = useTerminalStore((s) => s.sessions.find((item) => item.id === sessionId));
   const agentId = useTerminalStore((s) => s.sessions.find((session) => session.id === sessionId)?.subagent?.agentId);
   const parentId = useTerminalStore((s) => s.sessions.find((session) => session.id === sessionId)?.subagent?.parentSessionId);
   const parentTitle = useTerminalStore((s) => s.sessions.find((session) => session.id === parentId)?.title);
@@ -231,8 +135,32 @@ export function SubagentTranscriptView({ sessionId, title, isVisible }: Props) {
 
   const messages = parseSnapshot?.sessionId === sessionId ? parseSnapshot.messages : EMPTY_MESSAGES;
   const omittedCount = parseSnapshot?.omittedCount ?? 0;
-  const rows = useMemo(() => buildSubagentTranscriptRows(messages, displayMode), [displayMode, messages]);
+  const readerSnapshotRef = useRef<{ sessionId: string; resetSeq: number | undefined; sections: SubagentReaderSection[] } | null>(null);
+  const readerResetSeq = parseSnapshot?.sessionId === sessionId ? parseSnapshot.resetSeq : undefined;
+  const rows = useMemo(() => {
+    const previous = readerSnapshotRef.current;
+    return buildSubagentReaderSections(messages,
+      previous?.sessionId === sessionId && previous.resetSeq === readerResetSeq ? previous.sections : []);
+  }, [messages, readerResetSeq, sessionId]);
+  useLayoutEffect(() => {
+    readerSnapshotRef.current = { sessionId, resetSeq: readerResetSeq, sections: rows };
+  }, [readerResetSeq, rows, sessionId]);
   const hasReasoning = messages.some(message => message.kind === "reasoning");
+  const presentation = resolveSubagentPresentation({
+    agentId, session, nickname, recordTitle: session?.subagent?.generatedTitle === title ? undefined : title,
+    taskSummary: messages.filter(message => message.kind === "message" && message.role === "user")
+      .map(message => subagentTaskSummary(message.text)).find(Boolean),
+    fallbackTitle: t("subagentTranscript.title"),
+  });
+  const copyId = async () => {
+    if (!agentId) return;
+    try {
+      await copyTextToClipboard(agentId);
+      toast.success(t("subagentTranscript.idCopied"));
+    } catch {
+      toast.error(t("subagentTranscript.copyIdFailed"));
+    }
+  };
 
   const terminalCodeTheme = useMemo<"light" | "dark">(() => {
     const terminalTheme = getTerminalTheme(
@@ -360,43 +288,55 @@ export function SubagentTranscriptView({ sessionId, title, isVisible }: Props) {
   return (
     <div
       className="subagent-transcript-shell subagent-transcript-view flex h-full min-h-0 flex-col text-xs"
+      data-layout="reader"
       style={{ backgroundColor: TERM.bg, color: TERM.fg }}
     >
-      <header className="subagent-transcript-header">
-        <GitBranch size={15} className="subagent-transcript-heading-icon" aria-hidden="true" />
-        <div className="subagent-transcript-heading">
-          <strong>{nickname ?? title ?? t("subagentTranscript.title")}</strong>
-          <span>{t("subagentTranscript.readOnly")}{parentTitle ? ` · ${parentTitle}` : ""}</span>
+      <header className="subagent-transcript-header" aria-label={presentation.title}>
+        <div className="subagent-transcript-context">
+          <span className="subagent-transcript-readonly"
+            title={[presentation.title, parentTitle, t(ended ? "subagentTranscript.resultRetained" : "subagentTranscript.executionHint")].filter(Boolean).join("\n")}>
+            {t("subagentTranscript.readOnly")}
+          </span>
+          {agentId && <button type="button" className="ui-focus-ring subagent-transcript-id" onClick={() => void copyId()}
+            aria-label={t("subagentTranscript.copyId")} title={`${t("subagentTranscript.copyId")} · ${agentId}`}>
+            <span>{presentation.shortId}</span><Copy size={11} aria-hidden="true" />
+          </button>}
         </div>
-        <span className="subagent-transcript-status" data-status={displayStatus}>
-          <i aria-hidden="true" />{t(`subagentTranscript.status.${displayStatus}`)}
-        </span>
-        <div className="subagent-transcript-mode" role="group" aria-label={t("subagentTranscript.mode.label")}>
-          {(["summary", "full"] as const).map(mode => <button key={mode} type="button"
-            aria-pressed={displayMode === mode} title={t(`subagentTranscript.mode.${mode}Hint`)}
-            onClick={() => void updateSetting("subagentTranscriptMode", mode)}>
-            {t(`subagentTranscript.mode.${mode}`)}
-          </button>)}
+        <div className="subagent-transcript-controls">
+          <span className="subagent-transcript-status" data-status={displayStatus}>
+            <i aria-hidden="true" />{t(`subagentTranscript.status.${displayStatus}`)}
+          </span>
+          <div className="subagent-transcript-mode" role="group" aria-label={t("subagentTranscript.mode.label")}>
+            {(["summary", "full"] as const).map(mode => <button key={mode} type="button"
+              aria-pressed={displayMode === mode} title={t(`subagentTranscript.mode.${mode}Hint`)}
+              onClick={() => void updateSetting("subagentTranscriptMode", mode)}>
+              {t(`subagentTranscript.mode.${mode}`)}
+            </button>)}
+          </div>
+          {parentId && parentTitle !== undefined && <button className="subagent-transcript-action" type="button"
+            aria-label={t(ended ? "subagentTranscript.collapseToParent" : "subagentTranscript.backToParent")}
+            title={t(ended ? "subagentTranscript.collapseToParent" : "subagentTranscript.backToParent")}
+            onClick={() => {
+              const store = useTerminalStore.getState();
+              if (ended) store.collapseSubagentTranscript(sessionId, true);
+              else store.setActive(parentId);
+            }}>
+            <ArrowUpLeft size={14} aria-hidden="true" />
+          </button>}
+          <button className="subagent-transcript-action" type="button"
+            aria-label={t("subagentTranscript.latest")} title={t("subagentTranscript.latest")}
+            onClick={() => { const el = scrollRef.current; if (el) { atBottomRef.current = true; el.scrollTop = el.scrollHeight; syncScrollbar(); } }}>
+            <ArrowDown size={14} aria-hidden="true" />
+          </button>
+          {messages.length > 0 && !hasReasoning && <span className="subagent-transcript-info" tabIndex={0}
+            aria-label={t("subagentTranscript.reasoningUnavailable")} title={t("subagentTranscript.reasoningUnavailableHint")}>
+            <Info size={13} aria-hidden="true" />
+          </span>}
         </div>
-        {parentId && parentTitle !== undefined && <button className="subagent-transcript-action" type="button"
-          aria-label={t(ended ? "subagentTranscript.collapseToParent" : "subagentTranscript.backToParent")}
-          title={t(ended ? "subagentTranscript.collapseToParent" : "subagentTranscript.backToParent")}
-          onClick={() => {
-            const store = useTerminalStore.getState();
-            if (ended) store.collapseSubagentTranscript(sessionId, true);
-            else store.setActive(parentId);
-          }}>
-          <ArrowUpLeft size={14} aria-hidden="true" />
-        </button>}
-        <button className="subagent-transcript-action" type="button"
-          aria-label={t("subagentTranscript.latest")} title={t("subagentTranscript.latest")}
-          onClick={() => { const el = scrollRef.current; if (el) { atBottomRef.current = true; el.scrollTop = el.scrollHeight; syncScrollbar(); } }}>
-          <ArrowDown size={14} aria-hidden="true" />
-        </button>
       </header>
       {parentStopped && <div className="subagent-transcript-notice" role="status">{t("subagentTranscript.parentStopped")}</div>}
       <div className="relative min-h-0 flex-1">
-        <div ref={scrollRef} onScroll={handleScroll} className="ui-terminal-native-scroll h-full min-h-0 overflow-x-hidden overflow-y-auto subagent-transcript-scroll">
+        <div ref={scrollRef} onScroll={handleScroll} className="ui-terminal-native-scroll h-full min-h-0 overflow-x-hidden overflow-y-auto subagent-transcript-scroll sr-scroll">
           <div ref={scrollContentRef}>
             {messages.length === 0 ? (
               <div className="subagent-transcript-empty">
@@ -406,16 +346,15 @@ export function SubagentTranscriptView({ sessionId, title, isVisible }: Props) {
                   ? "subagentTranscript.noIndependentOutput" : "subagentTranscript.waitingDescription")}</p>
               </div>
             ) : (
-              <ul className="subagent-transcript-list">
+              <div className="sr-document">
                 {omittedCount > 0 && (
-                  <li className="py-1 text-center text-[10px]" style={{ color: TERM.dim }}>
+                  <p className="sr-omitted" style={{ color: TERM.dim }}>
                     {t("subagentTranscript.omittedMessages", { count: omittedCount })}
-                  </li>
+                  </p>
                 )}
-                {rows.map(row => row.kind === "activity"
-                  ? <TranscriptActivityRow key={row.id} activity={row} terminalCodeTheme={terminalCodeTheme} />
-                  : <TranscriptMessageRow key={row.id} message={row.message} terminalCodeTheme={terminalCodeTheme} />)}
-              </ul>
+                {rows.map(section => <SubagentReaderSectionView key={`${sessionId}:${section.kind}:${section.id}`}
+                  section={section} codeTheme={terminalCodeTheme} mode={displayMode} anchorPrefix={`subagent-${sessionId}`} />)}
+              </div>
             )}
           </div>
         </div>
@@ -436,12 +375,6 @@ export function SubagentTranscriptView({ sessionId, title, isVisible }: Props) {
           />
         </div>
       </div>
-      <footer className="subagent-transcript-footer">
-        <span>{t(ended ? "subagentTranscript.resultRetained" : "subagentTranscript.executionHint")}</span>
-        {messages.length > 0 && !hasReasoning && <span title={t("subagentTranscript.reasoningUnavailableHint")}>
-          {t("subagentTranscript.reasoningUnavailable")}
-        </span>}
-      </footer>
     </div>
   );
 }
