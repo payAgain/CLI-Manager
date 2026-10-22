@@ -2947,6 +2947,20 @@
   min-width: max-content;
 }
 
+.ui-markdown-plain-block {
+  background-color: var(--md-canvas-subtle);
+}
+
+.ui-markdown-plain-code {
+  margin: 0;
+  padding: 0.75rem;
+  color: var(--md-text);
+  font-size: 0.75rem;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .ui-markdown-code-header {
   display: flex;
   align-items: center;

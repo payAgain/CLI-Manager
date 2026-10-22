@@ -1,4 +1,4 @@
-import { Component, memo, useMemo, type ReactNode } from "react";
+import { Children, Component, isValidElement, memo, useMemo, type ReactNode } from "react";
 import Markdown, { type Components } from "react-markdown";
 import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
@@ -402,6 +402,15 @@ const makeComponents = (
     );
   },
   pre({ children }) {
+    // A fenced block without a language must still preserve its line breaks.
+    // Language-tagged blocks already provide their own highlighted <pre>.
+    const code = Children.toArray(children).find(child => isValidElement(child));
+    if (isValidElement<{ className?: string; children?: ReactNode }>(code)
+      && !/language-([\w-]+)/.test(code.props.className ?? "")) {
+      return <div className="ui-markdown-code-block ui-markdown-plain-block"><pre className="ui-markdown-plain-code">
+        <code>{renderText(extractPlainText(code.props.children).replace(/\n$/, ""), query)}</code>
+      </pre></div>;
+    }
     return <>{children}</>;
   },
   };
