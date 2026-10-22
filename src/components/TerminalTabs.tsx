@@ -145,10 +145,6 @@ const CommandTemplatePanel = lazy(() =>
   import("./CommandTemplatePanel").then(module => ({ default: module.CommandTemplatePanel }))
 );
 
-const SessionReplayPanel = lazy(() =>
-  import("./terminal/SessionReplayPanel").then((module) => ({ default: module.SessionReplayPanel }))
-);
-
 const normalizeTabMenuHex = (value: string | undefined, fallback: string) => (
   value && /^#[0-9a-f]{6}$/i.test(value) ? value : fallback
 );
@@ -2560,7 +2556,6 @@ export function TerminalTabs({
   // 非合并模式：实时统计与 Git 变更各自独立开关，可并排显示
   const [statsOpen, setStatsOpen] = useState(false);
   const [gitOpen, setGitOpen] = useState(false);
-  const [replayOpen, setReplayOpen] = useState(false);
   const [filesOpen, setFilesOpen] = useState(false);
   const [tasksPanelOpen, setTasksPanelOpen] = useState(false);
   const [templatesOpen, setTemplatesOpen] = useState(false);
@@ -2941,7 +2936,6 @@ export function TerminalTabs({
     () => TERMINAL_SIDE_PANEL_TAB_ORDER.filter((tab) => {
       if (tab === "git") return terminalToolbarVisibility.gitChanges && panelGitSupported;
       if (tab === "stats") return terminalToolbarVisibility.stats && panelCapabilities.statistics;
-      if (tab === "replay") return terminalToolbarVisibility.replay && panelCapabilities.history;
       if (tab === "files") return terminalToolbarVisibility.files && panelCapabilities.files;
       return terminalToolbarVisibility[tab];
     }),
@@ -2949,7 +2943,6 @@ export function TerminalTabs({
   );
   const historyActive = historyOpen && historyExpanded && activeWorkspaceTab === "history";
   const statsPanelActive = sidePanelMerged ? sidePanelOpen && sidePanelTab === "stats" : statsOpen;
-  const replayPanelActive = sidePanelMerged ? sidePanelOpen && sidePanelTab === "replay" : replayOpen;
   const gitPanelActive = sidePanelMerged ? sidePanelOpen && sidePanelTab === "git" : gitOpen;
   const filesPanelActive = sidePanelMerged ? sidePanelOpen && sidePanelTab === "files" : filesOpen;
   const templatesPanelActive = sidePanelMerged ? sidePanelOpen && sidePanelTab === "templates" : templatesOpen;
@@ -2979,7 +2972,6 @@ export function TerminalTabs({
     setSidePanelOpen(false);
     setStatsOpen(false);
     setGitOpen(false);
-    setReplayOpen(false);
     setFilesOpen(false);
     setTasksPanelOpen(false);
     setTemplatesOpen(false);
@@ -3131,7 +3123,6 @@ export function TerminalTabs({
       setSidePanelOpen(false);
       setStatsOpen(false);
       setGitOpen(false);
-      setReplayOpen(false);
       setFilesOpen(false);
       setTasksPanelOpen(false);
       setTemplatesOpen(false);
@@ -3367,7 +3358,6 @@ export function TerminalTabs({
     } else {
       if (terminalSidePanelSingleOpen || window.innerWidth < 1100) {
         setGitOpen(false);
-        setReplayOpen(false);
         setFilesOpen(false);
         setTasksPanelOpen(false);
         setTemplatesOpen(false);
@@ -3398,7 +3388,6 @@ export function TerminalTabs({
       }
       if (terminalSidePanelSingleOpen || window.innerWidth < 1100) {
         setStatsOpen(false);
-        setReplayOpen(false);
         setFilesOpen(false);
         setTasksPanelOpen(false);
         setTemplatesOpen(false);
@@ -3406,37 +3395,6 @@ export function TerminalTabs({
       setGitOpen(true);
     }
   }, [closeHistory, gitPanelActive, panelSession, projectById, rejectUnsupportedCapability, sidePanelMerged, terminalSidePanelSingleOpen]);
-
-  const handleToggleReplayPanel = useCallback(() => {
-    if (replayPanelActive) {
-      if (sidePanelMerged) setSidePanelOpen(false);
-      else setReplayOpen(false);
-      return;
-    }
-    const project = panelSession?.projectId ? projectById.get(panelSession.projectId) : null;
-    if (rejectUnsupportedCapability(project, "history")) return;
-    if (sidePanelMerged) {
-      if (terminalSidePanelSingleOpen) {
-        closeHistory();
-        setActiveWorkspaceTab("terminal");
-      }
-      setSidePanelTab("replay");
-      setSidePanelOpen(true);
-    } else {
-      if (terminalSidePanelSingleOpen) {
-        closeHistory();
-        setActiveWorkspaceTab("terminal");
-      }
-      if (terminalSidePanelSingleOpen || window.innerWidth < 1100) {
-        setStatsOpen(false);
-        setGitOpen(false);
-        setFilesOpen(false);
-        setTasksPanelOpen(false);
-        setTemplatesOpen(false);
-      }
-      setReplayOpen(true);
-    }
-  }, [closeHistory, panelSession, projectById, rejectUnsupportedCapability, replayPanelActive, sidePanelMerged, terminalSidePanelSingleOpen]);
 
   const syncFilePanelProject = useCallback(async (project: Project) => {
     if (rejectUnsupportedCapability(project, "files")) return false;
@@ -3478,7 +3436,6 @@ export function TerminalTabs({
     if (terminalSidePanelSingleOpen || window.innerWidth < 1100) {
       setStatsOpen(false);
       setGitOpen(false);
-      setReplayOpen(false);
       setTasksPanelOpen(false);
       setTemplatesOpen(false);
     }
@@ -3525,24 +3482,16 @@ export function TerminalTabs({
     if (sidePanelMerged) return;
     const enforce = () => {
       if (!terminalSidePanelSingleOpen && window.innerWidth >= 1100) return;
-      const openPanels = [statsOpen, gitOpen, replayOpen, filesOpen, tasksPanelOpen, templatesOpen].filter(Boolean).length;
+      const openPanels = [statsOpen, gitOpen, filesOpen, tasksPanelOpen, templatesOpen].filter(Boolean).length;
       if (openPanels <= 1) return;
       if (statsOpen) {
         setGitOpen(false);
-        setReplayOpen(false);
         setFilesOpen(false);
         setTasksPanelOpen(false);
         setTemplatesOpen(false);
         return;
       }
       if (gitOpen) {
-        setReplayOpen(false);
-        setFilesOpen(false);
-        setTasksPanelOpen(false);
-        setTemplatesOpen(false);
-        return;
-      }
-      if (replayOpen) {
         setFilesOpen(false);
         setTasksPanelOpen(false);
         setTemplatesOpen(false);
@@ -3554,7 +3503,7 @@ export function TerminalTabs({
     enforce();
     window.addEventListener("resize", enforce);
     return () => window.removeEventListener("resize", enforce);
-  }, [tasksPanelOpen, templatesOpen, filesOpen, gitOpen, replayOpen, sidePanelMerged, statsOpen, terminalSidePanelSingleOpen]);
+  }, [tasksPanelOpen, templatesOpen, filesOpen, gitOpen, sidePanelMerged, statsOpen, terminalSidePanelSingleOpen]);
 
   useEffect(() => {
     if (!filesPanelActive) return;
@@ -3584,7 +3533,6 @@ export function TerminalTabs({
       setSidePanelOpen(false);
       setStatsOpen(false);
       setGitOpen(false);
-      setReplayOpen(false);
       setFilesOpen(false);
       setTasksPanelOpen(false);
       setTemplatesOpen(false);
@@ -3892,7 +3840,7 @@ export function TerminalTabs({
     if (sidePanelMerged) { setSidePanelTab("templates"); setSidePanelOpen(true); }
     else {
       if (terminalSidePanelSingleOpen || window.innerWidth < 1100) {
-        setStatsOpen(false); setGitOpen(false); setReplayOpen(false); setFilesOpen(false); setTasksPanelOpen(false);
+        setStatsOpen(false); setGitOpen(false); setFilesOpen(false); setTasksPanelOpen(false);
       }
       setTemplatesOpen(true);
     }
@@ -3904,7 +3852,7 @@ export function TerminalTabs({
     if (sidePanelMerged) { setSidePanelTab("tasks"); setSidePanelOpen(true); }
     else {
       if (terminalSidePanelSingleOpen || window.innerWidth < 1100) {
-        setStatsOpen(false); setGitOpen(false); setReplayOpen(false); setFilesOpen(false);
+        setStatsOpen(false); setGitOpen(false); setFilesOpen(false);
         setTemplatesOpen(false);
       }
       setTasksPanelOpen(true);
@@ -3932,7 +3880,6 @@ export function TerminalTabs({
       templates: t("commandTemplate.title"),
       fullscreen: fullscreen ? t("terminal.toolbar.exitImmersiveFullscreen") : t("terminal.toolbar.immersiveFullscreen"),
       sessionHistory: `${t("terminal.toolbar.sessionHistory")} (${sessionHistoryShortcutHint})`,
-      replay: replayPanelActive ? t("terminal.toolbar.closeReplayPanel") : t("terminal.toolbar.openReplayPanel"),
       gitChanges: gitPanelActive ? t("terminal.toolbar.closeGit") : t("terminal.toolbar.openGit"),
       files:
         !filesPanelActive && !filePanelProject
@@ -3976,18 +3923,6 @@ export function TerminalTabs({
         >
           <ListClockIcon size={16} />
           {terminalToolbarVisibility.showText && <span>{t("terminal.toolbar.sessionHistory")}</span>}
-        </button>
-      ),
-      replay: (
-        <button
-          onClick={handleToggleReplayPanel}
-          className="ui-focus-ring ui-icon-action ui-action-replay"
-          data-active={replayPanelActive ? "true" : "false"}
-          aria-label={replayPanelActive ? t("terminal.toolbar.closeReplayPanel") : t("terminal.toolbar.openReplayPanel")}
-          aria-pressed={replayPanelActive}
-        >
-          <Activity size={13} strokeWidth={1.8} />
-          {terminalToolbarVisibility.showText && <span>{t("terminal.toolbar.replay")}</span>}
         </button>
       ),
       gitChanges: (
@@ -4041,7 +3976,7 @@ export function TerminalTabs({
     };
 
     const toolbarGroup = (key: string) => key === "new" || key === "fullscreen" ? "layout"
-      : key === "sessionHistory" || key === "replay" ? "session" : "panels";
+      : key === "sessionHistory" ? "session" : "panels";
     const visibleButtons = terminalToolbarOrder
       .filter((key) => {
         if (key === "new") return true;
@@ -4117,7 +4052,6 @@ export function TerminalTabs({
     handleToggleFilesPanel,
     handleToggleGitChangesPanel,
     handleToggleGlobalFullscreen,
-    handleToggleReplayPanel,
     handleToggleStatsPanel,
     handleToolbarDragCancel,
     handleToolbarDragEnd,
@@ -4128,7 +4062,6 @@ export function TerminalTabs({
     workspanEnabled,
     workspanTabModels.length,
     onToggleFullscreen,
-    replayPanelActive,
     refreshBackgroundTasks,
     sessionHistoryShortcutHint,
     sidePanelMerged,
@@ -4716,18 +4649,6 @@ export function TerminalTabs({
                 >
                   <Suspense fallback={null}>
                     <GitChangesPanel open={gitOpen} projectPath={sidePanelProjectPath} projectId={panelSession?.projectId} embedded />
-                  </Suspense>
-                </ResizableTerminalPanelFrame>
-              )}
-              {replayOpen && panelCapabilities.history && (
-                <ResizableTerminalPanelFrame
-                  widthKey="replay"
-                  defaultWidth={TERMINAL_PANEL_WIDTH_DEFAULTS.replay}
-                  resizeLabel={t("terminal.panel.resizeReplayLabel")}
-                  resizeTitle={t("terminal.panel.resizeReplayTitle")}
-                >
-                  <Suspense fallback={null}>
-                    <SessionReplayPanel activeSessionId={panelSessionId} open={replayOpen} />
                   </Suspense>
                 </ResizableTerminalPanelFrame>
               )}

@@ -584,7 +584,7 @@ export function HistoryWorkspace({ active = true, docked = false, onOpenDetail }
 
   const processModel = useMemo(() => {
     if (!activeSession) return EMPTY_PROCESS_MODEL;
-    if (detailView === "transcript" || detailView === "context") return EMPTY_PROCESS_MODEL;
+    if (detailView === "transcript" || detailView === "context" || detailView === "events") return EMPTY_PROCESS_MODEL;
     const cached = processModelCacheRef.current;
     if (cached?.session === activeSession && cached.language === language) {
       return cached.model;

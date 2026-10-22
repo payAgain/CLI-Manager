@@ -6,6 +6,7 @@ import { debugConsoleInfo, debugConsoleWarn } from "../lib/debugConsole";
 import { translateCurrent } from "../lib/i18n";
 import { logError, logWarn } from "../lib/logger";
 import type { CliHookPayload, CliHookEventName } from "./terminalStore";
+import { buildReplayEventQuery, type ReplayEventQuery, type ReplayEventScope } from "../lib/replayScope";
 
 export type ReplayEventKind =
   | "session"
@@ -306,9 +307,9 @@ function mapSession(row: ReplaySessionRow): ReplaySession {
   };
 }
 
-async function mapEvent(row: ReplayEventRow): Promise<ReplayEvent> {
+async function mapEvent(row: ReplayEventRow, hydrate = true): Promise<ReplayEvent> {
   const parsedPayload = parseJsonObject(row.payload_json);
-  const payload = row.kind === "snapshot"
+  const payload = row.kind === "snapshot" && hydrate
     ? await hydrateSnapshotPayload(parsedPayload)
     : parsedPayload;
   return {
@@ -525,7 +526,7 @@ async function fetchEvents(sessionKey: string): Promise<ReplayEvent[]> {
     "SELECT * FROM ai_replay_events WHERE session_key = $1 ORDER BY event_index DESC LIMIT $2",
     [sessionKey, REPLAY_EVENTS_IN_MEMORY_LIMIT]
   );
-  const events = await Promise.all(rows.reverse().map(mapEvent));
+  const events = await Promise.all(rows.reverse().map((row) => mapEvent(row)));
   const payloadBytes = rows.reduce((sum, row) => sum + stringByteLength(row.payload_json), 0);
   const maxPayloadBytes = rows.reduce((max, row) => Math.max(max, stringByteLength(row.payload_json)), 0);
   const patchStats = getEventsPatchStats(events);
@@ -727,6 +728,31 @@ async function getLastSnapshotPayload(sessionKey: string): Promise<Record<string
   return rows[0]?.payload_json ? hydrateSnapshotPayload(parseJsonObject(rows[0].payload_json)) : null;
 }
 
+/** Independent readers never change the selected terminal/session of another panel. */
+export async function readReplayEvents(scope: ReplayEventScope, options: ReplayEventQuery = {}) {
+  await ensureTables();
+  const db = await getDb();
+  const { sql, values, limit } = buildReplayEventQuery(scope, options);
+  const rows = await db.select<ReplayEventRow[]>(sql, values);
+  return {
+    events: await Promise.all(rows.slice(0, limit).map((row) => mapEvent(row, false))),
+    hasMore: rows.length > limit,
+  };
+}
+
+export async function readReplaySessions(limit = 100): Promise<ReplaySession[]> {
+  await ensureTables();
+  const db = await getDb();
+  const rows = await db.select<ReplaySessionRow[]>(
+    "SELECT * FROM ai_replay_sessions ORDER BY updated_at DESC LIMIT $1", [limit],
+  );
+  return rows.map(mapSession);
+}
+
+export async function readReplaySnapshot(event: ReplayEvent): Promise<ReplayEvent> {
+  return { ...event, payload: await hydrateSnapshotPayload(event.payload) };
+}
+
 export const useReplayStore = create<ReplayStore>((set, get) => ({
   sessions: [],
   eventsBySession: {},
@@ -921,6 +947,8 @@ export const useReplayStore = create<ReplayStore>((set, get) => ({
         const checkpointId = `snapshot-${Date.now().toString(36)}`;
         const payload: Record<string, unknown> = {
           ...snapshot,
+          sessionId: existing?.cliSessionId ?? null,
+          source: existing?.source ?? null,
           patchBytes,
           checkpointId,
           reason: reason ?? "manual",

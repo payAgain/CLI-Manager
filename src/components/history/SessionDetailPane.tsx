@@ -41,9 +41,10 @@ import { SessionContextView } from "./SessionContextView";
 import { SessionFileChangesView } from "./SessionFileChangesView";
 import { SessionToolDiagnosticsView } from "./SessionToolDiagnosticsView";
 import { SessionSubtaskTreeView } from "./SessionSubtaskTreeView";
+import { SessionEventLog } from "./SessionEventLog";
 import type { SessionProcessModel } from "./sessionEvents";
 
-export type HistoryDetailView = "transcript" | "timeline" | "canvas" | "context" | "changes" | "tools" | "subtasks";
+export type HistoryDetailView = "transcript" | "timeline" | "canvas" | "context" | "changes" | "tools" | "subtasks" | "events";
 
 interface SessionDetailPaneProps {
   activeView: HistorySessionView | null;
@@ -104,6 +105,7 @@ const DETAIL_VIEWS: Array<{ id: HistoryDetailView; labelKey: TranslationKey }> =
   { id: "changes", labelKey: "history.detail.view.changes" },
   { id: "tools", labelKey: "history.detail.view.tools" },
   { id: "subtasks", labelKey: "history.detail.view.subtasks" },
+  { id: "events", labelKey: "sessionEvents.title" },
 ];
 
 const MESSAGE_PREVIEW_LINE_COUNT = 5;
@@ -956,9 +958,17 @@ export function SessionDetailPane({
           detailView === "transcript" ? "ui-history-transcript-chat-surface" : ""
         }`}
       >
-        {loadingSessionDetail && <div className="text-xs text-text-muted">{t("history.detail.loading")}</div>}
+        {loadingSessionDetail && detailView !== "events" && <div className="text-xs text-text-muted">{t("history.detail.loading")}</div>}
 
-        {!loadingSessionDetail && activeSession?.messages.length === 0 && (
+        {detailView === "events" && <SessionEventLog key={activeView.sessionKey} scope={{
+          kind: "history",
+          cliSessionId: activeView.session_id,
+          source: activeView.source,
+          remote: activeView.session_ref?.transportKind === "ssh",
+          remoteHostId: activeView.remote_identity?.hostId,
+        }} />}
+
+        {!loadingSessionDetail && detailView === "transcript" && activeSession?.messages.length === 0 && (
           <div className="text-xs text-text-muted">{t("history.detail.noMessages")}</div>
         )}
 

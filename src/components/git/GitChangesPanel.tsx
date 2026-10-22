@@ -21,6 +21,7 @@ import type { GitTreeNode, GitPullStrategy, GitBranchInfo, Project } from "../..
 import { useGitTransportLease } from "../../hooks/useGitTransportLease";
 import { GIT_BACKGROUND_REFRESH_INTERVAL_MS } from "../../lib/gitRefreshPolicy";
 import { TerminalPanelHeader } from "../terminal/TerminalPanelHeader";
+import { GitSnapshotPanel } from "./GitSnapshotPanel";
 
 interface GitChangesPanelProps {
   open: boolean;
@@ -325,6 +326,7 @@ export function GitChangesPanel({ open, projectPath, projectId, visible = true, 
   } = useGitStore();
   const { gitGroupBy, update: updateSettings } = useSettingsStore();
   const [diffModalOpen, setDiffModalOpen] = useState(false);
+  const [detailTab, setDetailTab] = useState<"changes" | "snapshots">("changes");
   const [selectedFilePath, setSelectedFilePath] = useState<string | null>(null);
   const [confirmAllOpen, setConfirmAllOpen] = useState(false);
   const [discardTarget, setDiscardTarget] = useState<{ path: string; name: string; status: string } | null>(null);
@@ -778,9 +780,9 @@ export function GitChangesPanel({ open, projectPath, projectId, visible = true, 
       <TerminalPanelHeader
         icon={<GitBranch size={13} strokeWidth={2} />}
         title={t("git.title")}
-        subtitle={projectPath ? activeRepoLabel : undefined}
-        subtitleTitle={activeRepoPath ?? projectPath ?? undefined}
-        actions={(
+        subtitle={projectPath ? detailTab === "snapshots" ? rootRepoLabel : activeRepoLabel : undefined}
+        subtitleTitle={(detailTab === "snapshots" ? projectPath : activeRepoPath ?? projectPath) ?? undefined}
+        actions={detailTab === "changes" ? (
           <>
           {/* Group By 切换下拉 */}
           <div className="relative">
@@ -891,9 +893,17 @@ export function GitChangesPanel({ open, projectPath, projectId, visible = true, 
             <RefreshCw size={11} />
           </button>
           </>
-        )}
+        ) : undefined}
       />
 
+      <div className="session-record-tabs" role="tablist" aria-label={t("git.title")}>
+        <button type="button" role="tab" aria-selected={detailTab === "changes"} onClick={() => setDetailTab("changes")}>{t("history.detail.view.changes")}</button>
+        <button type="button" role="tab" aria-selected={detailTab === "snapshots"} onClick={() => setDetailTab("snapshots")}>{t("git.snapshots.title")}</button>
+      </div>
+      {detailTab === "snapshots" && <div className="ui-thin-scroll min-h-0 flex-1 overflow-y-auto">
+        <GitSnapshotPanel key={`${projectId}:${projectPath}`} projectPath={projectPath} remote={project?.environment_type === "ssh"} onChanged={handleRefresh} />
+      </div>}
+      <div className={detailTab === "changes" ? "flex min-h-0 flex-1 flex-col overflow-hidden" : "hidden"}>
       {/* 仓库切换：项目下检测到多个 Git 仓库时展示下拉（单仓库零 UI 变化） */}
       {repositories.length > 1 && (
         <div className="ui-git-repository-switcher ui-side-panel-toolbar relative shrink-0 border-b px-2 py-1.5" style={{ borderColor: TERM.border }}>
@@ -1301,6 +1311,7 @@ export function GitChangesPanel({ open, projectPath, projectId, visible = true, 
         </div>
       )}
 
+      </div>
       {/* Diff Modal：diff 请求指向生效仓库（激活的子仓库或项目根） */}
       {selectedFilePath && projectPath && (
         <GitDiffReviewDialog

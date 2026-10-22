@@ -16,16 +16,11 @@ const TerminalStatsPanel = lazy(() =>
   import("./TerminalStatsPanel").then((module) => ({ default: module.TerminalStatsPanel }))
 );
 
-const SessionReplayPanel = lazy(() =>
-  import("./SessionReplayPanel").then((module) => ({ default: module.SessionReplayPanel }))
-);
-
-export type TerminalSidePanelTab = "templates" | "stats" | "replay" | "git" | "files" | "tasks";
+export type TerminalSidePanelTab = "templates" | "stats" | "git" | "files" | "tasks";
 
 export const TERMINAL_SIDE_PANEL_TAB_ORDER: readonly TerminalSidePanelTab[] = [
   "templates",
   "stats",
-  "replay",
   "git",
   "files",
   "tasks",
@@ -48,12 +43,10 @@ const MERGED_PANEL_WIDTH_STORAGE_KEY = "cli-manager:terminal-side-panel-width";
 const TERMINAL_STATS_PANEL_WIDTH_STORAGE_KEY = "cli-manager:terminal-stats-panel-width";
 const TERMINAL_GIT_PANEL_WIDTH_STORAGE_KEY = "cli-manager:terminal-git-panel-width";
 const TERMINAL_FILES_PANEL_WIDTH_STORAGE_KEY = "cli-manager:terminal-files-panel-width";
-const TERMINAL_REPLAY_PANEL_WIDTH_STORAGE_KEY = "cli-manager:terminal-replay-panel-width";
 const LEGACY_WIDTH_STORAGE_KEYS: Partial<Record<TerminalPanelWidthKey, string>> = {
   merged: MERGED_PANEL_WIDTH_STORAGE_KEY,
   stats: TERMINAL_STATS_PANEL_WIDTH_STORAGE_KEY,
   git: TERMINAL_GIT_PANEL_WIDTH_STORAGE_KEY,
-  replay: TERMINAL_REPLAY_PANEL_WIDTH_STORAGE_KEY,
   files: TERMINAL_FILES_PANEL_WIDTH_STORAGE_KEY,
 };
 
@@ -250,7 +243,6 @@ export function TerminalSidePanel({
 }: TerminalSidePanelProps) {
   const { t } = useI18n();
   const statsEnabled = visibleTabs.includes("stats");
-  const replayEnabled = visibleTabs.includes("replay");
   const gitEnabled = visibleTabs.includes("git");
   const filesEnabled = visibleTabs.includes("files");
 
@@ -267,11 +259,6 @@ export function TerminalSidePanel({
         {statsEnabled && (
           <Suspense fallback={null}>
             <TerminalStatsPanel activeSessionId={activeSessionId} open={open} visible={activeTab === "stats"} embedded />
-          </Suspense>
-        )}
-        {replayEnabled && (
-          <Suspense fallback={null}>
-            <SessionReplayPanel activeSessionId={activeSessionId} open={open} visible={activeTab === "replay"} />
           </Suspense>
         )}
         {gitEnabled && activeTab === "git" && (

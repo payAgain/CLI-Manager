@@ -1,0 +1,46 @@
+.session-records { min-width: 0; padding: 12px; color: var(--text-primary); font-size: 12px; }
+.ui-side-panel .session-records, .ui-side-panel .session-record-tabs {
+  --text-primary: var(--term-panel-fg, #ECECEC);
+  --text-muted: var(--term-panel-dim, #9CA0A6);
+  --border: var(--term-panel-border, #2E2E2E);
+  --surface: var(--term-panel-card-inner, #181818);
+  --bg-tertiary: var(--term-panel-card, #121212);
+  --accent: var(--term-panel-cyan, #5AC8E0);
+  --success: var(--term-panel-green, #3DD68C);
+  --warning: var(--term-panel-yellow, #E5C453);
+  --danger: var(--term-panel-red, #F25E5E);
+}
+.session-record-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
+.session-record-note { color: var(--text-muted); font-size: 11px; line-height: 1.6; overflow-wrap: anywhere; }
+.session-records button { cursor: pointer; }
+.session-records button:disabled { opacity: .45; cursor: wait; }
+.session-records button:focus-visible, .session-records select:focus-visible, .session-records input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.session-record-select { width: 100%; margin-bottom: 12px; }
+.session-record-filters { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
+.session-record-filters label { display: flex; align-items: center; gap: 6px; flex: 1 1 120px; min-width: 0; padding: 6px 8px; border: 1px solid var(--border); border-radius: 4px; }
+.session-record-filters input { background: transparent; min-width: 0; width: 100%; outline: none; }
+.session-record-filters select, .session-record-select { color: var(--text-primary); background: var(--surface); padding: 6px; border: 1px solid var(--border); border-radius: 4px; }
+.session-event { border-bottom: 1px solid var(--border); }
+.session-event-toggle { display: flex; align-items: flex-start; gap: 8px; width: 100%; padding: 12px 2px; text-align: left; }
+.session-event-toggle > svg { flex-shrink: 0; margin-top: 3px; color: var(--text-muted); }
+.session-event-body { min-width: 0; flex: 1; }
+.session-event-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 12px; color: var(--text-muted); font-size: 10px; font-variant-numeric: tabular-nums; }
+.session-event-title { display: block; margin: 5px 0; font-size: 12px; font-weight: 600; line-height: 1.6; overflow-wrap: anywhere; }
+.session-event-summary { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; color: var(--text-muted); line-height: 1.6; overflow-wrap: anywhere; }
+.session-event-status { display: block; margin-top: 5px; color: var(--text-muted); font-size: 10px; }
+.session-event[data-status="failed"] .session-event-status, .session-record-error { color: var(--danger); }
+.session-event[data-status="attention"] .session-event-status { color: var(--warning); }
+.session-event[data-status="completed"] .session-event-status, .session-event[data-status="saved"] .session-event-status { color: var(--success); }
+.session-event[data-status="running"] .session-event-status { color: var(--accent); }
+.session-event-content { padding: 0 4px 12px 22px; }
+.session-event-content pre { max-height: 360px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; padding: 10px; margin-top: 8px; background: var(--surface); font-size: 11px; line-height: 1.65; }
+.session-record-more { width: 100%; padding: 12px; color: var(--accent); }
+.git-snapshot { padding: 16px 0; border-bottom: 1px solid var(--border); }
+.git-snapshot-files { margin: 10px 0; color: var(--text-muted); font-size: 11px; line-height: 1.8; overflow-wrap: anywhere; }
+.git-snapshot-files summary { cursor: pointer; }
+.git-snapshot-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.git-snapshot-actions button { display: inline-flex; align-items: center; gap: 5px; padding: 5px 8px; border: 1px solid var(--border); border-radius: 4px; }
+.git-snapshot-actions button:hover, .session-event-toggle:hover { background: var(--bg-tertiary); }
+.session-record-tabs { display: flex; flex-shrink: 0; gap: 12px; padding: 4px 12px 0; border-bottom: 1px solid var(--border); }
+.session-record-tabs button { padding: 8px 0; color: var(--text-muted); font-size: 12px; border-bottom: 2px solid transparent; }
+.session-record-tabs button[aria-selected="true"] { color: var(--text-primary); border-bottom-color: var(--accent); }

@@ -102,7 +102,6 @@ const TERMINAL_TOOLBAR_OPTIONS: { key: TerminalToolbarOptionKey; labelKey: Trans
   { key: "templates", labelKey: "settings.general.toolbar.templates" },
   { key: "fullscreen", labelKey: "settings.general.toolbar.fullscreen" },
   { key: "sessionHistory", labelKey: "settings.general.toolbar.sessionHistory" },
-  { key: "replay", labelKey: "settings.general.toolbar.replay" },
   { key: "files", labelKey: "settings.general.toolbar.files" },
   { key: "stats", labelKey: "settings.general.toolbar.stats" },
   { key: "gitChanges", labelKey: "settings.general.toolbar.gitChanges" },

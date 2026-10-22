@@ -33,6 +33,7 @@ import { parseDiffBlocksFromMessages } from "../../lib/diffParser";
 import { resolveTerminalProjectPath } from "../../lib/terminalOscPath";
 import { TerminalSquare } from "../icons";
 import { TerminalPanelHeader } from "./TerminalPanelHeader";
+import { SessionEventLog } from "../history/SessionEventLog";
 
 interface TerminalStatsPanelProps {
   activeSessionId: string | null;
@@ -408,6 +409,7 @@ export function TerminalStatsPanel({ activeSessionId, open, visible = true, embe
   const worktrees = useWorktreeStore((state) => state.worktrees);
 
   const [latestSession, setLatestSession] = useState<HistorySessionDetail | null>(null);
+  const [detailTab, setDetailTab] = useState<"info" | "events">("info");
   const [updatedAt, setUpdatedAt] = useState<number | null>(null);
   const [, setNowTick] = useState(0);
   const [refreshSeq, setRefreshSeq] = useState(0);
@@ -729,7 +731,16 @@ export function TerminalStatsPanel({ activeSessionId, open, visible = true, embe
         )}
       />
 
-      <div className="ui-thin-scroll flex min-h-0 flex-1 flex-col overflow-y-auto">
+      <div className="session-record-tabs" role="tablist" aria-label={t("termStats.live")}>
+        <button type="button" role="tab" aria-selected={detailTab === "info"} onClick={() => setDetailTab("info")}>{t("sessionEvents.info")}</button>
+        <button type="button" role="tab" aria-selected={detailTab === "events"} onClick={() => setDetailTab("events")}>{t("sessionEvents.title")}</button>
+      </div>
+      {detailTab === "events" ? <div className="ui-thin-scroll min-h-0 flex-1 overflow-y-auto">
+        <SessionEventLog key={activeSessionId} scope={boundCliSessionId && sourceFilter ? {
+          kind: "history", cliSessionId: boundCliSessionId, source: sourceFilter,
+          remote: isSshProject, remoteHostId: project?.ssh_host_id,
+        } : activeSessionId ? { kind: "terminal", sessionKey: activeSessionId } : null} />
+      </div> : <div className="ui-thin-scroll flex min-h-0 flex-1 flex-col overflow-y-auto">
         {!displayProjectPath ? (
           <EmptyHint text={t("termStats.noProject")} />
         ) : !displaySession ? (
@@ -741,7 +752,7 @@ export function TerminalStatsPanel({ activeSessionId, open, visible = true, embe
             {terminalStatsCardOrder.map(renderStatsCard)}
           </>
         )}
-      </div>
+      </div>}
       {diffFileChange && displayProjectPath && (
         <DiffViewerModal
           open={Boolean(diffFileChange)}

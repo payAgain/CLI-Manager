@@ -43,7 +43,7 @@ test("an explicit combined preference wins, and missing legacy entries retain th
 test("the merged toolbar entry retains the first legacy position and the order of unrelated entries", () => {
   const legacy = ["new", "stats", "subagents", "gitChanges", "backgroundTasks", "templates", "files", "sessionHistory", "fullscreen", "replay"];
   const original = [...legacy];
-  assert.deepEqual(order(legacy), ["new", "stats", "tasks", "gitChanges", "templates", "files", "sessionHistory", "fullscreen", "replay"]);
+  assert.deepEqual(order(legacy), ["new", "stats", "tasks", "gitChanges", "templates", "files", "sessionHistory", "fullscreen"]);
   assert.deepEqual(legacy, original);
 });
 
@@ -55,4 +55,13 @@ test("mixed and partially migrated orders remain complete and contain one task e
   assert.equal(result.includes("subagents"), false);
   assert.equal(result.includes("removed"), false);
   assert.deepEqual(new Set(result), new Set(order(null)));
+});
+
+test("retired replay entry is discarded without changing remaining preferences", () => {
+  const next = visibility({replay:true, stats:false, sessionHistory:true, gitChanges:false});
+  assert.equal("replay" in next, false);
+  assert.equal(next.stats, false);
+  assert.equal(next.gitChanges, false);
+  assert.equal(next.sessionHistory, true);
+  assert.equal(order(["replay", "stats", "new"]).includes("replay"), false);
 });
