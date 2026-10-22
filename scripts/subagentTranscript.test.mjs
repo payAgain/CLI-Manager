@@ -133,6 +133,25 @@ test("Claude readable thinking remains separate from tool calls and redacted blo
   assert.equal(parsed.messages[0].text, "Compare both files");
 });
 
+test("Claude shell tools use the command category while preserving exact arguments and results", () => {
+  const parsed = parseSubagentTranscript(lines(
+    { type: "assistant", message: { role: "assistant", content: [
+      { type: "tool_use", id: "bash-1", name: "Bash", input: { command: "git status --short" } },
+      { type: "tool_use", id: "ps-1", name: "PowerShell", input: { command: "Get-Location" } },
+    ] } },
+    { type: "user", message: { role: "user", content: [
+      { type: "tool_result", tool_use_id: "bash-1", content: " M src/app.ts" },
+    ] } },
+  ));
+  const merged = mergeSubagentMessages([], parsed.messages);
+  const [activity] = buildSubagentTranscriptRows(merged, "summary");
+  assert.deepEqual(activity.categories, ["command"]);
+  assert.equal(activity.toolCount, 2);
+  assert.equal(activity.pendingCount, 1);
+  assert.equal(activity.messages[0].output, " M src/app.ts");
+  assert.deepEqual(activity.messages, merged);
+});
+
 test("summary groups preserve messages, thinking, failures and pending calls without losing full detail", () => {
   const { messages } = parseSubagentTranscript(lines(
     text("user", "Inspect the project"),

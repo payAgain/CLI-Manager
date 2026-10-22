@@ -253,11 +253,11 @@ export interface SubagentTranscriptActivity {
 export type SubagentTranscriptRow = SubagentTranscriptActivity
   | { kind: "item"; id: number; message: SubagentTranscriptMessage };
 
-function toolCategory(name: string): SubagentToolCategory {
+export function subagentToolCategory(name: string): SubagentToolCategory {
   if (/search|browse|web/i.test(name)) return "search";
   if (/write|edit|patch/i.test(name)) return "edit";
   if (/read|grep|find|glob|file/i.test(name)) return "read";
-  if (/exec|shell|command|terminal|run/i.test(name)) return "command";
+  if (/exec|shell|command|terminal|run|bash|powershell/i.test(name)) return "command";
   return "other";
 }
 
@@ -288,7 +288,7 @@ export function buildSubagentTranscriptRows(
       activity.toolCount += 1;
       activity.failedCount += Number(Boolean(message.failed));
       activity.pendingCount += Number(message.output === undefined);
-      const category = toolCategory(message.toolName ?? "");
+      const category = subagentToolCategory(message.toolName ?? "");
       if (!activity.categories.includes(category)) activity.categories.push(category);
     }
   }
