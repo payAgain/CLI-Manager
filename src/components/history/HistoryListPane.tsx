@@ -94,13 +94,13 @@ function formatSessionClock(ts: number): string {
 }
 
 function rowHeight(row: HistoryListRow): number {
-  if (row.type === "missingParent") return 38;
-  if (row.type === "group") return 44;
+  if (row.type === "missingParent") return 32;
+  if (row.type === "group") return 36;
   if (row.type === "searchHeader" || row.type === "searching") return 32;
   if (row.type === "empty") return 88;
   if (row.type === "loading" || row.type === "loadMore") return 56;
   if (row.type === "searchHit") return 72;
-  return (row.depth > 0 ? 54 : 62) + (row.familyEnd ? 8 : 0);
+  return (row.depth > 0 ? 40 : 44) + (row.familyEnd ? 4 : 0);
 }
 
 function SelectionCheckbox({
@@ -903,13 +903,14 @@ export function HistoryListPane({
                         <span className="history-session-title">{sessionDisplayTitle}</span>
                       </span>
                       <span className="history-session-meta">
-                        {row.depth > 0 && <span className="history-session-kind">{t("history.tree.subagent")}</span>}
+                        {row.depth > 0 && <span className="history-session-kind" title={t("history.tree.subagent")}><Bot size={11} aria-label={t("history.tree.subagent")} /></span>}
                         <time title={formatTime(row.item.updated_at, language)}>{row.depth > 0 ? formatSessionClock(row.item.updated_at) : formatTime(row.item.updated_at, language)}</time>
                         <span className="history-session-message-count" aria-label={t("history.messageCount", { count: row.item.message_count })} title={t("history.messageCount", { count: row.item.message_count })}>
                           <MessageSquare size={10} />{row.item.message_count}
                         </span>
                         {sessionWorktree && <span className="history-session-worktree" title={t("history.worktreeBadgeTitle", { name: sessionWorktree.name })}>{t("history.worktreeBadge")}</span>}
-                        {row.childCount > 0 && <span className="history-session-children"><Bot size={11} />{t("history.tree.childCount", { count: row.childCount })}</span>}
+                        {row.childCount > 0 && <span className="history-session-children" title={t("history.tree.childCount", { count: row.childCount })}
+                          aria-label={t("history.tree.childCount", { count: row.childCount })}><Bot size={11} aria-hidden="true" />{row.childCount}</span>}
                       </span>
                     </button>
                     <div className="history-session-actions">
