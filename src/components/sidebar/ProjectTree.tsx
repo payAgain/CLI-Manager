@@ -629,7 +629,7 @@ export function ProjectTree({
   }
 
   return (
-    <div className={`ui-project-tree${embedded ? " ui-project-tree-embedded" : ""}`}>
+    <div className={`ui-project-tree${embedded ? " ui-project-tree-embedded" : ""}`} data-density={density}>
       <div className="ui-sidebar-project-search">
         <div className="ui-sidebar-project-search-field">
           <Search size={14} aria-hidden="true" />

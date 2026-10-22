@@ -6,6 +6,7 @@
 @import "./styles/components.css";
 @import "./styles/desktop.css";
 @import "./styles/status-bar.css";
+@import "./styles/project-hierarchy.css";
 @import "./styles/subagent-reader.css";
 /* Design Tokens — Tailwind CSS 4 @theme */
 @theme {

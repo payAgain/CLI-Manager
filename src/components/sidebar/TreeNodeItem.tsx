@@ -111,7 +111,7 @@ function TreeNodeItemImpl({
     const selected = actions.selectedId === worktree.id || actions.selectedWorktreeIds.has(worktree.id);
     return (
       <div ref={setNodeRef} style={sortableStyle} {...treeAttributes} role="treeitem"
-        data-tree-key={treeKey} aria-level={depth + 1} aria-selected={selected}
+        className="ui-worktree-item" data-tree-key={treeKey} aria-level={depth + 1} aria-selected={selected}
         tabIndex={focusedNodeKey === treeKey ? 0 : -1} onFocus={handleNodeFocus}>
         <WorkspaceCard project={project} worktree={worktree} name={worktree.name} branch={worktree.branch}
           terminals={actions.getWorkspaceTerminals(project.id, worktree.id)}
@@ -138,13 +138,15 @@ function TreeNodeItemImpl({
         onPointerDownCapture={preventSecondaryPointerFocus} onFocus={handleNodeFocus}>
         {showCrossGroupDropPreview && <span className="ui-project-insertion" aria-hidden="true" />}
         <div className="ui-project-heading group/item" style={{ paddingLeft: depth * indentStep + 5 }}
+          data-open={open} data-selected={selected}
           onContextMenu={(e) => actions.onContextMenuProjectHeader(e, p)} {...listeners}>
           {actions.renamingProjectId === p.id
             ? <><FolderCode size={14} /><InlineRename initial={p.name} onConfirm={(name) => actions.onProjectRenameConfirm(p.id, name)} onCancel={actions.onCancelProjectRename} /></>
             : <button type="button" className="ui-project-heading-name ui-focus-ring"
                 aria-expanded={open} title={p.path}
                 onClick={() => { if (!forceExpanded) actions.toggleCollapsed(collapseKey); }}>
-                <FolderCode size={14} strokeWidth={1.5} /><span>{p.name}</span>
+                <ChevronRight className="ui-project-disclosure" size={12} strokeWidth={1.7} style={{ transform: open ? "rotate(90deg)" : undefined }} aria-hidden="true" />
+                <FolderCode size={15} strokeWidth={1.5} /><span>{p.name}</span>
               </button>}
           <span className="ui-project-heading-actions" onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") e.stopPropagation(); }}>
             <button type="button" className="ui-sidebar-tool ui-focus-ring" aria-label={t("workspace.projectActions", { name: p.name })}
@@ -152,10 +154,6 @@ function TreeNodeItemImpl({
             {projectSupportsCapability(p, "worktree") && <button type="button" className="ui-sidebar-tool ui-focus-ring"
               aria-label={t("workspace.create")} title={t("workspace.create")}
               onPointerDown={(e) => e.stopPropagation()} onClick={() => actions.onCreateWorktree(p)}><Plus size={14} /></button>}
-            <button type="button" className="ui-sidebar-tool ui-focus-ring" aria-label={t(open ? "sidebar.tree.collapseWorktrees" : "sidebar.tree.expandWorktrees")}
-              onPointerDown={(e) => e.stopPropagation()} onClick={() => { if (!forceExpanded) actions.toggleCollapsed(collapseKey); }}>
-              <ChevronRight size={12} style={{ transform: open ? "rotate(90deg)" : undefined }} />
-            </button>
           </span>
         </div>
         {open && <div className="ui-project-workspaces" style={{ marginLeft: depth * indentStep }}>
