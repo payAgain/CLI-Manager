@@ -14,6 +14,7 @@ import type {
   SshDisconnectReason,
   SubagentTranscriptSource,
   TerminalSession,
+  TerminalScope,
 } from "../lib/types";
 import {
   createAgentTerminalMetadata,
@@ -260,6 +261,9 @@ interface PtyStatusPayload {
 interface TerminalStore {
   sessions: TerminalSession[];
   activeSessionId: string | null;
+  /** 当前窗口的项目范围，供终端及全局历史入口共用；不持久化。 */
+  terminalScope: TerminalScope;
+  setTerminalScope: (scope: TerminalScope) => void;
   paneTree: TerminalPaneNode | null;
   activePaneId: string | null;
   workspans: TerminalWorkspan[];
@@ -1463,6 +1467,8 @@ function releaseRemoteHistoryConsumer(session: TerminalSession | undefined): voi
 export const useTerminalStore = create<TerminalStore>((set, get) => ({
   sessions: [],
   activeSessionId: null,
+  terminalScope: { kind: "all" },
+  setTerminalScope: (terminalScope) => set({ terminalScope }),
   paneTree: null,
   activePaneId: null,
   workspans: [],

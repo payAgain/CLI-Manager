@@ -64,7 +64,6 @@ import { openWindowsTerminal } from "../lib/externalTerminal";
 import { normalizeDirectCodexStartupCommand, resolveProjectStartupCommand } from "../lib/projectStartupCommand";
 import { projectSupportsCapability, resolveProjectCapabilities, type ProjectCapability } from "../lib/projectCapabilities";
 import { resolveCliToolIconKey, type CliToolIconKey } from "../lib/cliTools";
-import { resolveHistoryProjectPath } from "../lib/historyProjectPaths";
 import { parseProjectEnvVars } from "../lib/projectEnv";
 import { Activity, Terminal, TerminalSquare, Sparkles, Plus, ListClockIcon, X, Copy, Maximize2, Minimize2, ChevronDown, ChevronRight, BarChart3, GitBranch, Folder, FolderOpen, Hash, Check, Cloud, Undo2 } from "./icons";
 import { WorktreeIcon } from "./WorktreeIcon";
@@ -75,6 +74,7 @@ import { EmptyState } from "./ui/EmptyState";
 import { useAppPrompt } from "./ui/useAppPrompt";
 import { useAppConfirm } from "./ui/useAppConfirm";
 import { useHistoryStore } from "../stores/historyStore";
+import { resolveHistoryOpenScope } from "../lib/historyScope";
 import { useSaveSessionToSidebar } from "../hooks/useSaveSessionToSidebar";
 import { canSaveSessionToSidebar } from "../lib/saveSessionToSidebar";
 import {
@@ -100,7 +100,6 @@ import { ConfirmDialog } from "./ConfirmDialog";
 import { getTerminalTheme, isLightTerminalTheme } from "../lib/terminalThemes";
 import { getTerminalSidePanelSkinStyle } from "./stats/termStatsUi";
 import {
-  findWorktreeForSession,
   projectWithWorktreePath,
   isSameProjectFileContext,
   resolveProjectForSessionFileContext,
@@ -2685,10 +2684,6 @@ export function TerminalTabs({
   const panelProject = panelSession?.projectId ? projectById.get(panelSession.projectId) ?? null : scopedProject;
   const panelCapabilities = resolveProjectCapabilities(panelProject);
   const panelGitSupported = panelCapabilities.git || panelProject?.environment_type === "ssh";
-  const activeWorktree = useMemo(
-    () => findWorktreeForSession(activeSession, sessions, worktrees),
-    [activeSession, sessions, worktrees]
-  );
   const filePanelProject = useMemo(
     () => resolveProjectForSessionFileContext(activeSession, sessions, projects, projectById, worktrees)
       ?? (scopedProject ? (scopedWorktree ? projectWithWorktreePath(scopedProject, scopedWorktree) : scopedProject) : null),
@@ -3538,17 +3533,23 @@ export function TerminalTabs({
       setFilesOpen(false);
       setTasksPanelOpen(false);
     }
-    const project = activeSession?.projectId ? projects.find((item) => item.id === activeSession.projectId) : undefined;
+    const historyScope = resolveHistoryOpenScope(undefined, {
+      terminalScope: terminalScopeValue,
+      activeSessionId: activeSession?.id ?? null,
+      sessions,
+      projects,
+      groups,
+      worktrees,
+    });
+    const project = projects.find((item) => item.id === historyScope.projectId);
     if (rejectUnsupportedCapability(project, "history")) return;
     setHistoryExpanded(false);
     setActiveWorkspaceTab("history");
     void openHistory({
       sourceFilter: "all",
-      projectPath: resolveHistoryProjectPath(project) || activeSession?.cwd || null,
-      projectId: project?.id ?? null,
-      scopedProjectPath: activeWorktree?.path ?? null,
+      ...historyScope,
     });
-  }, [activeSession, activeWorktree?.path, closeHistory, historyOpen, openHistory, projects, rejectUnsupportedCapability, terminalSidePanelSingleOpen]);
+  }, [activeSession, closeHistory, groups, historyOpen, openHistory, projects, rejectUnsupportedCapability, sessions, terminalScopeValue, terminalSidePanelSingleOpen, worktrees]);
 
   const handleOpenSplitPicker = useCallback((sessionId: string, direction: TerminalPaneSplitDirection, anchor?: SplitPickerAnchor) => {
     clearSplitPickerOpenSchedule();

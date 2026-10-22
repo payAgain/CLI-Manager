@@ -49,7 +49,6 @@ import { routeSubagentHook } from "./lib/subagentHookRouting";
 import { getTerminalTheme, isLightTerminalTheme } from "./lib/terminalThemes";
 import { resolveProjectForSession } from "./lib/terminalProject";
 import { terminalProcessManager } from "./terminal/core/TerminalProcessManager";
-import type { TerminalScope } from "./lib/types";
 import "./App.css";
 
 const appStartAt =
@@ -363,7 +362,8 @@ function App() {
   const [exitPhase, setExitPhase] = useState<ExitPhase | null>(null);
   const [exitNotice, setExitNotice] = useState<string | null>(null);
   const [terminalFullscreen, setTerminalFullscreen] = useState(false);
-  const [terminalScope, setTerminalScope] = useState<TerminalScope>(ALL_TERMINALS_SCOPE);
+  const terminalScope = useTerminalStore((s) => s.terminalScope);
+  const setTerminalScope = useTerminalStore((s) => s.setTerminalScope);
   const [isMacOs, setIsMacOs] = useState(isLikelyMacOs);
   const [initError, setInitError] = useState<string | null>(null);
   const [startupStage, setStartupStage] = useState<StartupStage>("settings");
@@ -428,7 +428,7 @@ function App() {
     if (!projectScopedTerminalViewEnabled) {
       setTerminalScope(ALL_TERMINALS_SCOPE);
     }
-  }, [projectScopedTerminalViewEnabled]);
+  }, [projectScopedTerminalViewEnabled, setTerminalScope]);
 
   useEffect(() => {
     if (!IN_TAURI) return;

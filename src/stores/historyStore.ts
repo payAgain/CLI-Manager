@@ -4,11 +4,14 @@ import { listen } from "@tauri-apps/api/event";
 import { getDb } from "../lib/db";
 import { createPerfMarker, logInfo, logWarn } from "../lib/logger";
 import { resolveHistoryProjectPath } from "../lib/historyProjectPaths";
+import { hasExplicitHistoryScope, resolveHistoryOpenScope, type HistoryProjectScope } from "../lib/historyScope";
 import { buildSshAgentHistoryContext, type SshAgentHistoryContext } from "../lib/sshAgentHistory";
 import { getHistoryPathArgs } from "../lib/historyPathArgs";
 import { buildHistorySessionChildMap } from "../lib/historySubagents";
 import { sameHistorySessionIdentity } from "../lib/historySessionIdentity";
 import { useProjectStore } from "./projectStore";
+import { useTerminalStore } from "./terminalStore";
+import { useWorktreeStore } from "./worktreeStore";
 import { useSshAgentIntegrationStore } from "./sshAgentIntegrationStore";
 import { useBackgroundOperationStore } from "./backgroundOperationStore";
 import type { HistoryBackupStatus, HistoryEditAuditEntry, HistoryFileChangeOperation, HistoryFileChangeSummary, HistoryIndexStatus, HistoryMessage, HistoryPromptItem, HistorySearchHit, HistorySessionDetail, HistorySessionSummary, HistorySessionRef, HistorySessionView, HistoryTokenTrendPoint, HistoryToolEvent, HistoryToolCount, PromptScope, Project, HistorySource, HistorySourceFilter, SessionFavoriteSnapshot, SessionMeta, SshRemoteHistorySyncResult } from "../lib/types";
@@ -21,12 +24,8 @@ interface MetaPatchInput {
   tags?: string[];
 }
 
-interface OpenHistoryOptions {
+interface OpenHistoryOptions extends Partial<HistoryProjectScope> {
   sourceFilter?: HistorySourceFilter;
-  projectPath?: string | null;
-  /** 左侧/入口选中的具体项目 id；仅用于 UI 高亮，会话过滤仍按 path。 */
-  projectId?: string | null;
-  scopedProjectPath?: string | null;
 }
 
 interface HistoryStore {
@@ -1489,16 +1488,27 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
   },
 
   openHistory: async (options) => {
+    // 重复点击入口或快捷键时保留用户在已打开面板中选择的项目范围。
+    const explicitScope = hasExplicitHistoryScope(options);
+    if (!explicitScope && options?.sourceFilter === undefined && get().isOpen) return;
     const openRequestSeq = ++historyOpenRequestSeq;
     globalSearchRequestSeq += 1;
     const isCurrentOpenRequest = () => openRequestSeq === historyOpenRequestSeq;
     const nextSourceFilter = options?.sourceFilter ?? "all";
-    const requestedProjectPath = options?.projectPath?.trim() || null;
-    const requestedProjectId = options?.projectId?.trim() || null;
+    const terminalState = useTerminalStore.getState();
     const projectStore = useProjectStore.getState();
-    if (!projectStore.loaded && (requestedProjectId || requestedProjectPath)) {
+    if (!projectStore.loaded && (!explicitScope || options?.projectId || options?.projectPath)) {
       await projectStore.fetchAll("interactive");
     }
+    if (!isCurrentOpenRequest()) return;
+    const { projectPath: requestedProjectPath, projectId: requestedProjectId, scopedProjectPath } = resolveHistoryOpenScope(options, {
+      terminalScope: terminalState.terminalScope,
+      activeSessionId: terminalState.activeSessionId,
+      sessions: terminalState.sessions,
+      projects: useProjectStore.getState().projects,
+      groups: useProjectStore.getState().groups,
+      worktrees: useWorktreeStore.getState().worktrees,
+    });
     const project = findHistoryProject(
       useProjectStore.getState().projects,
       requestedProjectId,
@@ -1509,7 +1519,7 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
     const nextProjectIdFilter = nextProjectPathFilter
       ? (project?.id ?? requestedProjectId)
       : null;
-    const nextScopedProjectPathFilter = options?.scopedProjectPath?.trim() || null;
+    const nextScopedProjectPathFilter = scopedProjectPath;
     const nextRemoteContext = project?.environment_type === "ssh"
       ? await buildSshAgentHistoryContext(project)
       : null;

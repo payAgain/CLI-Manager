@@ -12,7 +12,7 @@ export function SidebarNavigation({ collapsed, onOpenSettings, onShowTerminals }
   const { t } = useI18n();
   const historyOpen = useHistoryStore((s) => s.isOpen);
   const openHistory = () => {
-    void useHistoryStore.getState().openHistory({ sourceFilter: "all", projectPath: null, projectId: null, scopedProjectPath: null })
+    void useHistoryStore.getState().openHistory()
       .catch((error) => toast.error(t("sidebar.toast.openHistoryFailed"), { description: String(error) }));
   };
   return (
