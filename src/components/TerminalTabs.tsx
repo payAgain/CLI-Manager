@@ -1878,7 +1878,9 @@ function PaneLeafView({
   const paneMarkerStyle = paneMarkerSettings.style;
 
   return (
-    <div className="ui-terminal-pane relative flex h-full min-h-0 min-w-0 flex-col overflow-hidden">
+    <div className="ui-terminal-pane relative flex h-full min-h-0 min-w-0 flex-col overflow-hidden"
+      data-focused={isLayoutVisible && !historyActive && isAppFocused && effectivePaneActiveSessionId !== null && effectivePaneActiveSessionId === activeSessionId ? "true" : undefined}
+      data-readonly={activePaneSession?.kind === "subagent-transcript" ? "true" : undefined}>
       {!hideTabBar && (
         <PaneTabBar
           pane={pane}
@@ -2372,11 +2374,13 @@ function SortableToolbarButton({
   id,
   isDragging,
   tooltip,
+  groupStart,
   children,
 }: {
   id: string;
   isDragging: boolean;
   tooltip: string;
+  groupStart?: boolean;
   children: ReactNode;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition } = useSortable({
@@ -2395,6 +2399,7 @@ function SortableToolbarButton({
       ref={setNodeRef}
       style={style}
       className="ui-terminal-action-sort-item flex w-full justify-center"
+      data-group-start={groupStart ? "true" : undefined}
       data-tooltip={isDragging ? undefined : tooltip}
       {...attributes}
       {...listeners}
@@ -3972,6 +3977,8 @@ export function TerminalTabs({
       ),
     };
 
+    const toolbarGroup = (key: string) => key === "new" || key === "fullscreen" ? "layout"
+      : key === "sessionHistory" || key === "replay" ? "session" : "panels";
     const visibleButtons = terminalToolbarOrder
       .filter((key) => {
         if (key === "new") return true;
@@ -4007,12 +4014,13 @@ export function TerminalTabs({
             {t(historyActive ? "workspace.backTerminal" : "workspace.expandHistory")}
           </button>}
           <SortableContext items={visibleButtons.map((b) => b.id)} strategy={horizontalListSortingStrategy}>
-            {visibleButtons.map((btn) => (
+            {visibleButtons.map((btn, index) => (
               <SortableToolbarButton
                 key={btn.id}
                 id={btn.id}
                 isDragging={activeToolbarDragId === btn.id}
                 tooltip={toolbarTooltips[btn.id]}
+                groupStart={index > 0 && toolbarGroup(btn.id) !== toolbarGroup(visibleButtons[index - 1].id)}
               >
                 {btn.element}
               </SortableToolbarButton>

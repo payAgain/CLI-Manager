@@ -2,6 +2,7 @@ import type { MouseEventHandler, ReactNode } from "react";
 import { TERM_PANEL } from "../stats/termStatsUi";
 
 interface TerminalPanelHeaderProps {
+  className?: string;
   icon: ReactNode;
   title: ReactNode;
   subtitle?: ReactNode;
@@ -12,6 +13,7 @@ interface TerminalPanelHeaderProps {
 }
 
 export function TerminalPanelHeader({
+  className = "",
   icon,
   title,
   subtitle,
@@ -22,25 +24,26 @@ export function TerminalPanelHeader({
 }: TerminalPanelHeaderProps) {
   return (
     <header
-      className="ui-terminal-panel-header flex min-h-10 shrink-0 items-center justify-between gap-2 border-b px-3 py-1.5 font-sans"
-      style={{ backgroundColor: TERM_PANEL.bg, borderColor: TERM_PANEL.border }}
+      className={`ui-terminal-panel-header flex min-h-10 shrink-0 items-center justify-between gap-2 border-b px-3 py-1.5 font-sans ${className}`}
+      data-has-subtitle={subtitle ? "true" : undefined}
+      style={{ backgroundColor: TERM_PANEL.bg }}
     >
-      <div className="flex min-w-0 items-center gap-2" onDoubleClick={onTitleDoubleClick}>
+      <div className="ui-terminal-panel-heading flex min-w-0 flex-1 items-center gap-2" onDoubleClick={onTitleDoubleClick}>
         <span
-          className="flex shrink-0 items-center justify-center"
+          className="ui-terminal-panel-icon flex shrink-0 items-center justify-center"
           style={{ color: TERM_PANEL.dim }}
         >
           {icon}
         </span>
-        <div className="min-w-0">
-          <div className="flex min-w-0 items-center gap-1.5">
-            <span className="truncate text-[12px] font-medium leading-4" style={{ color: TERM_PANEL.fg }} title={typeof title === "string" ? title : undefined}>
+        <div className="ui-terminal-panel-copy min-w-0 flex-1">
+          <div className="ui-terminal-panel-title-row flex min-w-0 items-center gap-1.5">
+            <h2 className="ui-terminal-panel-title truncate font-medium" style={{ color: TERM_PANEL.fg }} title={typeof title === "string" ? title : undefined}>
               {title}
-            </span>
+            </h2>
             {titleAccessory}
           </div>
           {subtitle ? (
-            <div className="truncate text-[10px] leading-3" style={{ color: TERM_PANEL.dim }} title={subtitleTitle}>
+            <div className="ui-terminal-panel-subtitle truncate" style={{ color: TERM_PANEL.dim }} title={subtitleTitle ?? (typeof subtitle === "string" ? subtitle : undefined)}>
               {subtitle}
             </div>
           ) : null}

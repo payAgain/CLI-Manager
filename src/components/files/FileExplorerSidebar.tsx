@@ -1614,23 +1614,23 @@ export function FileExplorerSidebar({ mode = "sidebar", onClosePanel, onBackToPr
 
   const renderRows = useMemo(() => {
     if (loading && tree.length === 0) {
-      return <div className="px-3 py-8 text-center text-xs text-text-muted">{t("common.loading")}</div>;
+      return <div className="ui-side-panel-empty ui-file-explorer-empty" role="status">{t("common.loading")}</div>;
     }
 
     if (hasSearchQuery && searchLoading) {
-      return <div className="px-3 py-8 text-center text-xs text-text-muted">{t("files.searching")}</div>;
+      return <div className="ui-side-panel-empty ui-file-explorer-empty" role="status">{t("files.searching")}</div>;
     }
 
     if (hasSearchQuery && searchMode === "content") {
       return contentSearchResults.length > 0
         ? contentSearchResults.map((match) => renderContentSearchRow(match))
-        : <div className="px-3 py-8 text-center text-xs text-text-muted">{t("files.emptySearch")}</div>;
+        : <div className="ui-side-panel-empty ui-file-explorer-empty">{t("files.emptySearch")}</div>;
     }
 
     if (hasSearchQuery) {
       return visibleRows.length > 0
         ? visibleRows.map((entry) => renderSearchRow(entry))
-        : <div className="px-3 py-8 text-center text-xs text-text-muted">{t("files.emptySearch")}</div>;
+        : <div className="ui-side-panel-empty ui-file-explorer-empty">{t("files.emptySearch")}</div>;
     }
 
     return visibleRows.length > 0 ? (
@@ -1663,7 +1663,7 @@ export function FileExplorerSidebar({ mode = "sidebar", onClosePanel, onBackToPr
         renderAutoCollapsedGroup
       />
     ) : (
-      <div className="px-3 py-8 text-center text-xs text-text-muted">{t("files.empty")}</div>
+      <div className="ui-side-panel-empty ui-file-explorer-empty">{t("files.empty")}</div>
     );
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loading, tree.length, hasSearchQuery, searchLoading, searchMode, contentSearchResults, renderContentSearchRow, visibleRows, renderSearchRow, getDisplayStatus, getGitChange, requestOpenDiff, autoCollapseGroups, menuPortalContainer, handleFileKeyDown, handleFileDragStart, handleFileDrag, handleFileDragEnd, handleFileDragOver, handleFileDrop, handleFilePointerCancel, handleFilePointerDown, handleFilePointerMove, handleFilePointerUp, renamingAction?.path, submitRename, cancelRename, t]);
@@ -1686,6 +1686,7 @@ export function FileExplorerSidebar({ mode = "sidebar", onClosePanel, onBackToPr
   const searchLabel = searchMode === "content" ? t("files.searchCodePlaceholder") : t("files.searchPlaceholder");
   const searchToggleLabel = searchControlsVisible ? t("files.hideSearch") : searchLabel;
   const displayPathName = getDisplayPathName(readOnly ? project.remote_path : project.path);
+  const fullPathName = readOnly ? project.remote_path : project.path;
   const hasHeaderExtras = searchControlsVisible || readOnly || Boolean(clipboard);
   const headerActions = (
     <>
@@ -1709,6 +1710,7 @@ export function FileExplorerSidebar({ mode = "sidebar", onClosePanel, onBackToPr
   const headerExtras = (
     <>
       {searchControlsVisible && (
+        <div className="ui-file-search-toolbar">
         <div className="ui-file-search-input-shell flex items-center gap-1 rounded-md border border-border bg-surface-container-lowest px-1.5">
           <Search size={13} className="text-text-muted" />
           <input
@@ -1719,6 +1721,7 @@ export function FileExplorerSidebar({ mode = "sidebar", onClosePanel, onBackToPr
             placeholder={searchLabel}
             onChange={(event) => void setSearchQuery(event.currentTarget.value)}
           />
+        </div>
           <div className="ui-file-search-mode-inline flex shrink-0 items-center gap-0.5 rounded border border-border bg-surface-container-low p-0.5">
             {SEARCH_MODES.map((searchModeOption) => {
               const active = searchMode === searchModeOption.value;
@@ -1741,8 +1744,8 @@ export function FileExplorerSidebar({ mode = "sidebar", onClosePanel, onBackToPr
           </div>
         </div>
       )}
-      {readOnly && <div className="mt-1 text-[10px] text-text-muted">{t("files.readOnly")}</div>}
-      {!readOnly && clipboard && <div className="mt-1 truncate text-[10px] text-text-muted">{clipboard.mode === "copy" ? t("files.clipboard.copy") : t("files.clipboard.move")}：{clipboard.name}</div>}
+      {readOnly && <div className="ui-file-explorer-notice mt-1 text-[10px] text-text-muted">{t("files.readOnly")}</div>}
+      {!readOnly && clipboard && <div className="ui-file-explorer-notice mt-1 truncate text-[10px] text-text-muted" title={clipboard.name}>{clipboard.mode === "copy" ? t("files.clipboard.copy") : t("files.clipboard.move")}：{clipboard.name}</div>}
     </>
   );
   const panelStyle = mode === "panel"
@@ -1769,7 +1772,7 @@ export function FileExplorerSidebar({ mode = "sidebar", onClosePanel, onBackToPr
     : undefined;
 
   return (
-    <div ref={setMenuPortalContainer} className="ui-file-explorer-sidebar flex h-full min-h-0 flex-col" style={panelStyle} onKeyDown={handleSidebarKeyDown}>
+    <div ref={setMenuPortalContainer} className="ui-file-explorer-sidebar ui-side-panel flex h-full min-h-0 flex-col" data-panel-mode={mode} style={panelStyle} onKeyDown={handleSidebarKeyDown}>
       {dragPreview && (
         <Portal>
           <div
@@ -1795,20 +1798,21 @@ export function FileExplorerSidebar({ mode = "sidebar", onClosePanel, onBackToPr
             icon={<Folder size={14} />}
             title={project.name}
             subtitle={displayPathName}
+            subtitleTitle={fullPathName}
             onTitleDoubleClick={readOnly ? undefined : openProjectRootFolder}
             actions={headerActions}
           />
-          {hasHeaderExtras && <div className="shrink-0 border-b border-border px-2 py-2">{headerExtras}</div>}
+          {hasHeaderExtras && <div className="ui-side-panel-toolbar ui-file-explorer-toolbar shrink-0 border-b border-border px-2 py-2">{headerExtras}</div>}
         </>
       ) : (
-        <div className="shrink-0 border-b border-border px-2 py-2">
+        <div className="ui-file-explorer-project-header shrink-0 border-b border-border px-2 py-2">
           <div className="mb-2 flex items-center gap-2">
             <span className="flex shrink-0" onDoubleClick={readOnly ? undefined : openProjectRootFolder}>
               <Folder size={15} className="ui-file-explorer-root-icon" />
             </span>
             <div className="min-w-0 flex-1" onDoubleClick={readOnly ? undefined : openProjectRootFolder}>
-              <div className="ui-file-explorer-title truncate text-xs font-semibold">{project.name}</div>
-              <div className="ui-file-explorer-subtitle truncate text-[10px]">{displayPathName}</div>
+              <h2 className="ui-file-explorer-title truncate text-xs font-semibold" title={project.name}>{project.name}</h2>
+              <div className="ui-file-explorer-subtitle truncate text-[10px]" title={fullPathName}>{displayPathName}</div>
             </div>
             {headerActions}
           </div>
@@ -1818,7 +1822,7 @@ export function FileExplorerSidebar({ mode = "sidebar", onClosePanel, onBackToPr
       <ContextMenu>
         <ContextMenuTrigger asChild>
           <div
-            className="min-h-0 flex-1 overflow-y-auto px-1 py-1 outline-none ui-thin-scroll"
+            className="ui-side-panel-scroll ui-file-explorer-tree min-h-0 flex-1 overflow-y-auto px-1 py-1 outline-none ui-thin-scroll"
             tabIndex={0}
             data-file-drop-target-path=""
             onKeyDown={handleRootKeyDown}

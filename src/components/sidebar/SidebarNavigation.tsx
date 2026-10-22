@@ -4,8 +4,9 @@ import { useHistoryStore } from "../../stores/historyStore";
 import { useI18n } from "../../lib/i18n";
 import type { SettingsTab } from "../SettingsModal";
 
-export function SidebarNavigation({ collapsed, onOpenSettings, onShowTerminals }: {
+export function SidebarNavigation({ collapsed, allTerminalsActive, onOpenSettings, onShowTerminals }: {
   collapsed: boolean;
+  allTerminalsActive: boolean;
   onOpenSettings: (tab?: SettingsTab) => void;
   onShowTerminals: () => void;
 }) {
@@ -17,13 +18,16 @@ export function SidebarNavigation({ collapsed, onOpenSettings, onShowTerminals }
   };
   return (
     <nav className="ui-sidebar-navigation" data-collapsed={collapsed} aria-label={t("workspace.label")}>
-      <button type="button" className="ui-sidebar-nav-item ui-focus-ring" title={t("sidebar.tree.allTerminals")} onClick={() => {
+      <button type="button" className="ui-sidebar-nav-item ui-focus-ring" data-active={allTerminalsActive && !historyOpen}
+        aria-current={allTerminalsActive && !historyOpen ? "page" : undefined}
+        aria-label={t("sidebar.tree.allTerminals")} title={t("sidebar.tree.allTerminals")} onClick={() => {
         useHistoryStore.getState().closeHistory(); onShowTerminals();
-      }}><Layers size={14} />{!collapsed && <span>{t("sidebar.tree.allTerminals")}</span>}</button>
+      }}><Layers size={14} aria-hidden="true" />{!collapsed && <span>{t("sidebar.tree.allTerminals")}</span>}</button>
       <button type="button" className="ui-sidebar-nav-item ui-focus-ring" data-active={historyOpen}
-        title={t("workspace.historyNav")} onClick={openHistory}><History size={14} />{!collapsed && <span>{t("workspace.historyNav")}</span>}</button>
-      <button type="button" className="ui-sidebar-nav-item ui-focus-ring" title={t("workspace.templatesNav")}
-        onClick={() => onOpenSettings("templates")}><TerminalSquare size={14} />{!collapsed && <span>{t("workspace.templatesNav")}</span>}</button>
+        aria-current={historyOpen ? "page" : undefined} aria-label={t("workspace.historyNav")}
+        title={t("workspace.historyNav")} onClick={openHistory}><History size={14} aria-hidden="true" />{!collapsed && <span>{t("workspace.historyNav")}</span>}</button>
+      <button type="button" className="ui-sidebar-nav-item ui-focus-ring" aria-label={t("workspace.templatesNav")} title={t("workspace.templatesNav")}
+        onClick={() => onOpenSettings("templates")}><TerminalSquare size={14} aria-hidden="true" />{!collapsed && <span>{t("workspace.templatesNav")}</span>}</button>
     </nav>
   );
 }

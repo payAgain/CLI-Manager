@@ -207,7 +207,8 @@ export function ResizableTerminalPanelFrame({
   return (
     <aside
       ref={panelRef}
-      className="ui-terminal-side-panel-frame relative flex shrink-0 flex-col overflow-hidden border-l border-border font-sans"
+      className="ui-terminal-side-panel-frame ui-side-panel relative flex shrink-0 flex-col overflow-hidden border-l border-border font-sans"
+      data-panel-kind={widthKey}
       data-dragging={dragging ? "true" : undefined}
       style={{
         // Parent/content updates can re-render several times per second while
@@ -226,7 +227,7 @@ export function ResizableTerminalPanelFrame({
         aria-orientation="vertical"
         aria-label={resizeLabel}
         title={resizeTitle}
-        className={`absolute left-0 top-0 z-20 h-full w-2 -translate-x-1/2 cursor-col-resize transition-colors ${dragging ? "bg-primary/35" : "hover:bg-primary/25"}`}
+        className={`ui-side-panel-resize-handle absolute left-0 top-0 z-20 h-full w-2 -translate-x-1/2 cursor-col-resize transition-colors ${dragging ? "bg-primary/35" : "hover:bg-primary/25"}`}
         onMouseDown={handleResizeMouseDown}
       />
       {children}

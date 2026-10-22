@@ -13,7 +13,7 @@ import { STATUS_CONFIG } from "./GitStatusIcon";
 import { GitDiffReviewDialog } from "./diff/GitDiffReviewDialog";
 import { useGitDiffOpenWorkflow } from "./diff/useGitDiffOpenWorkflow";
 import { ConfirmDialog } from "../ConfirmDialog";
-import { TERM, EmptyHint, panelColorTint } from "../stats/termStatsUi";
+import { TERM, panelColorTint } from "../stats/termStatsUi";
 import { debugConsoleWarn } from "../../lib/debugConsole";
 import { useI18n, type TranslationKey } from "../../lib/i18n";
 import { findProjectByPath } from "../../lib/terminalProject";
@@ -197,7 +197,7 @@ function GitBranchMenu({
           <div className="px-3 py-2 text-[11px]" style={{ color: TERM.dim }}>{t("git.branch.noSearchResults")}</div>
         ) : (
           <>
-            <div className="px-2 py-1 text-[10px] font-bold uppercase tracking-wide" style={{ color: TERM.dim }}>
+            <div className="ui-git-menu-section px-2 py-1 text-[11px] font-medium" style={{ color: TERM.dim }}>
               {t("git.branch.local")}
             </div>
             {branchLoading && branches.length === 0 ? (
@@ -220,7 +220,7 @@ function GitBranchMenu({
                     }}
                   >
                     <span className="min-w-0 flex-1 truncate">{item.name}</span>
-                    {item.upstream && <span className="shrink-0 text-[9px]" style={{ color: TERM.dim }}>{item.upstream}</span>}
+                    {item.upstream && <span className="ui-git-menu-meta max-w-[45%] truncate text-[11px]" style={{ color: TERM.dim }} title={item.upstream}>{item.upstream}</span>}
                     {item.current && <Check size={11} className="shrink-0" />}
                   </button>
                 ))}
@@ -232,7 +232,7 @@ function GitBranchMenu({
               </>
             )}
 
-            <div className="mt-1 border-t px-2 py-1 text-[10px] font-bold uppercase tracking-wide" style={{ color: TERM.dim, borderColor: TERM.border }}>
+            <div className="ui-git-menu-section mt-1 border-t px-2 py-1 text-[11px] font-medium" style={{ color: TERM.dim, borderColor: TERM.border }}>
               {t("git.branch.remote")}
             </div>
             {remoteBranches.length === 0 ? (
@@ -766,17 +766,20 @@ export function GitChangesPanel({ open, projectPath, projectId, visible = true, 
   ];
 
   const panelClassName = embedded
-    ? "flex h-full min-h-0 flex-col overflow-hidden font-sans"
-    : "relative z-[1] flex w-[184px] shrink-0 flex-col overflow-hidden border-l border-border font-sans";
+    ? "ui-git-sidebar ui-side-panel flex h-full min-h-0 flex-col overflow-hidden font-sans"
+    : "ui-git-sidebar ui-side-panel relative z-[1] flex w-[184px] shrink-0 flex-col overflow-hidden border-l border-border font-sans";
   const Container = embedded ? "div" : "aside";
   return (
     <Container
       className={panelClassName}
+      aria-label={t("git.title")}
       style={{ backgroundColor: TERM.bg, ...TERMINAL_PANEL_SCROLLBAR_STYLE }}
     >
       <TerminalPanelHeader
         icon={<GitBranch size={13} strokeWidth={2} />}
         title={t("git.title")}
+        subtitle={projectPath ? activeRepoLabel : undefined}
+        subtitleTitle={activeRepoPath ?? projectPath ?? undefined}
         actions={(
           <>
           {/* Group By 切换下拉 */}
@@ -893,7 +896,7 @@ export function GitChangesPanel({ open, projectPath, projectId, visible = true, 
 
       {/* 仓库切换：项目下检测到多个 Git 仓库时展示下拉（单仓库零 UI 变化） */}
       {repositories.length > 1 && (
-        <div className="relative shrink-0 border-b px-2 py-1.5" style={{ borderColor: TERM.border }}>
+        <div className="ui-git-repository-switcher ui-side-panel-toolbar relative shrink-0 border-b px-2 py-1.5" style={{ borderColor: TERM.border }}>
           <button
             type="button"
             onClick={() => setRepoMenuOpen(!repoMenuOpen)}
@@ -961,7 +964,7 @@ export function GitChangesPanel({ open, projectPath, projectId, visible = true, 
 
       {/* Filter */}
       {changes.length > 0 && (
-        <div ref={filterRowRef} className="flex w-full shrink-0 gap-1 border-b px-2 py-1.5" style={{ borderColor: TERM.border }}>
+        <div ref={filterRowRef} className="ui-git-filters ui-side-panel-toolbar flex w-full shrink-0 gap-1 border-b px-2 py-1.5" style={{ borderColor: TERM.border }}>
           {filterButtons.map((btn) => {
             const Icon = btn.icon;
             const active = statusFilter === btn.value;
@@ -972,7 +975,7 @@ export function GitChangesPanel({ open, projectPath, projectId, visible = true, 
                 key={btn.value}
                 type="button"
                 onClick={() => setStatusFilter(btn.value)}
-                className="ui-focus-ring flex min-w-0 flex-1 items-center justify-center gap-1 whitespace-nowrap rounded px-1.5 py-0.5 text-[10px] transition-colors"
+                className="ui-git-filter ui-focus-ring flex min-w-0 flex-1 items-center justify-center gap-1 whitespace-nowrap rounded px-1.5 py-0.5 text-[10px] transition-colors"
                 title={title}
                 aria-label={title}
                 aria-pressed={active}
@@ -984,7 +987,7 @@ export function GitChangesPanel({ open, projectPath, projectId, visible = true, 
               >
                 <Icon size={11} strokeWidth={2} style={{ color: btn.color }} />
                 {!hideFilterLabels && <span>{label}</span>}
-                <span className="font-bold">{btn.count}</span>
+                <span className="ui-side-panel-section-count tabular-nums">{btn.count}</span>
               </button>
             );
           })}
@@ -993,7 +996,7 @@ export function GitChangesPanel({ open, projectPath, projectId, visible = true, 
 
       {/* Summary */}
       {changes.length > 0 && (
-        <div className="shrink-0 border-b px-2 py-1.5 text-[10px]" style={{ borderColor: TERM.border, color: TERM.dim }}>
+        <div className="ui-git-summary shrink-0 border-b px-2 py-1.5 text-[10px]" style={{ borderColor: TERM.border, color: TERM.dim }}>
           <span style={{ color: TERM.fg }}>{t("git.summary.files", { count: allCount })}</span>
           {modifiedCount > 0 && (
             <>
@@ -1025,20 +1028,20 @@ export function GitChangesPanel({ open, projectPath, projectId, visible = true, 
       )}
 
       {/* Content */}
-      <div className="min-h-0 flex-1 overflow-y-auto p-2 ui-thin-scroll">
+      <div className="ui-side-panel-scroll ui-git-changes-list min-h-0 flex-1 overflow-y-auto p-2 ui-thin-scroll">
         {!projectPath ? (
-          <EmptyHint text={t("git.empty.noProject")} />
+          <p className="ui-side-panel-empty">{t("git.empty.noProject")}</p>
         ) : (contextLoading || loading) && changes.length === 0 ? (
-          <EmptyHint text={t("common.loading")} />
+          <p className="ui-side-panel-empty" role="status">{t("common.loading")}</p>
         ) : changes.length === 0 ? (
-          <EmptyHint text={t("git.empty.noChanges")} />
+          <p className="ui-side-panel-empty">{t("git.empty.noChanges")}</p>
         ) : (
           <>
             {tree.length > 0 && (
-              <div>
-                <div className="mb-1 px-1 text-[10px] font-bold uppercase tracking-wide" style={{ color: TERM.dim }}>
+              <div className="ui-side-panel-section ui-git-change-group">
+                <h3 className="ui-side-panel-section-title mb-1 px-1 text-[11px] font-medium" style={{ color: TERM.dim }}>
                   {t("git.section.changed")}
-                </div>
+                </h3>
                 <GitChangesTree
                   project={project}
                   nodes={tree}
@@ -1054,10 +1057,10 @@ export function GitChangesPanel({ open, projectPath, projectId, visible = true, 
             )}
             {/* 未跟踪文件单独成组（仿 JetBrains Unversioned Files），M/D 筛选下隐藏 */}
             {untrackedTree.length > 0 && statusFilter !== "M" && statusFilter !== "D" && (
-              <div className={tree.length > 0 ? "mt-2 border-t pt-2" : ""} style={{ borderColor: TERM.border }}>
-                <div className="mb-1 px-1 text-[10px] font-bold uppercase tracking-wide" style={{ color: TERM.dim }}>
+              <div className={`ui-side-panel-section ui-git-change-group ${tree.length > 0 ? "mt-2 pt-2" : ""}`}>
+                <h3 className="ui-side-panel-section-title mb-1 px-1 text-[11px] font-medium" style={{ color: TERM.dim }}>
                   {t("git.section.untracked")}
-                </div>
+                </h3>
                 <GitChangesTree
                   project={project}
                   nodes={untrackedTree}

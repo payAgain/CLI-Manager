@@ -181,12 +181,12 @@ export function BackgroundTasksPanel({ tasks, onRefresh, onRestored, refreshSeq 
 
   return (
     <>
-      <section id="background-tasks-panel" className="background-tasks-panel" aria-label={t("terminal.backgroundTasks.title")}>
-        <header className="flex h-8 items-center gap-2 px-3">
+      <section id="background-tasks-panel" className="background-tasks-panel ui-side-panel-section" data-empty={!hasAnyTask ? "true" : undefined} aria-label={t("terminal.backgroundTasks.title")}>
+        <header className="ui-side-panel-section-header flex h-8 items-center gap-2 px-3">
           <Layers size={14} className="shrink-0 text-text-muted" />
-          <h3 className="text-[11px] font-medium text-text-primary">{t("terminal.backgroundTasks.title")}</h3>
-          <span className="text-[10px] tabular-nums text-text-muted">{rows.length + operationRows.length + agentRows.length}</span>
-          <div className="ml-auto flex items-center gap-1">
+          <h3 className="ui-side-panel-section-title text-[11px] font-medium text-text-primary">{t("terminal.backgroundTasks.title")}</h3>
+          <span className="ui-side-panel-section-count text-[10px] tabular-nums text-text-muted">{rows.length + operationRows.length + agentRows.length}</span>
+          <div className="ui-side-panel-section-actions ml-auto flex items-center gap-1">
             {hasFinishedOperation && (
               <button className="background-tasks-panel__action ui-flat-action px-2 py-1 text-[10px]" onClick={clearFinished}>
                 {t("backgroundOperations.clearFinished")}
@@ -194,9 +194,9 @@ export function BackgroundTasksPanel({ tasks, onRefresh, onRestored, refreshSeq 
             )}
           </div>
         </header>
-        <div className="background-tasks-panel__list">
+        <div className="background-tasks-panel__list ui-side-panel-section-body">
           {!hasAnyTask ? (
-            <p className="px-1 py-1 text-[11px] text-text-muted" title={t("terminal.backgroundTasks.emptyDescription")}>{t("terminal.backgroundTasks.empty")}</p>
+            <p className="ui-side-panel-empty px-1 py-1 text-[11px] text-text-muted" title={t("terminal.backgroundTasks.emptyDescription")}>{t("terminal.backgroundTasks.empty")}</p>
           ) : null}
 
           {agentRows.map((job) => {
@@ -208,8 +208,8 @@ export function BackgroundTasksPanel({ tasks, onRefresh, onRestored, refreshSeq 
               <div key={`agent:${job.hostId}`} className="background-tasks-panel__item px-1 py-2" role={job.status === "failed" ? "alert" : undefined}>
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0">
-                    <div className="truncate text-xs font-medium text-text-primary">{t("backgroundOperations.agentInstall.title")}</div>
-                    <div className="truncate text-[10px] text-text-muted">{hostName}</div>
+                    <div className="ui-side-panel-item-title truncate text-xs font-medium text-text-primary">{t("backgroundOperations.agentInstall.title")}</div>
+                    <div className="ui-side-panel-item-meta truncate text-[10px] text-text-muted" title={hostName}>{hostName}</div>
                   </div>
                   <span className="background-tasks-panel__status flex shrink-0 items-center gap-1 text-[10px]" data-status={status}>
                     {status === "done" ? <Check size={11} /> : null}
@@ -247,8 +247,8 @@ export function BackgroundTasksPanel({ tasks, onRefresh, onRestored, refreshSeq 
               <div key={operation.id} className="background-tasks-panel__item px-1 py-2" role={operation.status === "failed" ? "alert" : undefined}>
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0">
-                    <div className="truncate text-xs font-medium text-text-primary">{t(operation.titleKey)}</div>
-                    {operation.contextLabel && <div className="truncate text-[10px] text-text-muted">{operation.contextLabel}</div>}
+                    <div className="ui-side-panel-item-title truncate text-xs font-medium text-text-primary" title={t(operation.titleKey)}>{t(operation.titleKey)}</div>
+                    {operation.contextLabel && <div className="ui-side-panel-item-meta truncate text-[10px] text-text-muted" title={operation.contextLabel}>{operation.contextLabel}</div>}
                   </div>
                   <span className="background-tasks-panel__status flex shrink-0 items-center gap-1 text-[10px]" data-status={status}>
                     {status === "done" ? <Check size={11} /> : null}
@@ -292,9 +292,9 @@ export function BackgroundTasksPanel({ tasks, onRefresh, onRestored, refreshSeq 
               <div key={task.sessionId} className="background-tasks-panel__item px-1 py-2">
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0">
-                    <div className="truncate text-xs font-medium text-text-primary">{task.title}</div>
+                    <div className="ui-side-panel-item-title truncate text-xs font-medium text-text-primary" title={task.title}>{task.title}</div>
                     {(task.projectName || task.location) && (
-                      <div className="truncate text-[10px] text-text-muted" title={task.location || task.projectName}>
+                      <div className="ui-side-panel-item-meta truncate text-[10px] text-text-muted" title={task.location || task.projectName}>
                         {task.projectName}{task.projectName && task.location ? " · " : ""}{task.location}
                       </div>
                     )}

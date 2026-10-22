@@ -2123,7 +2123,9 @@ export function Sidebar({
             <div className="ui-sidebar-combined-list h-full min-h-0 overflow-y-auto overflow-x-hidden">
               <ProjectTree
                 header={sidebarHeader}
-                navigation={<SidebarNavigation collapsed={!compactMode && sidebarCollapsed} onOpenSettings={onOpenSettings} onShowTerminals={handleSelectAllTerminalScope} />}
+                navigation={<SidebarNavigation collapsed={!compactMode && sidebarCollapsed}
+                  allTerminalsActive={!projectScopedTerminalViewEnabled || terminalScope.kind === "all"}
+                  onOpenSettings={onOpenSettings} onShowTerminals={handleSelectAllTerminalScope} />}
                 tree={displayedTree}
                 initialLoading={initialLoading}
                 loadError={loadError}

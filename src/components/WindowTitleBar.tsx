@@ -66,7 +66,7 @@ export function WindowTitleBar({ sidebarChrome = false }: { sidebarChrome?: bool
   if (sidebarChrome) {
     return (
       <div className="ui-sidebar-brandbar" data-macos={isMacOs} data-tauri-drag-region>
-        <span data-tauri-drag-region>CLI-Manager</span>
+        <span data-tauri-drag-region>{isMacOs ? "CLI-Manager" : t("workspace.label")}</span>
       </div>
     );
   }
