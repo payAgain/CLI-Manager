@@ -72,6 +72,26 @@ test("SSH stays on the remote Hook route", () => {
   assert.equal(calls.length,0);
 });
 
+test("ordinary Claude, Codex, Grok and Pi completion events stay on the parent route", () => {
+  for (const source of ["claude", "codex", "grok", "pi"]) {
+    for (const name of ["Stop", "StopFailure"]) {
+      const {calls,handlers} = harness();
+      assert.equal(routeSubagentHook(event({source,event:name,agentId:null}),handlers),false);
+      assert.equal(calls.length,0);
+    }
+  }
+});
+
+test("SSH Claude and Codex child lifecycle events never open a local transcript pane", () => {
+  for (const source of ["claude", "codex"]) {
+    for (const name of ["SubagentStart", "SubagentStop", "Stop"]) {
+      const {calls,handlers} = harness();
+      assert.equal(routeSubagentHook(event({source,event:name,environmentType:"ssh",agentTranscriptPath:"/remote/child.jsonl"}),handlers),false);
+      assert.equal(calls.length,0);
+    }
+  }
+});
+
 test("Claude stop without a child path finishes its bound parent without a new subscription", () => {
   const {calls,handlers}=harness([{id:"claude-pane",source:"claude",cliSessionId:"parent-thread",paths:[]}]);
   routeSubagentHook(event({source:"claude",event:"SubagentStop"}),handlers);

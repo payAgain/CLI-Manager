@@ -138,9 +138,12 @@ pub fn normalize_hook_input(event: &str, hook_input: &Value) -> Option<Normalize
         .or_else(|| {
             tool_input.and_then(|value| first_string(value, &["prompt", "description", "task"]))
         });
-    let agent_id = first_string(hook_input, &["agent_id"])
-        .or_else(|| tool_input.and_then(|value| first_string(value, &["agent_id", "agentId"])))
-        .or_else(|| tool_response.and_then(|value| first_string(value, &["agent_id", "agentId"])));
+    let agent_id = first_string(
+        hook_input,
+        &["agent_id", "agentId", "subagent_id", "subagentId"],
+    )
+    .or_else(|| tool_input.and_then(|value| first_string(value, &["agent_id", "agentId"])))
+    .or_else(|| tool_response.and_then(|value| first_string(value, &["agent_id", "agentId"])));
     let tool_use_id = first_string(hook_input, &["tool_use_id", "toolUseId", "tool_id", "id"])
         .or_else(|| {
             tool_input.and_then(|value| first_string(value, &["tool_use_id", "toolUseId", "id"]))
@@ -159,23 +162,26 @@ pub fn normalize_hook_input(event: &str, hook_input: &Value) -> Option<Normalize
     let skill_name = tool_input
         .and_then(|value| first_string(value, &["skill", "skill_name", "skillName"]))
         .or_else(|| first_string(hook_input, &["skill", "skill_name", "skillName"]));
-    let agent_type = first_string(hook_input, &["agent_type"])
-        .or_else(|| {
-            tool_input.and_then(|value| {
-                first_string(
-                    value,
-                    &["agent_type", "agentType", "subagent_type", "subagentType"],
-                )
-            })
+    let agent_type = first_string(
+        hook_input,
+        &["agent_type", "agentType", "subagent_type", "subagentType"],
+    )
+    .or_else(|| {
+        tool_input.and_then(|value| {
+            first_string(
+                value,
+                &["agent_type", "agentType", "subagent_type", "subagentType"],
+            )
         })
-        .or_else(|| {
-            tool_response.and_then(|value| {
-                first_string(
-                    value,
-                    &["agent_type", "agentType", "subagent_type", "subagentType"],
-                )
-            })
-        });
+    })
+    .or_else(|| {
+        tool_response.and_then(|value| {
+            first_string(
+                value,
+                &["agent_type", "agentType", "subagent_type", "subagentType"],
+            )
+        })
+    });
     let agent_transcript_path = first_string(hook_input, &["agent_transcript_path"])
         .or_else(|| {
             tool_input.and_then(|value| {
@@ -305,6 +311,22 @@ mod tests {
             normalized.session_id.as_deref(),
             Some("019f8ea7-262f-75b3-acfd-74499dd0013c")
         );
+    }
+
+    #[test]
+    fn normalizes_grok_subagent_lifecycle_identity() {
+        for event in ["SubagentStart", "SubagentStop"] {
+            let input = json!({
+                "sessionId": "parent-session",
+                "subagentId": "research-child",
+                "subagentType": "general-purpose",
+                "phase": "gate"
+            });
+            let normalized = normalize_hook_input(event, &input).unwrap();
+            assert_eq!(normalized.session_id.as_deref(), Some("parent-session"));
+            assert_eq!(normalized.agent_id.as_deref(), Some("research-child"));
+            assert_eq!(normalized.agent_type.as_deref(), Some("general-purpose"));
+        }
     }
 
     #[test]

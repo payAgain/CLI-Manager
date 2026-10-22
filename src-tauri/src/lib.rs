@@ -1101,6 +1101,7 @@ pub fn run() {
             commands::git_worktree::git_worktree_merge,
             commands::git_worktree::git_worktree_remove,
             commands::subagent_transcript::subagent_transcript_subscribe,
+            commands::subagent_transcript::subagent_transcript_probe,
             commands::subagent_transcript::subagent_transcript_unsubscribe,
             commands::subagent_transcript::subagent_transcript_discover,
             commands::subagent_transcript::codex_subagent_transcript_discover,

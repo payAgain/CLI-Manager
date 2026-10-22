@@ -1,6 +1,7 @@
 import { inferWslDistroFromCwd, resolveSubagentConfigDir } from "../lib/subagentBrowser";
+import { isSubagentActivityHook, isSubagentCompletionHook } from "../lib/subagentHookRouting";
 import { useCommandHistoryStore } from "./commandHistoryStore";
-import { readSubagentTranscriptLifecycle, type SubagentTranscriptCursor, type SubagentTranscriptStatus } from "../lib/subagentTranscript";
+import { parseSubagentTranscript, readSubagentTranscriptLifecycle, type SubagentTranscriptCursor, type SubagentTranscriptStatus } from "../lib/subagentTranscript";
 import { acceptsAgentHook, applyAgentDetection, applyHookAgentIdentity, type AgentDetection } from "../lib/terminalAgent";
 import { create } from "zustand";
 import { applyAgentLaunchPermissions } from "../lib/agentLaunchPermissions";
@@ -425,6 +426,7 @@ let workspanIdSeq = 0;
 let subagentSeq = 0;
 const subagentFoldTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const subagentDiscoveryTimers = new Map<string, ReturnType<typeof setInterval>>();
+const dismissedSubagentActivity = new Set<string>();
 const subagentTranscriptRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const subagentTranscriptRetryDiagnostics = new Map<string, {
   startedAt: number;
@@ -532,6 +534,16 @@ function scheduleSaveActiveId(id: string | null) {
 function trimOptional(value: string | null | undefined): string | null {
   const trimmed = value?.trim();
   return trimmed ? trimmed : null;
+}
+
+function rememberClosedSubagent(session: TerminalSession | undefined) {
+  if (session?.subagent?.agentId) {
+    dismissedSubagentActivity.add(`${session.subagent.parentSessionId}:${session.subagent.agentId}`);
+  } else if (session) {
+    for (const key of dismissedSubagentActivity) {
+      if (key.startsWith(`${session.id}:`)) dismissedSubagentActivity.delete(key);
+    }
+  }
 }
 
 
@@ -892,7 +904,8 @@ function findSubagentSessionId(sessions: TerminalSession[], payload: CliHookPayl
   // Fallback：仅当 payload 既无 agentId 也无 toolUseId（完全无法识别）时，才通过 parentTabId 推断。
   // 若 payload 带 agentId/toolUseId 但未匹配到，说明是新的子 Agent，应返回 null 以创建新 Tab，
   // 避免并发场景下第二个子 Agent 被错误合并到第一个。
-  if (agentId || toolUseId) return null;
+  // A completion must identify its child; never finish a sibling by parent alone.
+  if (agentId || toolUseId || isSubagentCompletionHook(payload)) return null;
 
   const candidates = sessions.filter(
     (session) => session.kind === "subagent-transcript" && session.subagent?.parentSessionId === payload.tabId
@@ -1670,6 +1683,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     const state = get();
     const ptySessionIds = [id];
     const closingSession = state.sessions.find((s) => s.id === id);
+    rememberClosedSubagent(closingSession);
     const isTranscript = closingSession?.kind === "subagent-transcript";
     const isFileEditor = closingSession?.kind === "file-editor";
     const closeTimer = subagentFoldTimers.get(id);
@@ -2440,6 +2454,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
         .map((s) => s.id)
     );
     for (const closedSessionId of closedSessionIds) {
+      rememberClosedSubagent(state.sessions.find((session) => session.id === closedSessionId));
       if (transcriptClosedIds.has(closedSessionId)) {
         stopSubagentTranscriptRetry(closedSessionId, "pane_unsplit");
       }
@@ -3035,6 +3050,59 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
   },
 
   openSubagentTranscript: async (payload, options) => {
+    let verifiedInitialContent = "";
+    const activityKey = `${payload.tabId}:${payload.agentId?.trim() ?? ""}`;
+    if (options?.manual || payload.event === "SubagentStart") {
+      dismissedSubagentActivity.delete(activityKey);
+    }
+    if (!options?.manual && isSubagentActivityHook(payload)) {
+      if (dismissedSubagentActivity.has(activityKey)) return;
+      const current = get();
+      const parent = current.sessions.find((session) => session.id === payload.tabId);
+      if (!parent) return;
+      if (!findSubagentSessionId(current.sessions, payload)) {
+        if (!useSettingsStore.getState().hookSubagentSplitViewEnabled) return;
+        const project = useProjectStore.getState().projects.find((item) => item.id === parent.projectId);
+        const settings = useSettingsStore.getState();
+        const configDir = resolveSubagentConfigDir("claude", parent, project, {
+          claudeConfigDir: settings.claudeHookConfigDir,
+        });
+        const candidate = resolveSubagentTranscriptSource(payload);
+        try {
+          // A derived path can be syntactically valid while the file never exists.
+          // Probe without starting a tail or changing the layout; preserve WSL's
+          // missing-SubagentStart fallback only for a readable child transcript.
+          const ready = await invoke<SubagentTranscriptSubscribeResult | null>("subagent_transcript_probe", {
+            transcriptPath: candidate.kind === "child-jsonl" ? candidate.transcriptPath : null,
+            parentTranscriptPath: candidate.parentTranscriptPath ?? null,
+            cwd: payload.cwd ?? null,
+            sessionId: payload.sessionId ?? null,
+            agentId: payload.agentId?.trim() ?? null,
+            wslDistroName: resolveHookWslDistroName(payload),
+            configDir,
+          });
+          if (!ready?.initialContent || parseSubagentTranscript(ready.initialContent).messages.length === 0) {
+            logInfo("[subagent_transcript] ignored unverified child activity", {
+              parentTabId: payload.tabId, agentId: payload.agentId, event: payload.event,
+            });
+            return;
+          }
+          const liveParent = get().sessions.find((session) => session.id === payload.tabId);
+          if (!liveParent || dismissedSubagentActivity.has(activityKey)
+            || liveParent.cliSessionId !== parent.cliSessionId
+            || liveParent.runtimeAgent?.cliSessionId !== parent.runtimeAgent?.cliSessionId
+            || liveParent.runtimeAgent?.tool !== parent.runtimeAgent?.tool) return;
+          payload = { ...payload, agentTranscriptPath: ready.path };
+          verifiedInitialContent = ready.initialContent;
+        } catch (error) {
+          logWarn("[subagent_transcript] child activity verification failed", {
+            parentTabId: payload.tabId, agentId: payload.agentId, event: payload.event, error,
+          });
+          return;
+        }
+      }
+    }
+
     const parentTabId = payload.tabId;
     const sessions = get().sessions;
     // 多窗口隔离：hook 事件广播到所有窗口，仅拥有该 Tab 的窗口处理。
@@ -3055,9 +3123,21 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
 
     const agentId = trimOptional(payload.agentId);
     const toolUseId = trimOptional(payload.toolUseId);
+    const existingSessionId = findSubagentSessionId(sessions, payload);
+    // Claude's internal agents can emit Stop without Start or a readable transcript.
+    // Completion may refresh a known result, but must not create an automatic pane.
+    if (!options?.manual && isSubagentCompletionHook(payload) && !existingSessionId) {
+      logInfo("[subagent_transcript] ignored completion for unknown child", {
+        event: payload.event,
+        source: payload.source,
+        parentTabId,
+        agentId,
+        toolUseId,
+      });
+      return;
+    }
     const resolvedWslDistroName = resolveHookWslDistroName(payload);
     const resolvedSource = resolveSubagentTranscriptSource(payload);
-    const existingSessionId = findSubagentSessionId(sessions, payload);
     const pseudoId = existingSessionId ?? createSubagentPaneId(parentTabId, agentId, toolUseId, resolvedSource.kind === "child-jsonl" ? resolvedSource.transcriptPath ?? null : null);
     const previousSource = get().subagentTranscripts[pseudoId]?.source;
     const source = mergeSubagentSource(previousSource, resolvedSource);
@@ -3410,7 +3490,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
 
     // AgentToolStart/AgentToolStop 在并发场景下无法可靠关联到 SubagentStart（前者只有 toolUseId，后者只有 agentId）。
     // 策略：这两个事件只触发 discovery，不创建 UI；SubagentStart 创建真实 Tab，discovery 负责升级内容源。
-    // Claude 在部分 WSL 场景只发 ToolStart/ToolStop + agentId，因此这类事件允许创建降级 pane 并尝试派生订阅。
+    // Claude 的 ToolStart/ToolStop 仅在前置探测读到真实子转录后补建，不能凭 agentId 创建空面板。
     if (payload.event === "AgentToolStart" || payload.event === "AgentToolStop") {
       if (!agentId && (resolvedSource.kind === "pending" || resolvedSource.kind === "lifecycle-only")) {
         startSubagentDiscovery(parentTabId, payload.sessionId ?? null, payload.cwd ?? null, resolvedWslDistroName);
@@ -3479,6 +3559,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     void useSessionStore.getState().saveSessions(newSessions).catch(() => {});
     persistWorkspanState(workspans, state.activeWorkspanId, newSessions);
 
+    if (verifiedInitialContent) get().appendSubagentTranscript(pseudoId, verifiedInitialContent, true);
     if (options?.manual) get().setActive(pseudoId);
     await subscribeAvailableChild();
   },
@@ -3486,6 +3567,8 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
   finishSubagentTranscript: (payload, status) => {
     const sessionId = findSubagentSessionId(get().sessions, payload);
     if (!sessionId) {
+      const agentId = trimOptional(payload.agentId);
+      if (agentId) dismissedSubagentActivity.add(`${payload.tabId}:${agentId}`);
       const candidates = get().sessions.filter(
         (session) => session.kind === "subagent-transcript" && session.subagent?.parentSessionId === payload.tabId
       );

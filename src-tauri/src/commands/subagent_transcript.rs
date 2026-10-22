@@ -1099,6 +1099,40 @@ fn resolve_transcript_path(
     Ok(derive_transcript_path(&home, &cwd, &session_id, &agent_id))
 }
 
+fn probe_transcript(path: String) -> Option<SubscribeResult> {
+    let (content, _, _) = read_new_lines(Path::new(&path), 0)?;
+    if content.trim().is_empty() {
+        return None;
+    }
+    Some(SubscribeResult {
+        path,
+        initial_content: content,
+    })
+}
+
+/// 仅探测已经可读的完整转录行；不创建文件或后台 tail 线程。
+#[tauri::command]
+pub async fn subagent_transcript_probe(
+    transcript_path: Option<String>,
+    parent_transcript_path: Option<String>,
+    cwd: Option<String>,
+    session_id: Option<String>,
+    agent_id: Option<String>,
+    wsl_distro_name: Option<String>,
+    config_dir: Option<String>,
+) -> Result<Option<SubscribeResult>, String> {
+    let path = resolve_transcript_path(
+        transcript_path,
+        parent_transcript_path,
+        cwd,
+        session_id,
+        agent_id,
+        wsl_distro_name,
+        config_dir,
+    )?;
+    Ok(probe_transcript(path))
+}
+
 /// 订阅子 Agent 转录并开始 tail；返回最终解析到的文件路径（供前端展示/调试）。
 #[tauri::command]
 pub async fn subagent_transcript_subscribe(
@@ -2296,6 +2330,23 @@ mod tests {
         let err = resolve_transcript_path(None, None, None, None, None, None, None).unwrap_err();
         // 缺 home 或缺 cwd 都应报错（不静默编出错误路径）。
         assert!(err == "missing_cwd" || err == "no_home_dir", "got {err}");
+    }
+
+    #[test]
+    fn probe_requires_materialized_complete_lines_without_creating_a_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("agent-probe.jsonl");
+        let probe = || probe_transcript(path.to_string_lossy().into_owned());
+        assert!(probe().is_none());
+        assert!(!path.exists());
+        fs::write(&path, "").unwrap();
+        assert!(probe().is_none());
+        fs::write(&path, "{\"type\":\"assistant\"}").unwrap();
+        assert!(probe().is_none());
+        fs::write(&path, "{\"type\":\"assistant\"}\n{\"partial\":").unwrap();
+        let result = probe().unwrap();
+        assert_eq!(result.path, path.to_string_lossy());
+        assert_eq!(result.initial_content, "{\"type\":\"assistant\"}\n");
     }
 
     #[test]

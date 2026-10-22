@@ -165,6 +165,11 @@ test("summary groups preserve messages, thinking, failures and pending calls wit
 
 // Execute the real store actions with isolated state, IPC-free timers and settings.
 const moduleUrl = (code) => `data:text/javascript;base64,${Buffer.from(code).toString("base64")}`;
+const { routeSubagentHook, isSubagentActivityHook, isSubagentCompletionHook } = await import(moduleUrl(ts.transpileModule(
+  readFileSync(new URL("../src/lib/subagentHookRouting.ts", import.meta.url), "utf8"), {
+    compilerOptions: { module: ts.ModuleKind.ES2022, target: ts.ScriptTarget.ES2022 },
+  },
+).outputText));
 const paneTreeUrl = moduleUrl(ts.transpileModule(readFileSync(new URL("../src/stores/terminalPaneTree.ts", import.meta.url), "utf8"), {
   compilerOptions: { module: ts.ModuleKind.ES2022, target: ts.ScriptTarget.ES2022 },
 }).outputText);
@@ -178,7 +183,7 @@ const ast = ts.createSourceFile("terminalStore.ts", storeSource, ts.ScriptTarget
 const actions = {};
 let mirrorDeclaration;
 const openHelpers = [];
-const openHelperNames = ["resolveHookWslDistroName", "normalizePathForCompare", "isSameTranscriptPath", "hashString", "createSubagentPaneId", "buildSubagentTitle", "resolveSubagentTranscriptSource", "shouldUpgradeSubagentSource", "mergeSubagentSource", "shouldSubscribeSubagentSource", "shouldAttemptDerivedChildTranscript", "findSubagentSessionId"];
+const openHelperNames = ["rememberClosedSubagent", "resolveHookWslDistroName", "normalizePathForCompare", "isSameTranscriptPath", "hashString", "createSubagentPaneId", "buildSubagentTitle", "resolveSubagentTranscriptSource", "shouldUpgradeSubagentSource", "mergeSubagentSource", "shouldSubscribeSubagentSource", "shouldAttemptDerivedChildTranscript", "findSubagentSessionId"];
 function visit(node) {
   if (ts.isPropertyAssignment(node) && ts.isIdentifier(node.name)
     && ["openSubagentTranscript", "appendSubagentTranscript", "finishSubagentTranscript", "collapseSubagentTranscript", "setActive"].includes(node.name.text)) {
@@ -189,7 +194,7 @@ function visit(node) {
   ts.forEachChild(node, visit);
 }
 visit(ast);
-function harness(autoClose = true) {
+function harness(autoClose = true, ipcHandler) {
   const timers = new Map();
   const settings = { hookPopupAutoCloseEnabled: autoClose, hookPopupAutoCloseSeconds: 10, hookSubagentSplitViewEnabled: false };
   const ipc = [];
@@ -218,8 +223,11 @@ function harness(autoClose = true) {
     get: () => state,
     set: update => Object.assign(state, typeof update === "function" ? update(state) : update),
     readSubagentTranscriptLifecycle,
+    parseSubagentTranscript,
+    isSubagentActivityHook,
+    isSubagentCompletionHook,
     trimOptional: value => typeof value === "string" ? value.trim() || null : null,
-    subagentFoldTimers: new Map(), subagentDiscoveryTimers: new Map(),
+    subagentFoldTimers: new Map(), subagentDiscoveryTimers: new Map(), dismissedSubagentActivity: new Set(),
     setTimeout: callback => { timers.set(++timerId, callback); return timerId; },
     clearTimeout: id => timers.delete(id), clearInterval() {},
     inferWslDistroFromCwd: () => null,
@@ -229,6 +237,7 @@ function harness(autoClose = true) {
     useSessionStore: { getState: () => ({ saveSessions: async () => {} }) },
     invoke: async (command, args) => {
       ipc.push({ command, args });
+      if (ipcHandler) return ipcHandler(command, args);
       return { path: args.transcriptPath, initialContent: lines(...fork(), event("task_complete", { turn_id: "child-turn" })).replaceAll('"child"', JSON.stringify(args.agentId)) };
     },
     useSettingsStore: { getState: () => settings }, useTerminalStore: { getState: () => state },
@@ -248,10 +257,238 @@ function harness(autoClose = true) {
   const code = ts.transpileModule([mirrorDeclaration, ...openHelpers, ...Object.entries(actions).map(([name, value]) => `const ${name} = ${value};`)].join("\n"), {
     compilerOptions: { module: ts.ModuleKind.None, target: ts.ScriptTarget.ES2022 },
   }).outputText;
-  const resolved = new Function(...Object.keys(environment), `${code}\nreturn {openSubagentTranscript, appendSubagentTranscript, finishSubagentTranscript, collapseSubagentTranscript, setActive};`)(...Object.values(environment));
+  const resolved = new Function(...Object.keys(environment), `${code}\nreturn {openSubagentTranscript, appendSubagentTranscript, finishSubagentTranscript, collapseSubagentTranscript, setActive, rememberClosedSubagent};`)(...Object.values(environment));
   Object.assign(state, resolved);
-  return { state, settings, timers, ipc };
+  return { state, settings, timers, ipc, rememberClosedSubagent: resolved.rememberClosedSubagent };
 }
+
+const childActivity = (extra = {}) => ({
+  tabId: "parent", source: "claude", event: "ToolStart", sessionId: "main",
+  agentId: "internal-worker", toolUseId: "bash-call", toolName: "Bash",
+  cwd: "E:/work/project", transcriptPath: "/claude/projects/project/main.jsonl", ...extra,
+});
+const readableChild = {
+  path: "/claude/projects/project/main/subagents/agent-fallback.jsonl",
+  initialContent: lines({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "Actual child output" }] } }),
+};
+
+test("ordinary tool callbacks with an unknown agentId never create empty children or start a tail", async () => {
+  for (const event of ["ToolStart", "ToolStop"]) {
+    for (const probeResult of [null, { ...readableChild, initialContent: "" }, { ...readableChild, initialContent: lines(meta("metadata-only")) }]) {
+      const { state, settings, ipc } = harness(false, async () => probeResult);
+      settings.hookSubagentSplitViewEnabled = true;
+      const before = structuredClone({ sessions: state.sessions, workspans: state.workspans, transcripts: state.subagentTranscripts });
+      await state.openSubagentTranscript(childActivity({ event }));
+      assert.deepEqual({ sessions: state.sessions, workspans: state.workspans, transcripts: state.subagentTranscripts }, before);
+      assert.deepEqual(ipc.map(item => item.command), ["subagent_transcript_probe"]);
+      assert.equal(state.activeSessionId, "parent");
+    }
+  }
+});
+
+test("WSL missing-start compatibility opens a verified child and retains parent focus", async () => {
+  const { state, settings, ipc } = harness(false, async () => readableChild);
+  settings.hookSubagentSplitViewEnabled = true;
+  await state.openSubagentTranscript(childActivity({ agentId: "fallback", cwd: "//wsl.localhost/Ubuntu/home/me/project", wslDistroName: "Ubuntu" }));
+  const child = state.sessions.find(item => item.subagent?.agentId === "fallback");
+  assert.ok(child);
+  assert.equal(child.subagent.parentSessionId, "parent");
+  assert.equal(child.subagent.source.transcriptPath, readableChild.path);
+  assert.equal(state.subagentTranscripts[child.id].content, readableChild.initialContent);
+  assert.equal(state.activeSessionId, "parent");
+  assert.deepEqual(ipc.map(item => item.command), ["subagent_transcript_probe", "subagent_transcript_subscribe"]);
+  assert.equal(ipc[0].args.wslDistroName, "Ubuntu");
+  assert.equal(ipc[0].args.transcriptPath, null, "never probe the parent transcript as the child's file");
+  assert.equal(ipc[1].args.transcriptPath, readableChild.path);
+});
+
+test("known child tools update directly without a creation probe, even with auto-split disabled", async () => {
+  const { state, ipc } = harness();
+  await state.openSubagentTranscript(childActivity({ agentId: "child", agentTranscriptPath: "/claude/child.jsonl" }));
+  assert.equal(state.sessions.length, 2);
+  assert.equal(state.sessions[1].subagent.agentId, "child");
+  assert.deepEqual(ipc.map(item => item.command), ["subagent_transcript_subscribe"]);
+});
+
+test("unavailable probes and a disabled auto-split setting leave layout and subscriptions untouched", async () => {
+  const { state, settings, ipc } = harness(false, async () => { throw new Error("file unreadable"); });
+  await state.openSubagentTranscript(childActivity());
+  assert.equal(ipc.length, 0);
+  settings.hookSubagentSplitViewEnabled = true;
+  await state.openSubagentTranscript(childActivity());
+  assert.equal(state.sessions.length, 2);
+  assert.deepEqual(ipc.map(item => item.command), ["subagent_transcript_probe"]);
+});
+
+test("simultaneous tool callbacks verify once per request and reuse a single child in the latest layout", async () => {
+  const pending = [];
+  const { state, settings, ipc } = harness(false, async command => command === "subagent_transcript_probe"
+    ? new Promise(resolve => pending.push(resolve)) : readableChild);
+  settings.hookSubagentSplitViewEnabled = true;
+  const first = state.openSubagentTranscript(childActivity({ agentId: "fallback" }));
+  const second = state.openSubagentTranscript(childActivity({ agentId: "fallback", event: "ToolStop" }));
+  pending[0](readableChild);
+  pending[1](readableChild);
+  await Promise.all([first, second]);
+  const children = state.sessions.filter(item => item.subagent?.agentId === "fallback");
+  assert.equal(children.length, 1);
+  assert.equal(state.sessions.length, 3, "preserve the existing sibling");
+  assert.equal(ipc.filter(item => item.command === "subagent_transcript_subscribe").length, 1);
+  assert.ok(paneTree.findPaneLeafBySession(state.paneTree, children[0].id));
+});
+
+test("closing a parent, switching its Agent or finishing the child while probing discards the late result", async () => {
+  for (const change of [state => { state.sessions = state.sessions.filter(item => item.id !== "parent"); },
+    state => { state.sessions[0] = { ...state.sessions[0], cliSessionId: "new-conversation" }; },
+    state => { state.finishSubagentTranscript(childActivity({ event: "SubagentStop" })); }]) {
+    let resolve;
+    const ready = new Promise(done => { resolve = done; });
+    const { state, settings, ipc } = harness(false, async () => ready);
+    settings.hookSubagentSplitViewEnabled = true;
+    const opening = state.openSubagentTranscript(childActivity());
+    change(state);
+    resolve(readableChild);
+    await opening;
+    assert.equal(state.sessions.some(item => item.subagent?.agentId === "internal-worker"), false);
+    assert.deepEqual(ipc.map(item => item.command), ["subagent_transcript_probe"]);
+  }
+});
+
+test("a probe follows the latest parent Workspan without changing foreground focus", async () => {
+  let resolve;
+  const ready = new Promise(done => { resolve = done; });
+  const { state, settings } = harness(false, async command => command === "subagent_transcript_probe" ? ready : readableChild);
+  settings.hookSubagentSplitViewEnabled = true;
+  const opening = state.openSubagentTranscript(childActivity({ agentId: "fallback" }));
+  const moved = { ...state.workspans[0], id: "moved-parent" };
+  state.sessions.push({ id: "other", title: "Foreground", kind: "pty" });
+  const visibleTree = { type: "leaf", id: "visible-pane", sessionIds: ["other"], activeSessionId: "other" };
+  state.workspans = [moved, { id: "foreground", paneTree: visibleTree, activePaneId: "visible-pane", activeSessionId: "other" }];
+  state.activeWorkspanId = "foreground";
+  state.activeSessionId = "other";
+  state.paneTree = visibleTree;
+  resolve(readableChild);
+  await opening;
+  const child = state.sessions.find(item => item.subagent?.agentId === "fallback");
+  assert.equal(workspan.findWorkspanBySession(state.workspans, child.id).id, "moved-parent");
+  assert.equal(state.activeSessionId, "other");
+  assert.equal(state.activeWorkspanId, "foreground");
+  assert.equal(state.paneTree, visibleTree);
+});
+
+test("verified content remains visible if the file disappears between probing and subscribing", async () => {
+  const { state, settings } = harness(false, async command => command === "subagent_transcript_probe"
+    ? readableChild : { path: readableChild.path, initialContent: "" });
+  settings.hookSubagentSplitViewEnabled = true;
+  await state.openSubagentTranscript(childActivity({ agentId: "fallback" }));
+  const child = state.sessions.find(item => item.subagent?.agentId === "fallback");
+  assert.equal(state.subagentTranscripts[child.id].content, readableChild.initialContent);
+});
+
+test("a user-dismissed child stays closed on later tools and can be explicitly restarted", async () => {
+  const { state, settings, ipc, rememberClosedSubagent } = harness(false, async () => readableChild);
+  settings.hookSubagentSplitViewEnabled = true;
+  rememberClosedSubagent({ id: "removed", kind: "subagent-transcript", subagent: { parentSessionId: "parent", agentId: "fallback" } });
+  await state.openSubagentTranscript(childActivity({ agentId: "fallback" }));
+  assert.equal(state.sessions.length, 2);
+  assert.equal(ipc.length, 0);
+  await state.openSubagentTranscript(childActivity({ event: "SubagentStart", agentId: "fallback", agentTranscriptPath: readableChild.path }));
+  assert.equal(state.sessions.filter(item => item.subagent?.agentId === "fallback").length, 1);
+});
+
+async function deliverHook(state, payload) {
+  const handled = routeSubagentHook(payload, {
+    bind: input => state.sessions.some(item => item.id === input.tabId && item.kind === "pty") ? input.tabId : null,
+    open: state.openSubagentTranscript,
+    finish: state.finishSubagentTranscript,
+  });
+  await new Promise(resolve => setImmediate(resolve));
+  return handled;
+}
+
+test("completion-only hooks never create a pane or finish an unrelated running child", async () => {
+  for (const variant of [
+    { source: "claude", event: "SubagentStop", agentId: "internal-agent", agentTranscriptPath: "/missing/internal-agent.jsonl" },
+    { source: "claude", event: "SubagentStop", agentId: "internal-agent" },
+    { source: "claude", event: "SubagentStop", agentId: " " },
+    { source: "claude", event: "SubagentStop", agentId: "internal-agent", wslDistroName: "Ubuntu" },
+    { source: "codex", event: "SubagentStop", agentId: "unseen-child" },
+    { source: "codex", event: "Stop", agentId: "unseen-child" },
+    { source: "codex", event: "StopFailure", agentId: "unseen-child" },
+    { source: "grok", event: "SubagentStop", agentId: "unseen-child", agentTranscriptPath: "/missing/grok-child.jsonl" },
+    { source: "grok", event: "SubagentStop", agentId: null },
+    { event: "SubagentStop", agentId: "legacy-internal-agent", agentTranscriptPath: "/missing/legacy-child.jsonl" },
+  ]) {
+    const { state, settings, ipc, timers } = harness();
+    settings.hookSubagentSplitViewEnabled = true;
+    const layout = state.paneTree;
+    assert.equal(await deliverHook(state, { tabId: "parent", sessionId: "main", ...variant }), true);
+    assert.equal(state.sessions.length, 2, JSON.stringify(variant));
+    assert.equal(state.subagentTranscripts.pane.status, "running");
+    assert.equal(state.subagentTranscripts.pane.ended, false);
+    assert.equal(state.paneTree, layout);
+    assert.equal(state.activeSessionId, "parent");
+    assert.equal(ipc.length, 0, "unseen completions must not subscribe to a fabricated transcript path");
+    assert.equal(timers.size, 0);
+  }
+});
+
+test("known Claude, Codex and Grok children receive final transcripts in the same result pane", async () => {
+  for (const source of ["claude", "codex", "grok"]) {
+    const { state, settings, ipc } = harness();
+    settings.hookSubagentSplitViewEnabled = true;
+    state.subagentTranscripts.pane.source = { kind: "pending" };
+    await deliverHook(state, {
+      tabId: "parent", sessionId: "main", source, event: "SubagentStop", agentId: "child",
+      agentTranscriptPath: `/${source}/subagents/agent-child.jsonl`,
+    });
+    assert.equal(state.sessions.length, 2);
+    assert.equal(state.subagentTranscripts.pane.source.kind, "child-jsonl");
+    assert.equal(state.subagentTranscripts.pane.ended, true);
+    assert.equal(ipc.length, 1);
+    assert.equal(ipc[0].args.key, "pane");
+    assert.equal(state.activeSessionId, "parent");
+  }
+});
+
+test("real start hooks still create child panes with local and WSL transcript context", async () => {
+  for (const wslDistroName of [null, "Ubuntu"]) {
+    const { state, settings, ipc } = harness();
+    settings.hookSubagentSplitViewEnabled = true;
+    await deliverHook(state, {
+      tabId: "parent", sessionId: "main", source: "claude", event: "SubagentStart", agentId: "new-child",
+      agentType: "research", agentTranscriptPath: "/claude/subagents/agent-new-child.jsonl", wslDistroName,
+    });
+    assert.equal(state.sessions.length, 3);
+    const child = state.sessions.find(item => item.subagent?.agentId === "new-child");
+    assert.ok(child);
+    assert.equal(ipc[0].args.key, child.id);
+    assert.equal(ipc[0].args.wslDistroName, wslDistroName);
+    assert.equal(state.activeSessionId, "parent");
+  }
+});
+
+test("late completion after a user closes a child cannot reopen it in a background Workspan", async () => {
+  const { state, settings, ipc } = harness();
+  settings.hookSubagentSplitViewEnabled = true;
+  state.sessions = state.sessions.filter(item => item.id !== "pane");
+  delete state.subagentTranscripts.pane;
+  const ownerTree = state.workspans[0].paneTree.first;
+  state.workspans[0].paneTree = ownerTree;
+  const activeTree = { type: "leaf", id: "other-pane", sessionIds: ["other"], activeSessionId: "other" };
+  state.sessions.push({ id: "other", kind: "pty" });
+  state.workspans.push({ id: "other-workspan", paneTree: activeTree, activePaneId: "other-pane", activeSessionId: "other" });
+  Object.assign(state, { activeWorkspanId: "other-workspan", activePaneId: "other-pane", activeSessionId: "other", paneTree: activeTree });
+  await deliverHook(state, {
+    tabId: "parent", sessionId: "main", source: "claude", event: "SubagentStop", agentId: "child",
+    agentTranscriptPath: "/claude/subagents/agent-child.jsonl",
+  });
+  assert.equal(state.sessions.length, 2);
+  assert.equal(state.workspans[0].paneTree, ownerTree);
+  assert.equal(state.paneTree, activeTree);
+  assert.equal(state.activeSessionId, "other");
+  assert.equal(ipc.length, 0);
+});
 
 test("manual browsing opens a completed child with auto-split disabled and keeps the result focused", async () => {
   const { state, ipc, timers } = harness();
