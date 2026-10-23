@@ -36,6 +36,7 @@ import {
   normalizeTerminalRelativePath,
   resolveTerminalFileSystemPath,
   terminalStringRangeToBufferColumns,
+  terminalHyperlinkFilePath,
   type TerminalFileLinkMatch,
 } from "../lib/terminalFileLinks";
 import { requestTerminalFileNavigation } from "../lib/terminalFileNavigation";
@@ -217,6 +218,7 @@ const createTerminalLinkHoverIcon = (
     const left = screenRect.left - terminalRect.left + x * cell.width - 10;
     const top = screenRect.top - terminalRect.top + y * cell.height - 8;
     element.dataset.kind = kind;
+    element.textContent = translateCurrent(kind === "link" ? "terminal.links.openUrl" : kind.startsWith("relative-") ? "terminal.links.openInFiles" : "terminal.links.openDefault");
     element.style.setProperty("--terminal-link-icon-fg", terminal.options.theme?.foreground ?? "#d8dee9");
     element.style.setProperty("--terminal-link-icon-bg", terminal.options.theme?.background ?? "#111827");
     element.style.transform = `translate3d(${Math.max(2, left)}px, ${Math.max(2, top)}px, 0)`;
@@ -280,7 +282,7 @@ const openHttpUrl = (sessionId: string, uri: string) => {
   void openUrl(uri).catch((err) => logError("Failed to open terminal link", { sessionId, uri, err }));
 };
 
-const getTerminalFileLinkContext = (sessionId: string, rawPath: string) => {
+const getTerminalFileLinkContext = (sessionId: string, rawPath: string, os: OsPlatform = "windows") => {
   const terminalState = useTerminalStore.getState();
   const session = terminalState.sessions.find((item) => item.id === sessionId) ?? null;
   const projectState = useProjectStore.getState();
@@ -292,9 +294,9 @@ const getTerminalFileLinkContext = (sessionId: string, rawPath: string) => {
     : findWorktreeByPath(projectState.worktrees, session?.cwd);
   const currentRootPath = currentWorktree?.path ?? currentProject?.path ?? session?.cwd ?? null;
   return {
-    supportsFiles: projectSupportsCapability(currentProject, "files"),
+    supportsFiles: session?.environmentType !== "ssh" && currentProject?.environment_type !== "ssh" && projectSupportsCapability(currentProject, "files"),
     rootPath: currentRootPath,
-    systemPath: resolveTerminalFileSystemPath(rawPath, currentRootPath),
+    systemPath: resolveTerminalFileSystemPath(rawPath, currentRootPath, os),
   };
 };
 
@@ -303,7 +305,7 @@ const resolveRelativeTerminalSystemPath = (rootPath: string, relativePath: strin
 );
 
 const openTerminalFilePath = async (sessionId: string, rawPath: string) => {
-  const context = getTerminalFileLinkContext(sessionId, rawPath);
+  const context = getTerminalFileLinkContext(sessionId, rawPath, await getOsPlatform());
   if (!context.supportsFiles) {
     toast.info(translateCurrent("remoteCapabilities.unsupportedTitle"), {
       description: translateCurrent("remoteCapabilities.unsupportedDescription"),
@@ -312,7 +314,7 @@ const openTerminalFilePath = async (sessionId: string, rawPath: string) => {
   }
   if (!context.systemPath) return;
 
-  void invoke("open_folder_in_explorer", { path: context.systemPath }).catch((err) => {
+  void invoke("open_folder_in_explorer", { path: context.systemPath, openFile: true }).catch((err) => {
     logError("Failed to open terminal file", { sessionId, path: context.systemPath, err });
     toast.error(translateCurrent("files.toast.openFileFailed"), { description: String(err) });
   });
@@ -956,9 +958,25 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
       fileHoverGeneration += 1;
       linkHoverIcon?.showViewportRange("link", range);
     };
+    const activateHyperlink = (event: MouseEvent, uri: string) => {
+      if (!shouldActivateTerminalLink(event)) return;
+      const path = terminalHyperlinkFilePath(uri);
+      if (path) void openTerminalFilePath(sessionId, path);
+      else openHttpUrl(sessionId, uri);
+    };
+    const hoverHyperlink = (uri: string, range: IBufferRange) => {
+      const path = terminalHyperlinkFilePath(uri);
+      if (path) {
+        showFileLinkIcon({ text: uri, path, kind: "absolute", startIndex: 0, endIndex: uri.length }, range);
+      } else if (/^https?:\/\//iu.test(uri)) {
+        showBufferLinkIcon(range);
+      } else {
+        hideLinkHoverIcon();
+      }
+    };
     const showFileLinkIcon = (match: TerminalFileLinkMatch, range: IBufferRange) => {
       const generation = ++fileHoverGeneration;
-      const context = getTerminalFileLinkContext(sessionId, match.path);
+      const context = getTerminalFileLinkContext(sessionId, match.path, osPlatformRef.current);
       const relativePath = match.kind === "relative" ? normalizeTerminalRelativePath(match.path) : null;
       const systemPath = match.kind === "relative"
         ? (context.rootPath && relativePath ? resolveRelativeTerminalSystemPath(context.rootPath, relativePath) : null)
@@ -1009,14 +1027,11 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
       // even though WebGL is disabled while a background image is active.
       allowTransparency: true,
       theme: withVisibleSelectionTheme(isTransparentRef.current ? applyTransparency(baseTheme, background.overlayDarken) : baseTheme, false),
-      // OSC 8 超链接（codex 等 CLI 输出）默认点击行为是 window.open，在 Tauri
-      // webview 里会被拦成"是否导航"确认框。接管为系统默认浏览器打开，仅放行
-      // http/https，避免恶意 scheme。
+      // Route OSC 8 web links and local files through their system handlers.
+      // Activation still requires Ctrl+click; unsupported URI schemes are ignored.
       linkHandler: {
-        activate: (event, uri) => {
-          if (shouldActivateTerminalLink(event)) openHttpUrl(sessionId, uri);
-        },
-        hover: (_event, _uri, range) => showBufferLinkIcon(range),
+        activate: activateHyperlink,
+        hover: (_event, uri, range) => hoverHyperlink(uri, range),
         leave: hideLinkHoverIcon,
       },
     });

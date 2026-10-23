@@ -1,3 +1,5 @@
+import type { OsPlatform } from "./shell";
+
 export interface TerminalFileLinkMatch {
   text: string;
   path: string;
@@ -150,8 +152,25 @@ export function normalizeTerminalRelativePath(path: string): string | null {
   return segments.length > 0 ? segments.join("/") : null;
 }
 
-export function resolveTerminalFileSystemPath(path: string, currentRootPath?: string | null): string | null {
+export function terminalHyperlinkFilePath(uri: string): string | null {
+  if (/^file:\/\//iu.test(uri)) {
+    try {
+      const url = new URL(uri);
+      const path = decodeURIComponent(url.pathname);
+      if (url.hostname && url.hostname !== "localhost") return `\\\\${url.hostname}${path.replace(/\//g, "\\")}`;
+      return path;
+    } catch {
+      return null;
+    }
+  }
+  // Treat only absolute paths as file links; other URI schemes stay disabled.
+  if (!/^(?:\/?[A-Za-z]:[\\/]|\/|\\\\)/u.test(uri)) return null;
+  return parsePathCandidate(uri)?.path ?? null;
+}
+
+export function resolveTerminalFileSystemPath(path: string, currentRootPath?: string | null, os: OsPlatform = "windows"): string | null {
   const trimmed = path.trim();
+  if (os === "macos" || os === "linux") return trimmed.startsWith("/") ? trimmed : null;
   if (/^\/[A-Za-z]:[\\/]/u.test(trimmed)) return trimmed.slice(1);
   if (/^[A-Za-z]:[\\/]/u.test(trimmed) || /^\\\\[^\\/]+[\\/]/u.test(trimmed)) return trimmed;
 

@@ -6972,10 +6972,16 @@
   left: 0;
   z-index: 8;
   display: flex;
-  width: 16px;
-  height: 16px;
+  width: max-content;
+  max-width: calc(100% - 12px);
+  min-height: 20px;
+  gap: 5px;
+  padding: 2px 6px;
   align-items: center;
   justify-content: center;
+  overflow: hidden;
+  white-space: nowrap;
+  font-size: 11px;
   border: 1px solid color-mix(in srgb, var(--terminal-link-icon-fg) 32%, transparent);
   border-radius: 5px;
   background: color-mix(in srgb, var(--terminal-link-icon-bg) 88%, transparent);
@@ -6989,6 +6995,7 @@
 }
 
 .terminal-link-hover-icon::before {
+  flex-shrink: 0;
   width: 11px;
   height: 11px;
   background-color: currentColor;
