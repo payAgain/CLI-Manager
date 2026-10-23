@@ -64,6 +64,7 @@ export function useAgentTasks(session: TerminalSession | null, project: Project 
     error: state.key === key ? state.error : null,
     loading: state.key === key && state.loading,
     hasIdentity: Boolean(identity),
+    source,
     remote,
   };
 }

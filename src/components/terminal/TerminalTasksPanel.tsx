@@ -1,10 +1,11 @@
 import { useState } from "react";
-import { ClipboardList, RefreshCw } from "lucide-react";
+import { ClipboardList, Layers, RefreshCw } from "lucide-react";
 import { useI18n } from "../../lib/i18n";
 import type { Project, TerminalSession } from "../../lib/types";
 import { BackgroundTasksPanel, type BackgroundTaskMeta } from "../BackgroundTasksPanel";
 import { SubagentBrowserPanel } from "./SubagentBrowserPanel";
 import { AgentTasksPanel } from "./AgentTasksPanel";
+import { TaskScopeHeader } from "./TaskList";
 import { TerminalPanelHeader } from "./TerminalPanelHeader";
 
 interface Props {
@@ -35,8 +36,8 @@ export function TerminalTasksPanel({ session, project, tasks, onRefresh, onResto
           <AgentTasksPanel key={session?.id ?? "none"} session={session} project={project} refreshSeq={refreshSeq} />
           <SubagentBrowserPanel session={session} project={project} refreshSeq={refreshSeq} />
         </div>
-        <div className="task-scope-group task-scope-group--application">
-          <header className="task-scope-heading"><h2>{t("terminal.agentTasks.applicationScope")}</h2><span>{t("terminal.agentTasks.applicationHint")}</span></header>
+        <div className="task-scope-group">
+          <TaskScopeHeader icon={<Layers size={16} strokeWidth={1.8} />} title={t("terminal.agentTasks.applicationScope")} subtitle={t("terminal.agentTasks.applicationHint")} />
           <BackgroundTasksPanel tasks={tasks} onRefresh={onRefresh} onRestored={onRestored} refreshSeq={refreshSeq} />
         </div>
       </div>

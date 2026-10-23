@@ -17,7 +17,7 @@ function load(file, dependencies) {
   });
   return exports;
 }
-const { TaskSection, TaskStatus } = load("src/components/terminal/TaskList.tsx", {
+const { TaskScopeHeader, TaskSection, TaskStatus } = load("src/components/terminal/TaskList.tsx", {
   "../../lib/taskPresentation": { taskProgress: () => null },
 });
 const { translate } = load("src/lib/i18n.ts", {
@@ -29,7 +29,9 @@ function render(state, language = "zh-CN") {
     "../../hooks/useAgentTasks": { useAgentTasks: () => state },
     "../../lib/i18n": { useI18n: () => ({ t: (key, params) => translate(language, key, params) }) },
     "../ui/MarkdownContent": { MarkdownContent: ({ content }) => React.createElement("div", null, content) },
-    "./TaskList": { TaskSection, TaskStatus },
+    "./TaskList": { TaskScopeHeader, TaskSection, TaskStatus },
+    "../CliToolIcon": { CliToolIcon: ({ icon }) => React.createElement("i", { "data-cli-icon": icon }) },
+    "../../lib/cliTools": { resolveHistorySourceIconKey: source => source === "claude" ? "claude-code" : null },
     "lucide-react": icons,
   });
   return renderToStaticMarkup(React.createElement(AgentTasksPanel, { session: { id: "one", title: "Current Claude" }, refreshSeq: 0 }));
@@ -48,6 +50,8 @@ test("Agent task lists, plans and background commands render with independent re
     assert.ok(html.includes('data-status="running"'));
     assert.ok(html.includes('data-status="unknown"'));
     assert.ok(html.includes('class="task-section__icon"'));
+    assert.ok(html.includes('class="task-scope-header"'));
+    assert.ok(html.includes("data-live"));
     assert.ok(!html.includes("terminal.agentTasks."));
   }
 });
