@@ -8,6 +8,9 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Sidebar } from "./components/sidebar";
 import { TerminalTabs } from "./components/TerminalTabs";
 import { CommandPalette } from "./components/CommandPalette";
+import { NotificationInboxPanel } from "./components/NotificationInbox";
+import { useNotificationInbox } from "./hooks/useNotificationInbox";
+import { activateNotificationTarget } from "./lib/notificationInboxNavigation";
 import type { SettingsTab } from "./components/SettingsModal";
 const loadSettingsModal = () => import("./components/SettingsModal").then((module) => ({ default: module.SettingsModal }));
 const SettingsModal = lazy(loadSettingsModal);
@@ -335,6 +338,7 @@ function runDeferredStartupTasks(): void {
 }
 
 function App() {
+  useNotificationInbox();
   const { language, t } = useI18n();
   const loadSettings = useSettingsStore((s) => s.load);
   const settingsLoaded = useSettingsStore((s) => s.loaded);
@@ -1421,6 +1425,7 @@ function App() {
       )}
       <WorkspaceStatusBar terminalScope={projectScopedTerminalViewEnabled ? terminalScope : undefined} />
       <CommandPalette />
+      <NotificationInboxPanel onOpenTarget={activateNotificationTarget} />
       <ExternalSessionSyncDialog />
       <Suspense fallback={null}>
         {settingsEverOpened && (

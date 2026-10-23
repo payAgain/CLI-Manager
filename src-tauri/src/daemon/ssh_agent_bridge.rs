@@ -1496,11 +1496,14 @@ fn run_bridge_once_inner(
                 let Some(event_id) = event.get("eventId").and_then(Value::as_str) else {
                     continue;
                 };
-                if uuid::Uuid::parse_str(event_id).is_err() || !dedup.insert(event_id) {
+                if uuid::Uuid::parse_str(event_id).is_err() || dedup.ids.contains(event_id) {
                     continue;
                 }
                 if let Some(host) = host.upgrade() {
-                    host.accept_remote_hook_event(event.clone());
+                    // Durable sink failure leaves this ID/cursor untouched. A
+                    // reconnect will drain it again instead of losing the event.
+                    host.accept_remote_hook_event(event.clone())?;
+                    dedup.insert(event_id);
                 } else {
                     return Ok(());
                 }

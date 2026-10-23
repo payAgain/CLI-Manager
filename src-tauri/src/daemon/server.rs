@@ -54,6 +54,21 @@ const CLIENT_OUTPUT_LOW_WATERMARK: usize = 5_000;
 const CLIENT_OUTPUT_QUEUE_MAX_BYTES: usize = 2 * 1024 * 1024;
 const CLIENT_CONTROL_QUEUE_MAX_FRAMES: usize = 256;
 
+/// A durable duplicate is not proof of delivery: a previous process may have
+/// committed and stopped before updating runtime state or broadcasting the Hook.
+/// Transport-local receipt caches suppress normal retries after this completes;
+/// after a crash, delivery is deliberately at least once while the DB stays unique.
+fn deliver_durable_hook(
+    mut value: serde_json::Value,
+    persist: impl FnOnce(&serde_json::Value) -> Result<bool, String>,
+    deliver: impl FnOnce(serde_json::Value),
+) -> Result<(), String> {
+    let _inserted = persist(&value)?;
+    value["inboxDurable"] = serde_json::Value::Bool(true);
+    deliver(value);
+    Ok(())
+}
+
 struct ReplayFrame {
     cols: u16,
     rows: u16,
@@ -759,9 +774,9 @@ impl DaemonHost {
         }
     }
 
-    pub(crate) fn accept_remote_hook_event(&self, value: serde_json::Value) {
+    pub(crate) fn accept_remote_hook_event(&self, value: serde_json::Value) -> Result<(), String> {
         let Some(tab_id) = value.get("tabId").and_then(serde_json::Value::as_str) else {
-            return;
+            return Ok(());
         };
         let project_name = self.get_session(tab_id).and_then(|session| {
             session.lock().ok().and_then(|entry| {
@@ -783,13 +798,13 @@ impl DaemonHost {
         });
         let Some(project_name) = project_name else {
             log::warn!("rejected remote Hook event with an unknown SSH session binding");
-            return;
+            return Ok(());
         };
         let payload = match remote_hook_payload_from_spool(&value) {
             Ok(payload) => payload,
             Err(error) => {
                 log::warn!("rejected invalid remote Hook event: {error}");
-                return;
+                return Ok(());
             }
         }
         .with_remote_project_name(project_name);
@@ -799,8 +814,11 @@ impl DaemonHost {
             .ok()
             .and_then(|sink| sink.as_ref().cloned());
         if let Some(sink) = sink {
-            sink(payload);
+            sink(payload)?;
+        } else {
+            return Err("notification_hook_sink_unavailable".into());
         }
+        Ok(())
     }
 
     #[cfg(test)]
@@ -1691,22 +1709,21 @@ impl DaemonServer {
         let dispatcher = DispatcherHandle::start("daemon");
         let hook_sink: HookPayloadSink = Arc::new(move |payload| {
             let Ok(mut value) = serde_json::to_value(&payload) else {
-                return;
+                return Ok(());
             };
             if !hook_host.correlate_agent_hook(&mut value) {
-                return;
+                return Ok(());
             }
-            // 仅当没有已连接的前端客户端时（app 已彻底退到后台，例如托盘退出后
-            // 转入后台继续执行）才拉起 app 处理审批或回答。app 正在运行时，事件会通过
-            // 下方 broadcast_hook 送达前端，由前端决定是否通知/切换，绝不在此
-            // 抢占前台——否则用户在其他应用里工作时会被 PermissionRequest（含
-            // Codex 改代码时的误报）强制切回 CLI-Manager。
-            if hook_host.client_count() == 0 {
-                maybe_activate_app_for_hook(&payload);
-            }
-            dispatcher.try_enqueue(payload.to_notification_job());
-            hook_host.update_task_status_from_hook(&value);
-            hook_host.broadcast_hook(value);
+            deliver_durable_hook(value, crate::commands::notification_inbox::record_hook, |value| {
+                // 仅当没有已连接的前端客户端时才拉起 app 处理审批或回答。
+                // app 正在运行时交给前端决定通知/切换，绝不抢占前台。
+                if hook_host.client_count() == 0 {
+                    maybe_activate_app_for_hook(&payload);
+                }
+                dispatcher.try_enqueue(payload.to_notification_job());
+                hook_host.update_task_status_from_hook(&value);
+                hook_host.broadcast_hook(value);
+            })
         });
         server.host.set_hook_sink(Arc::clone(&hook_sink));
         spawn_hook_listener(hook_listener, token, hook_sink);
@@ -2599,6 +2616,36 @@ mod tests {
     }
 
     #[test]
+    fn durable_hook_retry_after_commit_still_updates_runtime_and_broadcasts() {
+        let host = DaemonHost::new();
+        host.reserve_session("durable-retry", None, None).unwrap();
+        let value = serde_json::json!({ "tabId": "durable-retry", "source": "codex", "event": "Stop" });
+        // false means the original process committed the row before it stopped.
+        deliver_durable_hook(value, |_| Ok(false), |value| {
+            host.update_task_status_from_hook(&value);
+            host.broadcast_hook(value);
+        }).unwrap();
+        assert_eq!(host.get_session("durable-retry").unwrap().lock().unwrap().meta.task_status.as_deref(), Some("done"));
+        let cached = host.hook_cache.lock().unwrap();
+        assert_eq!(cached.len(), 1);
+        assert_eq!(cached[0].get("inboxDurable").and_then(serde_json::Value::as_bool), Some(true));
+    }
+
+    #[test]
+    fn failed_hook_commit_does_not_broadcast_or_acknowledge() {
+        let host = DaemonHost::new();
+        host.reserve_session("durable-failure", None, None).unwrap();
+        let result = deliver_durable_hook(
+            serde_json::json!({ "tabId": "durable-failure", "event": "Stop" }),
+            |_| Err("disk unavailable".into()),
+            |value| { host.update_task_status_from_hook(&value); host.broadcast_hook(value); },
+        );
+        assert_eq!(result.unwrap_err(), "disk unavailable");
+        assert_eq!(host.hook_cache.lock().unwrap().len(), 0);
+        assert!(host.get_session("durable-failure").unwrap().lock().unwrap().meta.task_status.is_none());
+    }
+
+    #[test]
     fn remote_hook_binding_injects_sidebar_project_for_claude_and_codex() {
         for (index, source) in ["claude", "codex"].into_iter().enumerate() {
             let host = DaemonHost::new();
@@ -2609,6 +2656,7 @@ mod tests {
             let (sender, receiver) = std::sync::mpsc::channel();
             host.set_hook_sink(Arc::new(move |payload| {
                 sender.send(payload.to_notification_job()).unwrap();
+                Ok(())
             }));
 
             host.accept_remote_hook_event(serde_json::json!({
@@ -2626,7 +2674,7 @@ mod tests {
                 "sessionId": format!("session-{index}"),
                 "remoteCwd": launch.remote_path,
                 "occurredAt": 1,
-            }));
+            })).unwrap();
 
             let job = receiver.try_recv().unwrap();
             assert_eq!(job.source, source);

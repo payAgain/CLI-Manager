@@ -931,6 +931,11 @@ pub fn run() {
         )
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
+            commands::notification_inbox::notification_inbox_list,
+            commands::notification_inbox::notification_inbox_set_read,
+            commands::notification_inbox::notification_inbox_mark_all_read,
+            commands::notification_inbox::notification_inbox_clear_read,
+            commands::notification_inbox::notification_inbox_mark_target_read,
             commands::terminal::pty_prepare_create,
             commands::terminal::pty_reconcile_active_sessions,
             commands::terminal::pty_status,

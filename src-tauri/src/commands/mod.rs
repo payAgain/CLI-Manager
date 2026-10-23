@@ -14,6 +14,7 @@ pub mod history_edit;
 pub mod history_sources;
 pub mod hook_settings;
 pub mod logging;
+pub mod notification_inbox;
 pub mod shell;
 pub mod ssh;
 pub mod ssh_config;

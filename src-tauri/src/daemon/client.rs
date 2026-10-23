@@ -219,6 +219,18 @@ impl DaemonClient {
                 );
             }
             DaemonFrame::HookReport { payload } => {
+                // Running sessions can deliberately retain an older daemon after
+                // an application update. Persist its delivered events here too;
+                // the event ID makes this fallback safe against redelivery.
+                if payload.get("inboxDurable").and_then(serde_json::Value::as_bool) != Some(true) {
+                    if let Err(error) = crate::commands::notification_inbox::record_legacy_hook(payload.clone(), app_handle.clone()) {
+                        log::error!("legacy daemon inbox persistence failed: {error}");
+                        let mut payload = payload;
+                        payload["inboxPersistenceError"] = serde_json::Value::Bool(true);
+                        let _ = app_handle.emit("claude-hook-notification", payload);
+                    }
+                    return;
+                }
                 let _ = app_handle.emit("claude-hook-notification", payload);
             }
             DaemonFrame::SshAgentHookGap { host_id, dropped } => {

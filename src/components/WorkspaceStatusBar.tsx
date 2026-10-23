@@ -6,6 +6,7 @@ import type { TerminalScope } from "../lib/types";
 import { useI18n } from "../lib/i18n";
 import { useProjectBranch } from "../hooks/useProjectBranch";
 import { BottomResourceDock } from "./terminal/BottomResourceDock";
+import { NotificationInboxButton } from "./NotificationInbox";
 
 export function WorkspaceStatusBar({ terminalScope }: { terminalScope?: TerminalScope }) {
   const { t } = useI18n();
@@ -28,6 +29,7 @@ export function WorkspaceStatusBar({ terminalScope }: { terminalScope?: Terminal
       {branch && <span className="ui-status-branch"><GitBranch size={11} />{branch}</span>}
       <div className="ui-status-spacer" />
       <BottomResourceDock />
+      <NotificationInboxButton className="!m-0 !h-[22px] shrink-0" />
       <span className="ui-status-context" title={t("memory.terminals", { count })}><Terminal size={13} strokeWidth={1.5} />{count}</span>
       <span className="ui-status-context"><Monitor size={13} strokeWidth={1.5} />{environment === "local" ? t("workspace.localHost") : environment.toUpperCase()}</span>
     </footer>
