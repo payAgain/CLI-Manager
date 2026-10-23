@@ -33,7 +33,20 @@ pub struct AgentMemory {
     pid: u32,
     name: String,
     memory_bytes: u64,
+    self_bytes: u64,
+    child_bytes: u64,
     process_count: usize,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TerminalProcessMemory {
+    pid: u32,
+    parent_pid: Option<u32>,
+    name: String,
+    memory_bytes: u64,
+    kind: &'static str,
+    agent_pid: Option<u32>,
 }
 
 #[derive(Serialize)]
@@ -46,6 +59,7 @@ pub struct TerminalMemory {
     other_bytes: u64,
     local_only: bool,
     agents: Vec<AgentMemory>,
+    processes: Vec<TerminalProcessMemory>,
 }
 
 #[derive(Serialize)]
@@ -193,6 +207,7 @@ fn aggregate(
                     .as_deref()
                     .is_some_and(|shell| shell.to_ascii_lowercase().contains("wsl")),
             agents: Vec::new(),
+            processes: Vec::new(),
         })
         .collect();
     let mut agents = BTreeMap::<(usize, u32), AgentMemory>::new();
@@ -208,16 +223,39 @@ fn aggregate(
         if let Some(index) = nearest_terminal(process.pid, &roots, &processes) {
             let terminal = &mut terminals[index];
             *terminal.total_bytes.as_mut().unwrap() += process.memory;
-            if let Some((pid, name)) =
-                agent_owner(process.pid, terminal.root_pid.unwrap(), &processes)
-            {
+            let owner = agent_owner(process.pid, terminal.root_pid.unwrap(), &processes);
+            let kind = if terminal.root_pid == Some(process.pid) {
+                "shell"
+            } else if identify_agent(process).is_some() {
+                "agent"
+            } else if owner.is_some() {
+                "tool"
+            } else {
+                "other"
+            };
+            terminal.processes.push(TerminalProcessMemory {
+                pid: process.pid,
+                parent_pid: parent_pid(process.pid, &processes),
+                name: process.name.rsplit(['/', '\\']).next().unwrap_or(&process.name).to_string(),
+                memory_bytes: process.memory,
+                kind,
+                agent_pid: owner.map(|(pid, _)| pid),
+            });
+            if let Some((pid, name)) = owner {
                 let agent = agents.entry((index, pid)).or_insert_with(|| AgentMemory {
                     pid,
                     name: name.to_string(),
                     memory_bytes: 0,
+                    self_bytes: 0,
+                    child_bytes: 0,
                     process_count: 0,
                 });
                 agent.memory_bytes += process.memory;
+                if kind == "agent" {
+                    agent.self_bytes += process.memory;
+                } else {
+                    agent.child_bytes += process.memory;
+                }
                 agent.process_count += 1;
             } else if terminal.root_pid == Some(process.pid) {
                 terminal.shell_bytes += process.memory;
@@ -249,6 +287,11 @@ fn aggregate(
     }
     for ((index, _), agent) in agents {
         terminals[index].agents.push(agent);
+    }
+    for terminal in &mut terminals {
+        terminal.processes.sort_by(|left, right| {
+            right.memory_bytes.cmp(&left.memory_bytes).then_with(|| left.pid.cmp(&right.pid))
+        });
     }
     snapshot.framework.total_bytes = snapshot.framework.app_bytes
         + snapshot.framework.webview_bytes
@@ -415,6 +458,34 @@ mod tests {
         assert_eq!(snapshot.terminals[0].agents[1].memory_bytes, 110);
         assert_eq!(snapshot.unassigned_bytes, 8);
         assert_eq!(snapshot.total_bytes, 580);
+    }
+
+    #[test]
+    fn separates_agent_memory_from_build_tools_and_sorts_process_details() {
+        let list = vec![
+            process(1, 0, "cli-manager.exe", 100),
+            process(10, 1, "cli-manager-daemon.exe", 20),
+            process(20, 10, "pwsh.exe", 10),
+            process(21, 20, "claude.exe", 300),
+            process(22, 21, "bash.exe", 5),
+            process(23, 22, "cargo.exe", 25),
+            process(24, 23, r"C:\Rust\bin\rustc.exe", 2000),
+            process(25, 20, "python.exe", 15),
+        ];
+        let snapshot = aggregate(&list, 1, Some(10), &[session("build", Some(20))], true);
+        let terminal = &snapshot.terminals[0];
+        let agent = &terminal.agents[0];
+        assert_eq!(terminal.total_bytes, Some(2355));
+        assert_eq!(agent.self_bytes, 300);
+        assert_eq!(agent.child_bytes, 2030);
+        assert_eq!(agent.memory_bytes, agent.self_bytes + agent.child_bytes);
+        assert_eq!(terminal.processes.iter().map(|process| process.memory_bytes).sum::<u64>(), 2355);
+        assert_eq!(terminal.processes[0].name, "rustc.exe");
+        assert_eq!(terminal.processes[0].kind, "tool");
+        assert_eq!(terminal.processes[0].agent_pid, Some(21));
+        assert_eq!(terminal.processes[0].parent_pid, Some(23));
+        assert_eq!(terminal.processes.iter().map(|process| process.pid).collect::<Vec<_>>(), vec![24, 21, 23, 25, 20, 22]);
+        assert_eq!(terminal.processes.iter().find(|process| process.pid == 25).unwrap().agent_pid, None);
     }
 
     #[test]

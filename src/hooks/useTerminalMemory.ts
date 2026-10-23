@@ -13,7 +13,15 @@ export interface TerminalMemorySnapshot {
     shellBytes: number;
     otherBytes: number;
     localOnly: boolean;
-    agents: Array<{ pid: number; name: string; memoryBytes: number; processCount: number }>;
+    agents: Array<{ pid: number; name: string; memoryBytes: number; selfBytes: number; childBytes: number; processCount: number }>;
+    processes: Array<{
+      pid: number;
+      parentPid: number | null;
+      name: string;
+      memoryBytes: number;
+      kind: "shell" | "agent" | "tool" | "other";
+      agentPid: number | null;
+    }>;
   }>;
   unassignedBytes: number;
   totalBytes: number;

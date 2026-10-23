@@ -59,11 +59,32 @@ export function MemoryUsage({ collapsed, statusBar = false }: { collapsed: boole
             const memory = snapshot?.terminals.find((entry) => entry.sessionId === session.id);
             const localOnly = memory?.localOnly || session.environmentType === "ssh" || session.environmentType === "wsl" || session.shell?.toLowerCase().includes("wsl");
             return (
-              <div key={session.id} className="ui-memory-tab" data-current={session.id === activeId}>
-                <div className="ui-memory-tab-summary"><Terminal size={14} /><span className="ui-memory-name" title={session.title}>{session.title}</span>{session.id === activeId && <span className="ui-memory-current">{t("memory.current")}</span>}<span className="ui-memory-value">{formatMemory(memory?.totalBytes)}</span></div>
-                {memory?.totalBytes == null && <p className="ui-memory-note">{t("memory.unavailable")}</p>}
-                {localOnly && <p className="ui-memory-note">{t("memory.remoteNote")}</p>}
-              </div>
+              <details key={session.id} className="ui-memory-tab ui-memory-group" data-current={session.id === activeId} open={session.id === activeId ? true : undefined}>
+                <summary className="ui-memory-tab-summary"><ChevronRight size={12} className="ui-memory-chevron" /><Terminal size={14} /><span className="ui-memory-name" title={session.title}>{session.title}</span>{session.id === activeId && <span className="ui-memory-current">{t("memory.current")}</span>}<span className="ui-memory-value">{formatMemory(memory?.totalBytes)}</span></summary>
+                <div className="ui-memory-terminal-details">
+                  {memory?.totalBytes == null ? <p className="ui-memory-note">{t("memory.unavailable")}</p> : <>
+                    <div className="ui-memory-row"><span>{t("memory.shell")}</span><span className="ui-memory-value">{formatMemory(memory.shellBytes)}</span></div>
+                    {memory.agents.map((agent) => <div className="ui-memory-agent" key={agent.pid}>
+                      <div className="ui-memory-row"><span className="ui-memory-name">{agent.name}</span><small>{t("memory.processes", { count: agent.processCount })}</small><span className="ui-memory-value">{formatMemory(agent.memoryBytes)}</span></div>
+                      <div className="ui-memory-agent-parts">
+                        <div className="ui-memory-row"><span>{t("memory.agentSelf")}</span><span className="ui-memory-value">{formatMemory(agent.selfBytes)}</span></div>
+                        <div className="ui-memory-row"><span>{t("memory.agentChildren")}</span><span className="ui-memory-value">{formatMemory(agent.childBytes)}</span></div>
+                      </div>
+                    </div>)}
+                    {memory.otherBytes > 0 && <div className="ui-memory-row"><span>{t("memory.otherChildren")}</span><span className="ui-memory-value">{formatMemory(memory.otherBytes)}</span></div>}
+                    <details className="ui-memory-processes" open>
+                      <summary><ChevronRight size={12} className="ui-memory-chevron" /><span>{t("memory.processDetails")}</span><small>{t("memory.processes", { count: memory.processes?.length ?? 0 })}</small></summary>
+                      <div className="ui-memory-process-list">
+                        {memory.processes?.map((process) => <div className="ui-memory-process" key={process.pid} title={[process.name, `PID ${process.pid}`, process.parentPid == null ? "" : `PPID ${process.parentPid}`, process.agentPid == null ? "" : t("memory.agentOwner", { pid: process.agentPid })].filter(Boolean).join("\n")}>
+                          <div className="ui-memory-process-identity"><span className="ui-memory-name">{process.name}</span><small>PID {process.pid} · {t(`memory.processKind.${process.kind}`)}</small></div>
+                          <span className="ui-memory-value">{formatMemory(process.memoryBytes)}</span>
+                        </div>)}
+                      </div>
+                    </details>
+                  </>}
+                  {localOnly && <p className="ui-memory-note">{t("memory.remoteNote")}</p>}
+                </div>
+              </details>
             );
           })}
           {backgroundBytes > 0 && <div className="ui-memory-row"><span>{t("memory.background")}</span><span className="ui-memory-value">{formatMemory(backgroundBytes)}</span></div>}
