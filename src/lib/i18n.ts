@@ -65,6 +65,7 @@ export function getLanguageLocale(language: AppLanguage, englishLocale = "en-US"
 }
 
 const zh = {
+  "palette.quickJump": "快速跳转",
   "worktree.externalManagedElsewhere": "此 Worktree 由外部工具创建，请在原工具中合并或移除。",
   "git.approval.symlinkUnsupported": "此符号链接无法按普通文件审核。",
   "inbox.persistenceError": "部分通知未能保存，近期提醒可能不完整。",
@@ -2665,6 +2666,7 @@ const zh = {
 } as const;
 
 const en: Record<keyof typeof zh, string> = {
+  "palette.quickJump": "Quick jump",
   "worktree.externalManagedElsewhere": "This worktree was created externally. Merge or remove it in its original tool.",
   "git.approval.symlinkUnsupported": "This symbolic link cannot be reviewed as a regular file.",
   "inbox.persistenceError": "Some notifications could not be saved; recent alerts may be incomplete.",
