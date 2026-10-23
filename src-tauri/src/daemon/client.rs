@@ -176,7 +176,7 @@ impl DaemonClient {
                 sequence,
                 cols,
                 rows,
-                data_base64,
+                data,
             } => {
                 let _ = app_handle.emit(
                     "pty-legacy-output",
@@ -185,7 +185,7 @@ impl DaemonClient {
                         "sequence": sequence,
                         "cols": cols,
                         "rows": rows,
-                        "dataBase64": data_base64,
+                        "dataBase64": base64::Engine::encode(&base64::engine::general_purpose::STANDARD, data),
                     }),
                 );
             }

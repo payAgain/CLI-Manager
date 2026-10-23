@@ -17,11 +17,9 @@ use crate::claude_hook::{remote_hook_payload_from_spool, spawn_hook_listener, Ho
 use crate::pty::manager::{PtyEventSink, PtyManager, PtyProcessStatus};
 use crate::ssh_launch::SshLaunchPlan;
 use crate::third_party_notification::DispatcherHandle;
-use base64::engine::general_purpose::STANDARD;
-use base64::Engine;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs::{File, OpenOptions};
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{BufRead, BufReader, Read, Seek, SeekFrom, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::process::Command;
@@ -54,11 +52,16 @@ const CLIENT_OUTPUT_LOW_WATERMARK: usize = 5_000;
 const CLIENT_OUTPUT_QUEUE_MAX_BYTES: usize = 2 * 1024 * 1024;
 const CLIENT_CONTROL_QUEUE_MAX_FRAMES: usize = 256;
 
+struct SpooledFrame {
+    sequence: u64,
+    bytes: usize,
+}
+
 struct ReplayFrame {
     cols: u16,
     rows: u16,
     sequence: u64,
-    data: Vec<u8>,
+    data: Arc<[u8]>,
 }
 
 /// 按整帧存储的回放缓冲：每帧都是 PTY reader 切好的 ANSI 安全块，
@@ -68,6 +71,9 @@ struct SessionBuffer {
     total_bytes: usize,
     spool_path: Option<PathBuf>,
     spool_bytes: usize,
+    spool_offset: u64,
+    spool_frames: VecDeque<SpooledFrame>,
+    retired_spool_paths: Vec<PathBuf>,
     checkpoint: Option<ReplayFrame>,
     truncated: bool,
 }
@@ -84,18 +90,26 @@ impl SessionBuffer {
             total_bytes: 0,
             spool_path,
             spool_bytes: 0,
+            spool_offset: 0,
+            spool_frames: VecDeque::new(),
+            retired_spool_paths: Vec::new(),
             checkpoint: None,
             truncated: false,
         }
     }
 
+    #[cfg(test)]
     fn push_output(&mut self, cols: u16, rows: u16, sequence: u64, data: &[u8]) {
+        self.push_shared_output(cols, rows, sequence, Arc::from(data));
+    }
+
+    fn push_shared_output(&mut self, cols: u16, rows: u16, sequence: u64, data: Arc<[u8]>) {
         self.total_bytes += data.len();
         self.frames.push_back(ReplayFrame {
             cols,
             rows,
             sequence,
-            data: data.to_vec(),
+            data,
         });
         while self.total_bytes > SESSION_BUFFER_MAX_BYTES {
             let Some(front) = self.frames.pop_front() else {
@@ -124,52 +138,39 @@ impl SessionBuffer {
             cols,
             rows,
             sequence,
-            data: Vec::new(),
+            data: Arc::from([]),
         });
     }
 
-    fn replay_entries(&self) -> Vec<ReplayEntry> {
-        self.checkpoint
+    fn replay_entries(&self) -> Result<Vec<ReplayEntry>, String> {
+        self.replay_entries_after(None)
+    }
+
+    fn replay_entries_after(
+        &self,
+        after_sequence: Option<u64>,
+    ) -> Result<Vec<ReplayEntry>, String> {
+        let spooled = self.read_spooled_frames_after(after_sequence)?;
+        Ok(self
+            .checkpoint
             .iter()
-            .map(|frame| ReplayFrame {
-                cols: frame.cols,
-                rows: frame.rows,
-                sequence: frame.sequence,
-                data: frame.data.clone(),
-            })
-            .chain(self.read_spooled_frames())
-            .chain(self.frames.iter().map(|frame| ReplayFrame {
-                cols: frame.cols,
-                rows: frame.rows,
-                sequence: frame.sequence,
-                data: frame.data.clone(),
-            }))
+            .chain(spooled.iter())
+            .chain(self.frames.iter())
+            .filter(|frame| after_sequence.is_none_or(|sequence| frame.sequence > sequence))
             .map(|frame| ReplayEntry {
                 cols: frame.cols,
                 rows: frame.rows,
                 sequence: frame.sequence,
-                data_base64: STANDARD.encode(frame.data),
+                data: Arc::clone(&frame.data),
             })
-            .collect()
-    }
-
-    fn replay_entries_after(&self, after_sequence: Option<u64>) -> Vec<ReplayEntry> {
-        let after_sequence = after_sequence.unwrap_or(0);
-        self.replay_entries()
-            .into_iter()
-            .filter(|entry| entry.sequence > after_sequence)
-            .collect()
+            .collect())
     }
 
     fn oldest_sequence(&self) -> Option<u64> {
         self.checkpoint
             .as_ref()
             .map(|frame| frame.sequence)
-            .or_else(|| {
-                self.read_spooled_frames()
-                    .first()
-                    .map(|frame| frame.sequence)
-            })
+            .or_else(|| self.spool_frames.front().map(|frame| frame.sequence))
             .or_else(|| self.frames.front().map(|frame| frame.sequence))
     }
 
@@ -187,11 +188,14 @@ impl SessionBuffer {
         {
             return Ok(());
         }
+        // Keep the old checkpoint and ring intact if the disk update fails.
+        let retained = self.read_spooled_frames_after(Some(sequence))?;
+        self.write_spooled_frames(&retained)?;
         self.checkpoint = Some(ReplayFrame {
             cols,
             rows,
             sequence,
-            data,
+            data: data.into(),
         });
         while self
             .frames
@@ -202,19 +206,14 @@ impl SessionBuffer {
                 self.total_bytes = self.total_bytes.saturating_sub(frame.data.len());
             }
         }
-        let retained: Vec<ReplayFrame> = self
-            .read_spooled_frames()
-            .into_iter()
-            .filter(|frame| frame.sequence > sequence)
-            .collect();
-        self.write_spooled_frames(&retained)
+        Ok(())
     }
 
     fn replay_available(&self) -> bool {
         self.checkpoint.is_some() || self.spool_bytes > 0 || !self.frames.is_empty()
     }
 
-    fn append_spooled_frame(&self, frame: &ReplayFrame) -> Result<(), String> {
+    fn append_spooled_frame(&mut self, frame: &ReplayFrame) -> Result<(), String> {
         let Some(path) = self.spool_path.as_ref() else {
             return Err("spool path unavailable".to_string());
         };
@@ -226,116 +225,184 @@ impl SessionBuffer {
             .append(true)
             .open(path)
             .map_err(|err| err.to_string())?;
-        file.write_all(&frame.cols.to_be_bytes())
-            .and_then(|_| file.write_all(&frame.rows.to_be_bytes()))
-            .and_then(|_| file.write_all(&frame.sequence.to_be_bytes()))
-            .and_then(|_| file.write_all(&(frame.data.len() as u32).to_be_bytes()))
-            .and_then(|_| file.write_all(&frame.data))
-            .map_err(|err| err.to_string())?;
+        let expected_len = self.spool_offset + self.spool_bytes as u64;
+        let actual_len = file.metadata().map_err(|err| err.to_string())?.len();
+        if actual_len < expected_len {
+            return Err("spool file is shorter than its retained frames".to_string());
+        }
+        if actual_len > expected_len {
+            // A failed rollback must not leave a partial frame before the next append.
+            file.set_len(expected_len).map_err(|err| err.to_string())?;
+        }
+        if let Err(err) = write_replay_frame(&mut file, frame) {
+            let _ = file.set_len(expected_len);
+            return Err(err.to_string());
+        }
+        let bytes = 16 + frame.data.len();
+        self.spool_bytes += bytes;
+        self.spool_frames.push_back(SpooledFrame {
+            sequence: frame.sequence,
+            bytes,
+        });
         Ok(())
     }
 
     fn write_spooled_frames(&mut self, frames: &[ReplayFrame]) -> Result<(), String> {
+        self.cleanup_retired_spools();
         let Some(path) = self.spool_path.as_ref() else {
-            self.spool_bytes = 0;
             return Ok(());
         };
         if frames.is_empty() {
-            let _ = std::fs::remove_file(path);
+            match std::fs::remove_file(path) {
+                Ok(()) => {}
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                Err(err) => return Err(err.to_string()),
+            }
             self.spool_bytes = 0;
+            self.spool_offset = 0;
+            self.spool_frames.clear();
             return Ok(());
         }
-        let temp_path = path.with_extension("tmp");
-        let mut file = File::create(&temp_path).map_err(|err| err.to_string())?;
-        let mut bytes = 0usize;
-        for frame in frames {
-            file.write_all(&frame.cols.to_be_bytes())
-                .and_then(|_| file.write_all(&frame.rows.to_be_bytes()))
-                .and_then(|_| file.write_all(&frame.sequence.to_be_bytes()))
-                .and_then(|_| file.write_all(&(frame.data.len() as u32).to_be_bytes()))
-                .and_then(|_| file.write_all(&frame.data))
-                .map_err(|err| err.to_string())?;
-            bytes = bytes.saturating_add(16 + frame.data.len());
+        // Spools are daemon-lifetime scratch files, never loaded after restart.
+        // Switch paths only after a complete write, avoiding remove-then-rename
+        // data loss on Windows as well as preserving the old file on disk errors.
+        let next_path = path.with_file_name(format!("spool-{}.bin", uuid::Uuid::new_v4()));
+        // Only clean up a replacement after this call actually created it.
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&next_path)
+            .map_err(|err| err.to_string())?;
+        let result = (|| {
+            for frame in frames {
+                write_replay_frame(&mut file, frame)?;
+            }
+            file.flush()
+        })();
+        drop(file);
+        if let Err(err) = result {
+            let _ = std::fs::remove_file(&next_path);
+            return Err(err.to_string());
         }
-        file.flush().map_err(|err| err.to_string())?;
-        if path.exists() {
-            std::fs::remove_file(path).map_err(|err| err.to_string())?;
-        }
-        std::fs::rename(&temp_path, path).map_err(|err| err.to_string())?;
-        self.spool_bytes = bytes;
+        let old_path = self.spool_path.replace(next_path).unwrap();
+        self.spool_frames = frames
+            .iter()
+            .map(|frame| SpooledFrame {
+                sequence: frame.sequence,
+                bytes: 16 + frame.data.len(),
+            })
+            .collect();
+        self.spool_bytes = self.spool_frames.iter().map(|frame| frame.bytes).sum();
+        self.spool_offset = 0;
+        self.retired_spool_paths.push(old_path);
+        self.cleanup_retired_spools();
         Ok(())
     }
 
+    fn cleanup_retired_spools(&mut self) {
+        // Only paths previously owned by this session can enter this list.
+        // Windows readers may temporarily deny deletion; retry on later
+        // compaction/checkpoint and Drop instead of forgetting those files.
+        self.retired_spool_paths
+            .retain(|path| match std::fs::remove_file(path) {
+                Ok(()) => false,
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => false,
+                Err(err) => {
+                    log::warn!("daemon old session spool cleanup deferred: {err}");
+                    true
+                }
+            });
+    }
+
     fn enforce_spool_cap(&mut self) {
-        let actual = self
-            .spool_path
-            .as_ref()
-            .and_then(|path| std::fs::metadata(path).ok())
-            .map(|meta| meta.len() as usize)
-            .unwrap_or(0);
-        self.spool_bytes = actual;
-        if actual <= SESSION_SPOOL_MAX_BYTES {
-            return;
-        }
-        let mut frames = self.read_spooled_frames();
-        let mut bytes = frames
-            .iter()
-            .map(|frame| 16 + frame.data.len())
-            .sum::<usize>();
-        while bytes > SESSION_SPOOL_MAX_BYTES && !frames.is_empty() {
-            let removed = frames.remove(0);
-            bytes = bytes.saturating_sub(16 + removed.data.len());
+        // Drop whole frames from the logical head without rewriting retained data.
+        while self.spool_bytes > SESSION_SPOOL_MAX_BYTES {
+            let Some(frame) = self.spool_frames.pop_front() else {
+                break;
+            };
+            self.spool_bytes -= frame.bytes;
+            self.spool_offset += frame.bytes as u64;
             self.truncated = true;
         }
-        if let Err(err) = self.write_spooled_frames(&frames) {
+        // Amortize physical compaction over a full spool's worth of discarded
+        // bytes. Logical history remains 10 MiB; the file stays near 20 MiB.
+        if self.spool_offset < SESSION_SPOOL_MAX_BYTES as u64 {
+            return;
+        }
+        let result = self
+            .read_spooled_frames_after(None)
+            .and_then(|frames| self.write_spooled_frames(&frames));
+        if let Err(err) = result {
             log::warn!("daemon session spool compaction failed: {err}");
         }
     }
 
-    fn read_spooled_frames(&self) -> Vec<ReplayFrame> {
-        let Some(path) = self.spool_path.as_ref() else {
-            return Vec::new();
-        };
-        let Ok(mut file) = File::open(path) else {
-            return Vec::new();
-        };
+    fn read_spooled_frames_after(
+        &self,
+        after_sequence: Option<u64>,
+    ) -> Result<Vec<ReplayFrame>, String> {
+        let skipped_frames = self
+            .spool_frames
+            .iter()
+            .take_while(|frame| after_sequence.is_some_and(|sequence| frame.sequence <= sequence))
+            .count();
+        let skipped = self
+            .spool_frames
+            .iter()
+            .take(skipped_frames)
+            .map(|frame| frame.bytes)
+            .sum::<usize>();
+        if skipped == self.spool_bytes {
+            return Ok(Vec::new());
+        }
+        let path = self
+            .spool_path
+            .as_ref()
+            .ok_or_else(|| "spool path unavailable".to_string())?;
+        let mut file = File::open(path).map_err(|err| err.to_string())?;
+        file.seek(SeekFrom::Start(self.spool_offset + skipped as u64))
+            .map_err(|err| err.to_string())?;
+        // Ignore an incomplete tail left by an append error until it is repaired.
+        let mut file = file.take((self.spool_bytes - skipped) as u64);
         let mut frames = Vec::new();
-        loop {
+        for expected in self.spool_frames.iter().skip(skipped_frames) {
             let mut header = [0u8; 16];
-            match file.read_exact(&mut header) {
-                Ok(()) => {}
-                Err(err) if err.kind() == std::io::ErrorKind::UnexpectedEof => break,
-                Err(err) => {
-                    log::warn!("daemon session spool read failed: {err}");
-                    break;
-                }
-            }
+            file.read_exact(&mut header)
+                .map_err(|err| err.to_string())?;
             let cols = u16::from_be_bytes([header[0], header[1]]);
             let rows = u16::from_be_bytes([header[2], header[3]]);
             let sequence = u64::from_be_bytes(header[4..12].try_into().unwrap());
             let data_len = u32::from_be_bytes(header[12..16].try_into().unwrap()) as usize;
-            if data_len > MAX_FRAME_BYTES {
-                log::warn!("daemon session spool frame exceeds protocol limit: {data_len}");
-                break;
+            if data_len > MAX_FRAME_BYTES
+                || data_len + 16 != expected.bytes
+                || sequence != expected.sequence
+            {
+                return Err("spool frame does not match its index".to_string());
             }
             let mut data = vec![0u8; data_len];
-            if let Err(err) = file.read_exact(&mut data) {
-                log::warn!("daemon session spool payload read failed: {err}");
-                break;
-            }
+            file.read_exact(&mut data).map_err(|err| err.to_string())?;
             frames.push(ReplayFrame {
                 cols,
                 rows,
                 sequence,
-                data,
+                data: data.into(),
             });
         }
-        frames
+        Ok(frames)
     }
+}
+
+fn write_replay_frame(file: &mut impl Write, frame: &ReplayFrame) -> std::io::Result<()> {
+    file.write_all(&frame.cols.to_be_bytes())?;
+    file.write_all(&frame.rows.to_be_bytes())?;
+    file.write_all(&frame.sequence.to_be_bytes())?;
+    file.write_all(&(frame.data.len() as u32).to_be_bytes())?;
+    file.write_all(&frame.data)
 }
 
 impl Drop for SessionBuffer {
     fn drop(&mut self) {
+        self.cleanup_retired_spools();
         if let Some(path) = self.spool_path.as_ref() {
             let _ = std::fs::remove_file(path);
         }
@@ -356,7 +423,7 @@ enum ClientWireFrame {
         sequence: u64,
         cols: u16,
         rows: u16,
-        data: Vec<u8>,
+        data: Arc<[u8]>,
     },
 }
 
@@ -398,11 +465,8 @@ impl ClientTransport {
                         sequence,
                         cols,
                         rows,
-                        data_base64,
+                        data,
                     }) => {
-                        let data = STANDARD
-                            .decode(data_base64)
-                            .map_err(|err| err.to_string())?;
                         let binary = encode_binary_terminal_frame(
                             BINARY_KIND_OUTPUT,
                             session_id,
@@ -469,7 +533,7 @@ fn websocket_attached_frames(frame: &DaemonFrame) -> Result<Vec<ClientWireFrame>
             sequence: 0,
             cols: replay.first().map(|entry| entry.cols).unwrap_or(80),
             rows: replay.first().map(|entry| entry.rows).unwrap_or(24),
-            data: Vec::new(),
+            data: Arc::from([]),
         });
     }
     for entry in replay {
@@ -479,9 +543,7 @@ fn websocket_attached_frames(frame: &DaemonFrame) -> Result<Vec<ClientWireFrame>
             sequence: entry.sequence,
             cols: entry.cols,
             rows: entry.rows,
-            data: STANDARD
-                .decode(&entry.data_base64)
-                .map_err(|err| err.to_string())?,
+            data: Arc::clone(&entry.data),
         });
     }
     frames.push(ClientWireFrame::Daemon(DaemonFrame::Attached {
@@ -648,7 +710,9 @@ impl ClientWriter {
 
 fn frame_payload_bytes(frame: &DaemonFrame) -> usize {
     match frame {
-        DaemonFrame::Output { data_base64, .. } => data_base64.len(),
+        // Preserve the existing conservative queue limit in Base64 wire bytes
+        // for both transports while retaining only raw shared bytes in memory.
+        DaemonFrame::Output { data, .. } => data.len().saturating_add(2) / 3 * 4,
         _ => 0,
     }
 }
@@ -1463,6 +1527,7 @@ impl PtyEventSink for DaemonPtyEventSink {
 
 fn emit_daemon_output(host: &DaemonHost, session_id: &str, data: &[u8]) {
     let char_count = String::from_utf8_lossy(data).encode_utf16().count();
+    let data: Arc<[u8]> = Arc::from(data);
     let mut sequence = 0;
     let mut output_size = (80, 24);
     if let Some(session) = host.get_session(session_id) {
@@ -1472,7 +1537,7 @@ fn emit_daemon_output(host: &DaemonHost, session_id: &str, data: &[u8]) {
             output_size = (entry.cols, entry.rows);
             entry
                 .buffer
-                .push_output(output_size.0, output_size.1, sequence, data);
+                .push_shared_output(output_size.0, output_size.1, sequence, Arc::clone(&data));
             entry.meta.replay_available = entry.buffer.replay_available();
             entry.meta.replay_truncated = entry.buffer.truncated;
         }
@@ -1492,7 +1557,7 @@ fn emit_daemon_output(host: &DaemonHost, session_id: &str, data: &[u8]) {
             sequence,
             cols: output_size.0,
             rows: output_size.1,
-            data_base64: STANDARD.encode(data),
+            data,
         },
     );
 }
@@ -2201,58 +2266,67 @@ impl DaemonServer {
                 // Keep the replay snapshot and subscription registration atomic
                 // relative to on_output (sessions -> clients). Output produced
                 // before this block is replayed; output produced after it is live.
-                let attach_info = self.host.get_session(&session_id).and_then(|session| {
-                    let entry = session.lock().ok()?;
-                    let meta = entry.meta.clone();
-                    let oldest_sequence = entry.buffer.oldest_sequence().unwrap_or(0);
-                    let replay_reset = after_sequence
-                        .map(|sequence| sequence.saturating_add(1) < oldest_sequence)
-                        .unwrap_or(true);
-                    let replay_entries = if replay_reset {
-                        entry.buffer.replay_entries()
-                    } else {
-                        entry.buffer.replay_entries_after(after_sequence)
-                    };
-                    let latest_sequence = entry.next_sequence.saturating_sub(1);
-                    let mut clients = self.host.clients.lock().ok()?;
-                    let client = clients.get_mut(&client_id)?;
-                    client.attached.insert(session_id.clone());
-                    client.unacknowledged_chars.insert(session_id.clone(), 0);
-                    client.flow_control_paused.remove(&session_id);
-                    client
-                        .last_sent_sequence
-                        .insert(session_id.clone(), latest_sequence);
-                    client
-                        .last_acknowledged_sequence
-                        .insert(session_id.clone(), latest_sequence);
-                    client.attaching.insert(session_id.clone(), Vec::new());
-                    Some((
-                        meta,
-                        replay_entries,
-                        latest_sequence,
-                        replay_reset,
-                        oldest_sequence,
-                    ))
-                });
+                let attach_info = self
+                    .host
+                    .get_session(&session_id)
+                    .ok_or_else(|| "session not found".to_string())
+                    .and_then(|session| {
+                        let entry = session
+                            .lock()
+                            .map_err(|_| "session state unavailable".to_string())?;
+                        let meta = entry.meta.clone();
+                        let oldest_sequence = entry.buffer.oldest_sequence().unwrap_or(0);
+                        let replay_reset = after_sequence
+                            .map(|sequence| sequence.saturating_add(1) < oldest_sequence)
+                            .unwrap_or(true);
+                        let replay_entries = if replay_reset {
+                            entry.buffer.replay_entries()
+                        } else {
+                            entry.buffer.replay_entries_after(after_sequence)
+                        }
+                        .map_err(|err| format!("session replay unavailable: {err}"))?;
+                        let latest_sequence = entry.next_sequence.saturating_sub(1);
+                        let mut clients = self
+                            .host
+                            .clients
+                            .lock()
+                            .map_err(|_| "client state unavailable".to_string())?;
+                        let client = clients
+                            .get_mut(&client_id)
+                            .ok_or_else(|| "client not found".to_string())?;
+                        client.attached.insert(session_id.clone());
+                        client.unacknowledged_chars.insert(session_id.clone(), 0);
+                        client.flow_control_paused.remove(&session_id);
+                        client
+                            .last_sent_sequence
+                            .insert(session_id.clone(), latest_sequence);
+                        client
+                            .last_acknowledged_sequence
+                            .insert(session_id.clone(), latest_sequence);
+                        client.attaching.insert(session_id.clone(), Vec::new());
+                        Ok((
+                            meta,
+                            replay_entries,
+                            latest_sequence,
+                            replay_reset,
+                            oldest_sequence,
+                        ))
+                    });
                 match attach_info {
-                    Some((
-                        meta,
-                        replay_entries,
-                        latest_sequence,
-                        replay_reset,
-                        oldest_sequence,
-                    )) => DaemonFrame::Attached {
-                        id,
-                        session_id,
-                        replay_base64: String::new(),
-                        replay: replay_entries,
-                        latest_sequence,
-                        meta,
-                        replay_reset,
-                        replay_truncated: false,
-                        oldest_sequence,
-                    },
-                    None => err_frame(id, "session not found"),
+                    Ok((meta, replay_entries, latest_sequence, replay_reset, oldest_sequence)) => {
+                        DaemonFrame::Attached {
+                            id,
+                            session_id,
+                            replay_base64: String::new(),
+                            replay: replay_entries,
+                            latest_sequence,
+                            meta,
+                            replay_reset,
+                            replay_truncated: false,
+                            oldest_sequence,
+                        }
+                    }
+                    Err(message) => err_frame(id, &message),
                 }
             }
             ClientFrame::Detach { id } => {
@@ -2529,6 +2603,65 @@ fn maybe_activate_app_for_hook(payload: &crate::claude_hook::ClaudeHookPayload) 
 mod tests {
     use super::*;
 
+    fn queued_writer(websocket: bool) -> Arc<ClientWriter> {
+        Arc::new(ClientWriter {
+            shared: Arc::new((Mutex::new(ClientWriterState {
+                control: VecDeque::new(), output: VecDeque::new(), output_bytes: 0, closed: false,
+            }), Condvar::new())),
+            websocket,
+        })
+    }
+
+    #[test]
+    fn live_broadcast_ring_replay_and_attach_share_original_bytes() {
+        let host = DaemonHost::new();
+        let id = "shared-bytes";
+        host.sessions.lock().unwrap().insert(id.into(), test_session(id, SessionBuffer::new(), 1));
+        let writers = [queued_writer(true), queued_writer(false)];
+        for (index, writer) in writers.iter().enumerate() {
+            host.clients.lock().unwrap().insert(index as u64, ClientHandle {
+                writer: Arc::clone(writer), attached: HashSet::from([id.into()]),
+                unacknowledged_chars: HashMap::new(), flow_control_paused: HashSet::new(),
+                last_sent_sequence: HashMap::new(), last_acknowledged_sequence: HashMap::new(),
+                attaching: HashMap::from([(id.into(), Vec::new())]),
+            });
+        }
+        emit_daemon_output(&host, id, &[0, 255, 128, 27, b'[', b'm']);
+        let session = host.get_session(id).unwrap();
+        let entry = session.lock().unwrap();
+        let original = &entry.buffer.frames.front().unwrap().data;
+        let replay = entry.buffer.replay_entries().unwrap();
+        assert!(Arc::ptr_eq(original, &replay[0].data));
+        for (index, writer) in writers.iter().enumerate() {
+            host.complete_attach(index as u64, id);
+            let mut state = writer.shared.0.lock().unwrap();
+            assert_eq!(state.output_bytes, 8, "retain the legacy Base64 byte budget");
+            let Some(ClientWireFrame::Daemon(DaemonFrame::Output { data, sequence: 1, .. })) = state.pop_next() else { panic!("missing output"); };
+            assert!(Arc::ptr_eq(original, &data), "fan-out must clone only the Arc");
+            assert_eq!(state.output_bytes, 0);
+        }
+        let attached = DaemonFrame::Attached {
+            id: 1, session_id: id.into(), replay_base64: String::new(), replay,
+            latest_sequence: 1, meta: entry.meta.clone(), replay_reset: true,
+            replay_truncated: false, oldest_sequence: 1,
+        };
+        let frames = websocket_attached_frames(&attached).unwrap();
+        let ClientWireFrame::BinaryTerminal { data, kind: BINARY_KIND_REPLAY, .. } = &frames[1] else { panic!("missing replay"); };
+        assert!(Arc::ptr_eq(original, data), "binary replay must not decode a Base64 copy");
+    }
+
+    #[test]
+    fn raw_output_keeps_legacy_queue_limit_and_zero_byte_resize() {
+        let writer = queued_writer(true);
+        let data: Arc<[u8]> = vec![0; CLIENT_OUTPUT_QUEUE_MAX_BYTES / 4 * 3].into();
+        let output = |data| DaemonFrame::Output { session_id: "queue".into(), sequence: 1, cols: 80, rows: 24, data };
+        writer.send_frame(&output(Arc::clone(&data))).unwrap();
+        assert_eq!(writer.shared.0.lock().unwrap().output_bytes, CLIENT_OUTPUT_QUEUE_MAX_BYTES);
+        writer.send_frame(&output(Arc::from([]))).unwrap();
+        assert!(writer.send_frame(&output(Arc::from([1]))).is_err());
+        assert!(writer.shared.0.lock().unwrap().closed);
+    }
+
     #[test]
     fn daemon_output_batch_stops_before_crossing_live_frame_budget() {
         assert!(!output_batch_would_overflow(0, 80 * 1024));
@@ -2652,7 +2785,7 @@ mod tests {
                     sequence: 3,
                     cols: 120,
                     rows: 30,
-                    data_base64: STANDARD.encode(b"hello"),
+                    data: Arc::from(&b"hello"[..]),
                 })
                 .unwrap();
             drop(socket);
@@ -2690,13 +2823,13 @@ mod tests {
                     sequence: 1,
                     cols: 80,
                     rows: 24,
-                    data_base64: STANDARD.encode(b"first"),
+                    data: Arc::from(&b"first"[..]),
                 },
                 ReplayEntry {
                     sequence: 2,
                     cols: 80,
                     rows: 24,
-                    data_base64: STANDARD.encode(b"second"),
+                    data: Arc::from(&b"second"[..]),
                 },
             ],
             latest_sequence: 2,
@@ -2807,7 +2940,7 @@ mod tests {
             DaemonFrame::Attached { replay, .. } => {
                 assert_eq!(replay.len(), 1);
                 assert_eq!(
-                    STANDARD.decode(&replay[0].data_base64).unwrap(),
+                    replay[0].data.as_ref(),
                     b"replay-before-attach"
                 );
             }
@@ -2822,6 +2955,118 @@ mod tests {
             .attached
             .contains(session_id));
         drop(peer);
+    }
+
+    #[test]
+    fn attach_rejects_unreadable_spool_before_advancing_subscription() {
+        for missing in [true, false] {
+            let temp = tempfile::tempdir().unwrap();
+            let path = temp.path().join("session.bin");
+            let mut buffer = SessionBuffer::with_spool(Some(path.clone()));
+            for sequence in 1..=100 {
+                buffer
+                    .append_spooled_frame(&ReplayFrame {
+                        cols: 80,
+                        rows: 24,
+                        sequence,
+                        data: vec![sequence as u8; 32].into(),
+                    })
+                    .unwrap();
+            }
+            buffer.push_output(80, 24, 101, b"live ring");
+            let original = std::fs::read(&path).unwrap();
+            if missing {
+                std::fs::remove_file(&path).unwrap();
+            } else {
+                File::options()
+                    .write(true)
+                    .open(&path)
+                    .unwrap()
+                    .set_len(original.len() as u64 - 10)
+                    .unwrap();
+            }
+            let host = Arc::new(DaemonHost::new());
+            let session_id = "spool-read-failure";
+            host.sessions.lock().unwrap().insert(
+                session_id.to_string(),
+                test_session(session_id, buffer, 102),
+            );
+            let writer = Arc::new(ClientWriter {
+                shared: Arc::new((
+                    Mutex::new(ClientWriterState {
+                        control: VecDeque::new(),
+                        output: VecDeque::new(),
+                        output_bytes: 0,
+                        closed: false,
+                    }),
+                    Condvar::new(),
+                )),
+                websocket: true,
+            });
+            host.clients.lock().unwrap().insert(
+                7,
+                ClientHandle {
+                    writer,
+                    attached: HashSet::new(),
+                    unacknowledged_chars: HashMap::from([(session_id.to_string(), 12)]),
+                    flow_control_paused: HashSet::new(),
+                    last_sent_sequence: HashMap::from([(session_id.to_string(), 10)]),
+                    last_acknowledged_sequence: HashMap::from([(session_id.to_string(), 10)]),
+                    attaching: HashMap::new(),
+                },
+            );
+            let server = DaemonServer {
+                host: Arc::clone(&host),
+                next_client_id: AtomicU64::new(8),
+                token: String::new(),
+                version: String::new(),
+                info_path: PathBuf::new(),
+            };
+            for after_sequence in [Some(10), None] {
+                let reply = server.handle_frame(
+                    7,
+                    ClientFrame::Attach {
+                        id: 11,
+                        session_id: session_id.to_string(),
+                        after_sequence,
+                    },
+                );
+                assert!(matches!(reply, DaemonFrame::Err { id: 11, message }
+                    if message.starts_with("session replay unavailable:")));
+                let clients = host.clients.lock().unwrap();
+                let client = clients.get(&7).unwrap();
+                assert!(!client.attached.contains(session_id));
+                assert!(!client.attaching.contains_key(session_id));
+                assert_eq!(client.last_sent_sequence.get(session_id), Some(&10));
+                assert_eq!(client.last_acknowledged_sequence.get(session_id), Some(&10));
+                assert_eq!(client.unacknowledged_chars.get(session_id), Some(&12));
+            }
+            std::fs::write(&path, original).unwrap();
+            let reply = server.handle_frame(
+                7,
+                ClientFrame::Attach {
+                    id: 12,
+                    session_id: session_id.to_string(),
+                    after_sequence: Some(10),
+                },
+            );
+            match reply {
+                DaemonFrame::Attached {
+                    replay,
+                    latest_sequence,
+                    replay_reset,
+                    ..
+                } => {
+                    assert!(!replay_reset);
+                    assert_eq!(latest_sequence, 101);
+                    assert_eq!(
+                        replay.iter().map(|f| f.sequence).collect::<Vec<_>>(),
+                        (11..=101).collect::<Vec<_>>()
+                    );
+                }
+                other => panic!("unexpected recovered attach reply: {other:?}"),
+            }
+        }
     }
 
     #[test]
@@ -2874,7 +3119,7 @@ mod tests {
             sequence: 2,
             cols: 80,
             rows: 24,
-            data_base64: STANDARD.encode(b"live"),
+            data: Arc::from(&b"live"[..]),
         };
         host.push_output_to_attached(session_id, 2, 4, &live);
         writer.send_frame(&attached).unwrap();
@@ -2954,7 +3199,7 @@ mod tests {
             sequence: 1,
             cols: 80,
             rows: 24,
-            data_base64: String::new(),
+            data: Arc::from([]),
         };
         host.push_output_to_attached(session_id, 1, 1, &frame);
 
@@ -2991,15 +3236,308 @@ mod tests {
         buffer.push_output(80, 24, 3, &frame); // 超 2 MiB，最旧帧落磁盘
         assert!(buffer.total_bytes <= SESSION_BUFFER_MAX_BYTES);
         assert_eq!(buffer.frames.len(), 2);
-        let replay = buffer.replay_entries();
+        let replay = buffer.replay_entries().unwrap();
         assert_eq!(replay.len(), 3);
         assert_eq!(
             replay
                 .iter()
-                .map(|entry| STANDARD.decode(&entry.data_base64).unwrap().len())
+                .map(|entry| entry.data.len())
                 .sum::<usize>(),
             frame.len() * 3
         );
+    }
+
+    #[test]
+    fn session_spool_retains_history_while_amortizing_compaction() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut buffer = SessionBuffer::with_spool(Some(temp.path().join("session.bin")));
+        let data = vec![b'x'; 64 * 1024];
+        let mut compactions = 0;
+        let mut largest_file = 0;
+        for sequence in 1..=800 {
+            let previous_path = buffer.spool_path.clone();
+            buffer.push_output(80, 24, sequence, &data);
+            compactions += usize::from(buffer.spool_path != previous_path);
+            assert!(buffer.spool_bytes <= SESSION_SPOOL_MAX_BYTES);
+            assert_eq!(
+                buffer.spool_bytes,
+                buffer.spool_frames.iter().map(|f| f.bytes).sum::<usize>()
+            );
+            if let Ok(metadata) = std::fs::metadata(buffer.spool_path.as_ref().unwrap()) {
+                largest_file = largest_file.max(metadata.len());
+                assert!(metadata.len() <= (2 * SESSION_SPOOL_MAX_BYTES + data.len() + 16) as u64);
+            }
+        }
+        // Frequent small writes must not rewrite the retained 10 MiB each time.
+        assert!((1..=4).contains(&compactions), "compactions={compactions}");
+        assert!(largest_file > SESSION_SPOOL_MAX_BYTES as u64);
+        let replay = buffer.replay_entries().unwrap();
+        let retained_count =
+            SESSION_BUFFER_MAX_BYTES / data.len() + SESSION_SPOOL_MAX_BYTES / (data.len() + 16);
+        assert_eq!(replay.len(), retained_count);
+        assert_eq!(buffer.oldest_sequence(), Some(801 - retained_count as u64));
+        for (index, frame) in replay.iter().enumerate() {
+            assert_eq!(frame.sequence, 801 - retained_count as u64 + index as u64);
+            assert_eq!(frame.data.as_ref(), data);
+        }
+        assert!(buffer.truncated);
+    }
+
+    #[test]
+    fn session_spool_checkpoint_preserves_tail_and_resize_after_head_advance() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut buffer = SessionBuffer::with_spool(Some(temp.path().join("session.bin")));
+        let data = vec![b'x'; 1024 * 1024];
+        for sequence in 1..=16 {
+            buffer.push_output(80, 24, sequence, &data);
+        }
+        assert!(buffer.spool_offset > 0);
+        buffer.push_resize(120, 40, 17);
+        buffer
+            .accept_checkpoint(80, 24, 12, b"checkpoint".to_vec())
+            .unwrap();
+        assert_eq!(buffer.spool_offset, 0);
+        assert_eq!(buffer.oldest_sequence(), Some(12));
+        let replay = buffer.replay_entries().unwrap();
+        assert_eq!(
+            replay.iter().map(|f| f.sequence).collect::<Vec<_>>(),
+            vec![12, 13, 14, 15, 16, 17]
+        );
+        assert_eq!(
+            replay[0].data.as_ref(),
+            b"checkpoint"
+        );
+        assert_eq!((replay[5].cols, replay[5].rows), (120, 40));
+        assert!(replay[5].data.is_empty());
+        assert_eq!(
+            buffer
+                .replay_entries_after(Some(14))
+                .unwrap()
+                .iter()
+                .map(|f| f.sequence)
+                .collect::<Vec<_>>(),
+            vec![15, 16, 17]
+        );
+        buffer
+            .accept_checkpoint(120, 40, 17, b"new checkpoint".to_vec())
+            .unwrap();
+        assert_eq!(buffer.spool_bytes, 0);
+        assert!(buffer.spool_frames.is_empty());
+        assert_eq!(buffer.replay_entries().unwrap().len(), 1);
+        buffer.push_output(120, 40, 18, &data);
+        buffer.push_output(120, 40, 19, &data);
+        buffer.push_output(120, 40, 20, &data);
+        assert_eq!(buffer.replay_entries_after(Some(17)).unwrap().len(), 3);
+    }
+
+    #[test]
+    fn session_spool_skips_old_payloads_and_reads_oldest_from_index() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("session.bin");
+        let mut buffer = SessionBuffer::with_spool(Some(path.clone()));
+        for sequence in 1..=3 {
+            buffer
+                .append_spooled_frame(&ReplayFrame {
+                    cols: 80,
+                    rows: 24,
+                    sequence,
+                    data: vec![sequence as u8; 32].into(),
+                })
+                .unwrap();
+        }
+        // A bad old frame must not be touched by an incremental attach after it.
+        File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .write_all(&[0; 16])
+            .unwrap();
+        assert!(buffer.read_spooled_frames_after(None).is_err());
+        let replay = buffer.replay_entries_after(Some(1)).unwrap();
+        assert_eq!(
+            replay.iter().map(|f| f.sequence).collect::<Vec<_>>(),
+            vec![2, 3]
+        );
+        std::fs::remove_file(path).unwrap();
+        assert_eq!(buffer.oldest_sequence(), Some(1));
+        assert!(buffer
+            .read_spooled_frames_after(Some(3))
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn session_spool_repairs_partial_append_before_next_frame() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("session.bin");
+        let mut buffer = SessionBuffer::with_spool(Some(path.clone()));
+        let frame = |sequence| ReplayFrame {
+            cols: 80,
+            rows: 24,
+            sequence,
+            data: Arc::from(&b"output"[..]),
+        };
+        buffer.append_spooled_frame(&frame(1)).unwrap();
+        OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap()
+            .write_all(b"partial")
+            .unwrap();
+        assert_eq!(buffer.read_spooled_frames_after(None).unwrap().len(), 1);
+        buffer.append_spooled_frame(&frame(2)).unwrap();
+        let frames = buffer.read_spooled_frames_after(None).unwrap();
+        assert_eq!(
+            frames.iter().map(|f| f.sequence).collect::<Vec<_>>(),
+            vec![1, 2]
+        );
+        assert_eq!(std::fs::metadata(&path).unwrap().len(), 2 * (16 + 6));
+        assert_eq!(frames[1].data.as_ref(), b"output");
+    }
+
+    #[test]
+    fn session_spool_failed_write_keeps_output_for_retry() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("session.bin");
+        std::fs::create_dir(&path).unwrap();
+        let mut buffer = SessionBuffer::with_spool(Some(path.clone()));
+        let data = vec![b'x'; 1024 * 1024];
+        for sequence in 1..=3 {
+            buffer.push_output(80, 24, sequence, &data);
+        }
+        assert_eq!(buffer.frames.len(), 3);
+        assert_eq!(buffer.spool_bytes, 0);
+        assert!(buffer.spool_frames.is_empty());
+        std::fs::remove_dir(&path).unwrap();
+        buffer.push_output(80, 24, 4, &data);
+        assert_eq!(
+            buffer
+                .replay_entries()
+                .unwrap()
+                .iter()
+                .map(|f| f.sequence)
+                .collect::<Vec<_>>(),
+            vec![1, 2, 3, 4]
+        );
+    }
+
+    #[test]
+    fn session_spool_failed_checkpoint_keeps_previous_checkpoint_and_ring() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("session.bin");
+        let mut buffer = SessionBuffer::with_spool(Some(path.clone()));
+        buffer
+            .accept_checkpoint(80, 24, 1, b"old".to_vec())
+            .unwrap();
+        buffer.push_output(80, 24, 2, b"new output");
+        std::fs::create_dir(&path).unwrap();
+        assert!(buffer
+            .accept_checkpoint(120, 40, 2, b"new".to_vec())
+            .is_err());
+        assert_eq!(buffer.oldest_sequence(), Some(1));
+        assert_eq!(buffer.total_bytes, b"new output".len());
+        assert_eq!(buffer.checkpoint.as_ref().unwrap().data.as_ref(), b"old");
+        assert_eq!(buffer.frames.front().unwrap().sequence, 2);
+        std::fs::remove_dir(path).unwrap();
+        buffer
+            .accept_checkpoint(120, 40, 2, b"new".to_vec())
+            .unwrap();
+        assert_eq!(buffer.oldest_sequence(), Some(2));
+        assert!(buffer.frames.is_empty());
+    }
+
+    #[test]
+    fn session_spool_failed_compaction_preserves_file_and_index() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut buffer = SessionBuffer::with_spool(Some(temp.path().join("session.bin")));
+        let data = vec![b'x'; 1024 * 1024];
+        for sequence in 1..=21 {
+            buffer.push_output(80, 24, sequence, &data);
+        }
+        // Compaction has already completed once; advance to the next threshold
+        // with append only so an unreadable retained frame exercises its failure.
+        while buffer.spool_offset < SESSION_SPOOL_MAX_BYTES as u64 {
+            let sequence = buffer.spool_frames.back().unwrap().sequence + 1;
+            buffer
+                .append_spooled_frame(&ReplayFrame {
+                    cols: 80,
+                    rows: 24,
+                    sequence,
+                    data: data.clone().into(),
+                })
+                .unwrap();
+            let oldest = buffer.spool_frames.pop_front().unwrap();
+            buffer.spool_bytes -= oldest.bytes;
+            buffer.spool_offset += oldest.bytes as u64;
+        }
+        let path = buffer.spool_path.clone().unwrap();
+        let bytes = buffer.spool_bytes;
+        let offset = buffer.spool_offset;
+        let sequences = buffer
+            .spool_frames
+            .iter()
+            .map(|f| f.sequence)
+            .collect::<Vec<_>>();
+        let mut file = File::options().write(true).open(&path).unwrap();
+        file.seek(SeekFrom::Start(offset)).unwrap();
+        file.write_all(&[0; 16]).unwrap();
+        drop(file);
+        buffer.enforce_spool_cap();
+        assert_eq!(buffer.spool_path.as_ref(), Some(&path));
+        assert_eq!(buffer.spool_bytes, bytes);
+        assert_eq!(buffer.spool_offset, offset);
+        assert_eq!(
+            buffer
+                .spool_frames
+                .iter()
+                .map(|f| f.sequence)
+                .collect::<Vec<_>>(),
+            sequences
+        );
+        assert!(path.exists());
+    }
+
+    #[test]
+    fn session_spool_retries_retired_file_cleanup_on_compaction_and_drop() {
+        for cleanup_on_drop in [false, true] {
+            let temp = tempfile::tempdir().unwrap();
+            let path = temp.path().join("session.bin");
+            let unrelated = temp.path().join("unrelated.bin");
+            std::fs::write(&unrelated, b"not owned by this session").unwrap();
+            // A directory forces remove_file to fail on every test platform,
+            // modelling a temporary Windows sharing violation without OS locks.
+            std::fs::create_dir(&path).unwrap();
+            let mut buffer = SessionBuffer::with_spool(Some(path.clone()));
+            let frames = [ReplayFrame {
+                cols: 80,
+                rows: 24,
+                sequence: 1,
+                data: Arc::from(&b"retained"[..]),
+            }];
+            buffer.write_spooled_frames(&frames).unwrap();
+            assert_eq!(buffer.retired_spool_paths, vec![path.clone()]);
+            let first_current = buffer.spool_path.clone().unwrap();
+            assert!(first_current.is_file());
+            std::fs::remove_dir(&path).unwrap();
+            std::fs::write(&path, b"obsolete spool now deletable").unwrap();
+            if cleanup_on_drop {
+                drop(buffer);
+                assert!(!first_current.exists());
+            } else {
+                buffer.write_spooled_frames(&frames).unwrap();
+                assert!(buffer.retired_spool_paths.is_empty());
+                assert!(!first_current.exists());
+                let current = buffer.spool_path.clone().unwrap();
+                assert!(current.is_file());
+                drop(buffer);
+                assert!(!current.exists());
+            }
+            assert!(!path.exists());
+            assert_eq!(
+                std::fs::read(unrelated).unwrap(),
+                b"not owned by this session"
+            );
+        }
     }
 
     #[test]
@@ -3010,10 +3548,10 @@ mod tests {
         buffer.push_resize(140, 40, 3);
         buffer.push_output(140, 40, 4, b"second");
 
-        let replay = buffer.replay_entries();
+        let replay = buffer.replay_entries().unwrap();
         assert_eq!(replay.len(), 3);
         assert_eq!((replay[1].cols, replay[1].rows), (140, 40));
-        assert!(replay[1].data_base64.is_empty());
+        assert!(replay[1].data.is_empty());
         assert_eq!(replay[1].sequence, 3);
         assert_eq!(replay[2].sequence, 4);
     }
