@@ -124,6 +124,7 @@ export function useGitDiffController({
         if (cancelled) return;
         const message = loadError instanceof Error ? loadError.message : String(loadError);
         if (message.includes("binary_file")) setError(t("files.error.binaryFile"));
+        else if (message.includes("git_diff_symlink_unsupported") || message.includes("remote_git_symlink_rejected")) setError(t("git.approval.symlinkUnsupported"));
         else if (message.includes("git_diff_too_large")) setError(t("git.diff.tooLarge"));
         else if (message.includes("ssh_agent_capability_missing:gitDiffOptions")) {
           setError(t("git.diff.sshAgentUpgradeRequired"));

@@ -65,6 +65,7 @@ export function getLanguageLocale(language: AppLanguage, englishLocale = "en-US"
 }
 
 const zh = {
+  "git.approval.symlinkUnsupported": "此符号链接无法按普通文件审核。",
   "workspace.createDescription": "为 {name} 创建独立的 Git Worktree，并打开终端。",
   "workspace.createAndOpen": "创建并打开",
   "workspace.statusBar": "工作区状态栏",
@@ -2571,6 +2572,7 @@ const zh = {
 } as const;
 
 const en: Record<keyof typeof zh, string> = {
+  "git.approval.symlinkUnsupported": "This symbolic link cannot be reviewed as a regular file.",
   "workspace.createDescription": "Create a separate Git worktree for {name} and open its terminal.",
   "workspace.createAndOpen": "Create and open",
   "workspace.statusBar": "Workspace status bar",

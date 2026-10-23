@@ -186,6 +186,46 @@ fn untracked_diff_rejects_directories() {
     );
 }
 
+#[test]
+#[cfg(unix)]
+fn staged_addition_reviews_full_file_with_nondefault_context() {
+    let temp = init_repo("initial\n");
+    fs::write(temp.path().join("new.txt"), "staged\n").unwrap();
+    git(&temp, &["add", "new.txt"]);
+    for content in ["staged\n", "updated\n"] {
+        fs::write(temp.path().join("new.txt"), content).unwrap();
+        let payload = diff_with_options(DiffWithOptionsRequest {
+            root_path: temp.path().to_string_lossy().into_owned(), repo_path: String::new(),
+            relative_path: "new.txt".to_string(), status: "A".to_string(),
+            options: options(GitDiffWhitespaceMode::Exact, 10),
+        }).unwrap();
+        assert!(payload.content.contains(&format!("+{content}")));
+        assert!(payload.content.contains("--- /dev/null"));
+        assert!(!payload.can_revert_hunks);
+        assert_eq!(payload.review_version, 1);
+    }
+}
+
+#[test]
+#[cfg(unix)]
+fn unborn_and_untracked_review_preserve_full_file_and_newlines() {
+    let temp = tempfile::tempdir().unwrap();
+    git(&temp, &["init", "--quiet"]);
+    git(&temp, &["config", "core.autocrlf", "false"]);
+    fs::write(temp.path().join("new.txt"), "first\r\nsecond").unwrap();
+    for status in ["U", "A"] {
+        if status == "A" { git(&temp, &["add", "new.txt"]); }
+        let payload = diff_with_options(DiffWithOptionsRequest {
+            root_path: temp.path().to_string_lossy().into_owned(), repo_path: String::new(),
+            relative_path: "new.txt".to_string(), status: status.to_string(),
+            options: options(GitDiffWhitespaceMode::Exact, 3),
+        }).unwrap();
+        assert!(payload.content.contains("+first\r\n+second\n\\ No newline at end of file\n"));
+        assert!(!payload.can_revert_hunks);
+        assert_eq!(payload.content_fingerprint.as_ref().map(String::len), Some(64));
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn untracked_diff_rejects_symlinks() {
