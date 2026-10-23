@@ -177,12 +177,15 @@ test("new exact-resume terminals retain identity before Agent detection and awai
   const h = await restoreHarness({}, [p]);
   let completed = false;
   const pending = h.create(p.id, p.path, "Continued", `codex resume ${CURRENT}`, {}, "zsh",
-    undefined, undefined, undefined, CURRENT, undefined, undefined, undefined, true).then(id => { completed = true; return id; });
+    undefined, undefined, undefined, CURRENT, undefined, undefined, undefined, {
+      waitForStartup: true, conversationResumeTarget: { tool: "codex", sessionId: CURRENT, cwd: p.path },
+    }).then(id => { completed = true; return id; });
   for (let n = 0; n < 100 && !h.timers.length; n++) await settle();
   assert.equal(completed, false);
   assert.equal(h.state.sessions[0].pendingConversationResume.sessionId, CURRENT);
   const beforeLaunch = applyAgentDetection(h.state.sessions[0], { agent: null, updatedAtMs: Date.now() });
   assert.equal(persistTerminalSession(beforeLaunch).cliSessionId, CURRENT);
+  assert.equal(persistTerminalSession(beforeLaunch).conversationResumeTarget.cwd, p.path);
   for (const timer of h.timers.splice(0)) timer();
   await pending;
   assert.ok(h.writes[0].text.includes(CURRENT));
@@ -190,7 +193,7 @@ test("new exact-resume terminals retain identity before Agent detection and awai
   h.failWrite();
   const beforeFailure = h.state.sessions.map(session => session.id);
   const failed = h.create(p.id, p.path, "Retry", `codex resume ${CURRENT}`, {}, "zsh",
-    undefined, undefined, undefined, CURRENT, undefined, undefined, undefined, true);
+    undefined, undefined, undefined, CURRENT, undefined, undefined, undefined, { waitForStartup: true });
   const rejected = assert.rejects(failed, /write failed/);
   for (let n = 0; n < 100 && !h.timers.length; n++) await settle();
   for (const timer of h.timers.splice(0)) timer();
@@ -377,12 +380,55 @@ test("same-directory split panes and inactive Workspans keep their own conversat
 });
 
 test("existing daemon sessions attach without creating a duplicate Agent or replaying a resume command", async () => {
-  const saved = persistTerminalSession(running());
+  const saved = persistTerminalSession(running({
+    conversationResumeTarget: { tool: "codex", sessionId: CURRENT, cwd: "/trees/feature" },
+  }));
   const h = await restoreHarness({ sessions: [saved] }, [], [{ sessionId: saved.id, alive: true }]);
   assert.equal(h.created.length, 0);
   assert.deepEqual(h.writes, []);
   assert.equal(h.state.sessions[0].id, saved.id);
   assert.equal(h.state.daemonAttachPendingSessionIds.has(saved.id), true);
+  assert.deepEqual(plain(h.state.sessions[0].conversationResumeTarget), saved.conversationResumeTarget);
+});
+
+test("explicit Worktree continuation survives repeated cold restores without inheriting old CLI directories", async () => {
+  for (const tool of ["codex", "claude"]) {
+    const target = { tool, sessionId: CURRENT, cwd: "/trees/feature with spaces" };
+    const p = project({ cli_tool: tool, cli_args: tool === "codex"
+      ? "--cd /stale --model fast" : "--worktree stale --fork-session --model fast" });
+    const tree = { id: "feature", project_id: p.id, path: target.cwd, status: "active" };
+    let saved = persistTerminalSession(running({ projectId: p.id, worktreeId: tree.id, cwd: target.cwd,
+      conversationResumeTarget: target }, tool));
+    const expected = tool === "codex"
+      ? `codex resume --no-alt-screen ${CURRENT} --model fast --cd '/trees/feature with spaces'\r`
+      : `claude --resume ${CURRENT} --model fast -- '/cd /trees/feature with spaces'\r`;
+    for (let restart = 0; restart < 2; restart++) {
+      const h = await restoreHarness({ sessions: [saved] }, [p], [], {}, {}, [tree]);
+      assert.equal(h.writes[0].text, expected);
+      assert.equal(h.state.sessions[0].cliSessionId, CURRENT);
+      assert.deepEqual(plain(h.state.sessions[0].conversationResumeTarget), target);
+      saved = persistTerminalSession(h.state.sessions[0]);
+    }
+  }
+});
+
+test("a later manual conversation or tool never inherits another conversation's directory override", () => {
+  const target = { tool: "claude", sessionId: OLD, cwd: "/trees/previous" };
+  for (const tool of ["codex", "claude"]) {
+    const saved = persistTerminalSession(running({ conversationResumeTarget: target }, tool));
+    const restored = resolveTerminalConversationRestore(saved, project({ cli_tool: tool }));
+    assert.equal(restored.cliSessionId, CURRENT);
+    assert.doesNotMatch(restored.startupCmd, /--cd|\/cd|previous/);
+  }
+});
+
+test("cold restore does not execute a Claude directory command when project options disable local commands", () => {
+  const saved = persistTerminalSession(running({
+    conversationResumeTarget: { tool: "claude", sessionId: CURRENT, cwd: "/trees/feature" },
+  }, "claude"));
+  const restored = resolveTerminalConversationRestore(saved, project({ cli_tool: "claude", cli_args: "--disable-slash-commands" }));
+  assert.equal(restored.issue, "unsupportedLaunch");
+  assert.equal(restored.startupCmd, undefined);
 });
 
 test("an ended daemon PTY is recreated so the original Agent conversation can accept new messages", async () => {

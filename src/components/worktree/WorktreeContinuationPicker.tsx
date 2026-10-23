@@ -6,7 +6,7 @@ export interface ContinuationTarget { id: string; name: string; path: string; cu
 
 /** The picker does not launch processes; the store owns validation and the stop/resume transaction. */
 export function WorktreeContinuationPicker({ open, sourceTitle, sourcePath, conversationId, targets, selectedId,
-  pending, loading, error, blocked, onSelect, onContinue, onClose }: {
+  pending, loading, error, blocked, claude = false, onSelect, onContinue, onClose }: {
   open: boolean;
   sourceTitle: string;
   sourcePath: string;
@@ -17,6 +17,7 @@ export function WorktreeContinuationPicker({ open, sourceTitle, sourcePath, conv
   loading: boolean;
   error?: string;
   blocked: boolean;
+  claude?: boolean;
   onSelect: (id: string) => void;
   onContinue: () => void;
   onClose: () => void;
@@ -30,6 +31,7 @@ export function WorktreeContinuationPicker({ open, sourceTitle, sourcePath, conv
       <div className="min-h-0 overflow-y-auto">
         <DialogTitle>{t("worktree.continue.title")}</DialogTitle>
         <DialogDescription className="mt-2">{t("worktree.continue.description")}</DialogDescription>
+        {claude && <p className="mt-2 text-xs text-text-muted">{t("worktree.continue.claudeDirectory")}</p>}
         <div className="mt-4 border-y border-border py-3 text-sm">
           <div className="font-medium break-words">{sourceTitle}</div>
           <div className="mt-1 text-xs text-text-muted break-all">{t("worktree.continue.source")}: {sourcePath || "—"}</div>

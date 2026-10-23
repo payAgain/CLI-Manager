@@ -49,7 +49,7 @@ export function WorktreeContinuationDialog({ onContinued }: { onContinued: () =>
   return <WorktreeContinuationPicker open={!!intent} sourceTitle={source?.title ?? ""}
     sourcePath={source?.workspace?.path ?? worktrees.find(tree => tree.id === sourceWorktreeId)?.path ?? project?.path ?? ""}
     conversationId={intent?.conversationId ?? ""} targets={targets} selectedId={selectedId}
-    pending={pending} loading={loading} error={errorMessage} blocked={!!issue}
+    pending={pending} loading={loading} error={errorMessage} blocked={!!issue} claude={identity?.tool === "claude"}
     onSelect={id => { setSelectedId(id); setError(undefined); }}
     onClose={() => useWorktreeContinuationStore.getState().dismiss()}
     onContinue={() => {

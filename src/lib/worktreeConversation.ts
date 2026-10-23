@@ -1,8 +1,6 @@
 import { resolveTerminalConversationRestore, persistTerminalSession } from "./terminalConversationRestore";
-import { freshWorkspaceAgentArgs } from "./worktreeLaunch";
-import { quoteShellPath } from "./terminalShellPath";
+import { isConversationTargetPathSafe } from "./terminalConversationCwd";
 import { parseProjectEnvVars } from "./projectEnv";
-import { normalizeShellKey } from "./shell";
 import type { Project, TerminalSession, WorktreeRecord } from "./types";
 
 export type WorktreeContinuationIssue = "notAgent" | "missingId" | "unsupportedTool" | "remoteUnsupported"
@@ -25,15 +23,6 @@ export function worktreeConversationIdentity(session: TerminalSession, project?:
   return { sessionId: conversation.cliSessionId, tool: conversation.cliTool };
 }
 
-function pathForAgent(path: string, shell?: string | null): string {
-  if (normalizeShellKey(shell) !== "wsl") return path;
-  const plain = path.replace(/\\/g, "/");
-  const unc = /^\/\/wsl(?:\.localhost|\$)\/[^/]+(\/.*)?$/i.exec(plain);
-  if (unc) return unc[1] || "/";
-  if (/^[a-z]:\//i.test(plain)) return `/mnt/${plain[0].toLowerCase()}${plain.slice(2)}`;
-  return plain;
-}
-
 export interface WorktreeContinuationPlan {
   source: TerminalSession;
   project: Project;
@@ -42,6 +31,7 @@ export interface WorktreeContinuationPlan {
   tool: string;
   conversationId: string;
   startupCmd: string;
+  conversationResumeTarget: NonNullable<TerminalSession["conversationResumeTarget"]>;
   envVars: Record<string, string>;
 }
 
@@ -56,18 +46,13 @@ export function planWorktreeContinuation(
   if ((source.workspace?.worktreeId ?? source.worktreeId) === worktree?.id) throw new WorktreeContinuationError("sameTarget");
   const cwd = worktree?.path ?? project.path;
   const shell = source.shell || project.shell;
-  if (!cwd || /[\0\r\n]/.test(cwd) || (normalizeShellKey(shell) === "cmd" && /[%!"]/.test(cwd))) throw new WorktreeContinuationError("invalidPath");
-  const cleanProject = { ...project, cli_args: freshWorkspaceAgentArgs(project.cli_args, identity.tool!) };
-  const conversation = resolveTerminalConversationRestore(source, cleanProject);
-  let startupCmd = conversation.startupCmd!;
-  if (identity.tool === "codex") {
-    // Explicit resume otherwise restores the recorded cwd; the target directory is authoritative.
-    if (/(?:^|\s)--remote(?:=|\s|$)/.test(startupCmd)) throw new WorktreeContinuationError("unsupportedLaunch");
-    startupCmd += ` --cd ${quoteShellPath(pathForAgent(cwd, shell), shell)}`;
-  }
+  if (!isConversationTargetPathSafe(cwd, shell)) throw new WorktreeContinuationError("invalidPath");
+  const conversationResumeTarget = { tool: identity.tool!, sessionId: identity.sessionId!, cwd };
+  const conversation = resolveTerminalConversationRestore({ ...source, conversationResumeTarget }, project);
+  if (conversation.issue) throw new WorktreeContinuationError(conversation.issue);
   return {
     source: persistTerminalSession(source), project, worktree, cwd, tool: identity.tool!,
-    conversationId: identity.sessionId!, startupCmd,
+    conversationId: identity.sessionId!, startupCmd: conversation.startupCmd!, conversationResumeTarget,
     envVars: { ...parseProjectEnvVars(project), ...source.envVars },
   };
 }

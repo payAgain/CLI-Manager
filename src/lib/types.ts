@@ -425,6 +425,8 @@ export interface TerminalSession {
   runtimeAgentObservedAtMs?: number;
   /** 重建时等待 resume 进程出现的临时身份，不落盘；避免启动前的 Shell 采样清掉准确 ID。 */
   pendingConversationResume?: { tool: string; sessionId: string; expiresAtMs: number };
+  /** Explicit Worktree continuation directory, scoped to one exact conversation across restarts. */
+  conversationResumeTarget?: { tool: string; sessionId: string; cwd: string };
   /** 启动工具；落盘时更新为当前实际 Agent，避免手动切换后恢复到旧工具。 */
   cliTool?: string;
   environmentType?: ProjectEnvironmentType;

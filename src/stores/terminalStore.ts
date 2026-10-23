@@ -284,7 +284,7 @@ interface TerminalStore {
   /** 仅运行态：XTerm 输出监听就绪后才可执行 daemon attach。 */
   daemonAttachPendingSessionIds: Set<string>;
   subagentTranscripts: Record<string, SubagentTranscriptContent>;
-  createSession: (projectId?: string, cwd?: string, title?: string, startupCmd?: string, envVars?: Record<string, string>, shell?: string, paneId?: string, worktreeId?: string, sshHostId?: string, cliSessionId?: string, remoteHistoryConsumerId?: string, remoteHistorySourceInstanceId?: string, workspace?: TerminalWorkspaceBinding | null, waitForStartup?: boolean) => Promise<string>;
+  createSession: (projectId?: string, cwd?: string, title?: string, startupCmd?: string, envVars?: Record<string, string>, shell?: string, paneId?: string, worktreeId?: string, sshHostId?: string, cliSessionId?: string, remoteHistoryConsumerId?: string, remoteHistorySourceInstanceId?: string, workspace?: TerminalWorkspaceBinding | null, options?: { waitForStartup?: boolean; conversationResumeTarget?: TerminalSession["conversationResumeTarget"] }) => Promise<string>;
   closeSession: (id: string) => Promise<void>;
   setActive: (id: string) => void;
   setWorkspanModeEnabled: (enabled: boolean) => void;
@@ -1582,7 +1582,8 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     }));
   },
 
-  createSession: async (projectId, cwd, title, startupCmd, envVars, shell, paneId, worktreeId, sshHostId, cliSessionId, remoteHistoryConsumerId, remoteHistorySourceInstanceId, workspace, waitForStartup) => {
+  createSession: async (projectId, cwd, title, startupCmd, envVars, shell, paneId, worktreeId, sshHostId, cliSessionId, remoteHistoryConsumerId, remoteHistorySourceInstanceId, workspace, options) => {
+    const waitForStartup = options?.waitForStartup;
     const os = await getOsPlatform();
     const createdAtMs = Date.now();
     let launch: ResolvedPtyLaunch;
@@ -1627,6 +1628,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
       remotePath: launch.remotePath,
       connectionState: launch.environmentType === "ssh" ? "connecting" : undefined,
       cliSessionId: cliSessionId?.trim() || undefined,
+      conversationResumeTarget: options?.conversationResumeTarget,
       ...(agentMetadata.cliTool && cliSessionId?.trim() ? {
         pendingConversationResume: {
           tool: agentMetadata.cliTool,
@@ -2689,6 +2691,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
               envVars: ps.envVars,
               // 仅保留给 Tab 厂商识别；daemon attach 不会重新执行该命令。
               startupCmd: ps.startupCmd,
+              conversationResumeTarget: ps.conversationResumeTarget,
               ...getRestoredAgentTerminalMetadata(ps, attachedMeta.projectId),
               cliSessionId: daemonSession.agentDetection ? daemonSession.agentDetection.agent?.cliSessionId ?? undefined : ps.cliSessionId,
               ...(daemonSession.agentDetection ? {
@@ -2826,6 +2829,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
         disconnectReason: undefined,
         // 保留 cliSessionId：hook 上报会用它绑定实时统计；下次落盘也需要它继续 resume。
         cliSessionId: conversation.cliSessionId,
+        conversationResumeTarget: ps.conversationResumeTarget,
         ...(conversation.cliTool && conversation.cliSessionId ? {
           pendingConversationResume: {
             tool: conversation.cliTool,
@@ -2985,6 +2989,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
       envVars: persisted?.envVars,
       // 元数据用于 Tab 厂商识别；daemon attach 不会重新执行该命令。
       startupCmd: persisted?.startupCmd,
+      conversationResumeTarget: persisted?.conversationResumeTarget,
       ...getRestoredAgentTerminalMetadata(persisted, attachedMeta.projectId),
       cliSessionId: daemonSession.agentDetection ? daemonSession.agentDetection.agent?.cliSessionId ?? undefined : persisted?.cliSessionId,
       ...(daemonSession.agentDetection ? {

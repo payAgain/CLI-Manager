@@ -89,7 +89,7 @@ export const useWorktreeContinuationStore = create<{
           assertCurrent();
           return useTerminalStore.getState().createSession(project.id, plan.cwd, source.title, plan.startupCmd,
             plan.envVars, source.shell ?? project.shell, paneId, worktree?.id, undefined, plan.conversationId,
-            undefined, undefined, undefined, true);
+            undefined, undefined, undefined, { waitForStartup: true, conversationResumeTarget: plan.conversationResumeTarget });
         },
         removeSource: async () => {
           await useTerminalStore.getState().closeSession(source.id);

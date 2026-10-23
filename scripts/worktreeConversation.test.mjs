@@ -52,11 +52,30 @@ test("Codex continuation uses the exact identity and authoritative target cwd, p
 test("Claude continuation keeps the same conversation and does not fork or inherit another Worktree selector", () => {
   const p = { ...project, cli_tool: "claude", cli_args: '-r old-id -c -wold --fork-session --model opus' };
   const plan = planWorktreeContinuation({ ...source, cliTool: "claude" }, p, worktree, conversationId);
-  assert.equal(plan.startupCmd, `claude --resume ${conversationId} --model opus`);
+  assert.equal(plan.startupCmd, `claude --resume ${conversationId} --model opus -- '/cd /trees/feature'`);
   assert.equal(plan.cwd, worktree.path);
   const back = planWorktreeContinuation({ ...source, worktreeId: worktree.id,
     workspace: { ...source.workspace, id: worktree.id, worktreeId: worktree.id, path: worktree.path } }, project, null, conversationId);
   assert.equal(back.cwd, project.path);
+});
+
+test("Claude local directory command stays one shell argument after variadic CLI options", () => {
+  const p = { ...project, cli_tool: "claude", cli_args: "--allowedTools Read Bash" };
+  const plan = planWorktreeContinuation({ ...source, cliTool: "claude" }, p,
+    { ...worktree, path: "/trees/it's a feature" }, conversationId);
+  assert.equal(plan.startupCmd, `claude --resume ${conversationId} --allowedTools Read Bash -- '/cd /trees/it'\\''s a feature'`);
+  assert.deepEqual(plain(plan.conversationResumeTarget), { tool: "claude", sessionId: conversationId, cwd: "/trees/it's a feature" });
+  const wsl = planWorktreeContinuation({ ...source, shell: "wsl", cliTool: "claude" }, p,
+    { ...worktree, path: "D:\\Work\\feature" }, conversationId);
+  assert.ok(wsl.startupCmd.endsWith("-- '/cd /mnt/d/Work/feature'"));
+});
+
+test("Claude launches that cannot execute local /cd are rejected before stopping the original", () => {
+  for (const cli_args of ["--print", "-p", "-phello", "--bg", "--background", "--cloud", "--desktop",
+    "--environment cloud-id", "--teleport other", "--disable-slash-commands", "--tmux", "-- hello"]) {
+    assert.throws(() => planWorktreeContinuation({ ...source, cliTool: "claude" },
+      { ...project, cli_tool: "claude", cli_args }, worktree, conversationId), error => error.issue === "unsupportedLaunch", cli_args);
+  }
 });
 
 test("WSL and PowerShell target paths are passed in the correct shell format", () => {
@@ -146,7 +165,8 @@ test("continuation flushes recovery before stop, awaits stop before launch and p
   assert.equal(h.created[0][6], "source-pane");
   assert.equal(h.created[0][7], worktree.id);
   assert.equal(h.created[0][9], conversationId);
-  assert.equal(h.created[0][13], true, "launch must await startup command delivery");
+  assert.deepEqual(plain(h.created[0][13]), { waitForStartup: true,
+    conversationResumeTarget: { tool: "codex", sessionId: conversationId, cwd: worktree.path } });
   assert.equal(h.state.activeSessionId, "target");
   assert.equal(h.state.terminalScope.worktreeId, worktree.id);
   assert.equal(h.state.sessions.find(s => s.id === "unrelated"), h.other);
