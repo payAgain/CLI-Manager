@@ -30,6 +30,9 @@ export interface GitDiffReviewContext {
   onOpenSource: (lineNumber?: number) => void;
   onPin?: () => void;
   pinActive?: boolean;
+  approvalKey?: string;
+  onNextPending?: () => void;
+  onApproved?: () => void;
 }
 
 export interface GitDiffMutationActions {
@@ -66,6 +69,8 @@ export interface ParsedGitDiff {
 
 export interface GitDiffController {
   diffText: string;
+  contentFingerprint?: string;
+  reviewVersion?: number;
   loading: boolean;
   reverting: boolean;
   error: string | null;
@@ -89,4 +94,5 @@ export interface GitDiffController {
   requestDiscard: () => void;
   revertHunk: (hunkIndex: number) => Promise<void>;
   revertSelectedLines: () => Promise<void>;
+  reload: () => void;
 }

@@ -14,12 +14,15 @@ import {
   type GitDiffReviewTarget,
 } from "./reviewNavigation";
 import type { GitDiffDataSource, GitDiffSelectedLine } from "./types";
+import { getGitDiffApprovalStatus, gitDiffApprovalKey } from "../../../lib/gitDiffApproval";
+import { useGitDiffApprovalStore } from "../../../stores/gitDiffApprovalStore";
 
 interface GitDiffReviewDialogProps {
   open: boolean;
   onClose: () => void;
   repositoryPath: string;
   repositoryRelativePath?: string;
+  approvalScope?: string;
   tree: GitTreeNode[];
   untrackedTree: GitTreeNode[];
   statusFilter: GitDiffReviewStatusFilter;
@@ -41,6 +44,7 @@ export function GitDiffReviewDialog({
   onClose,
   repositoryPath,
   repositoryRelativePath,
+  approvalScope,
   tree,
   untrackedTree,
   statusFilter,
@@ -62,14 +66,25 @@ export function GitDiffReviewDialog({
     whitespace: gitDiffWhitespaceMode,
     contextLines: gitDiffContextLines,
   }), [gitDiffContextLines, gitDiffWhitespaceMode]);
-  const targets = useMemo(() => buildGitDiffReviewTargets({
+  const allTargets = useMemo(() => buildGitDiffReviewTargets({
     tree,
     untrackedTree,
     statusFilter,
     repositoryPath,
     repositoryRelativePath,
   }), [repositoryPath, repositoryRelativePath, statusFilter, tree, untrackedTree]);
+  const records = useGitDiffApprovalStore((state) => state.records);
+  const fingerprints = useGitDiffApprovalStore((state) => state.fingerprints);
+  const [pendingOnly, setPendingOnly] = useState(false);
   const [activeTargetId, setActiveTargetId] = useState<string | null>(null);
+  const approvedIds = useMemo(() => new Set(approvalScope ? allTargets.filter((target) => {
+    const key = gitDiffApprovalKey(approvalScope, target.filePath);
+    return getGitDiffApprovalStatus(records[key], fingerprints[key]) === "approved";
+  }).map((target) => target.id) : []), [allTargets, approvalScope, fingerprints, records]);
+  // Keep the currently viewed file until a user action advances it. Verification alone must
+  // never start a chain that reads every previously approved file in the repository.
+  const targets = useMemo(() => pendingOnly ? allTargets.filter((target) => target.id === activeTargetId || !approvedIds.has(target.id)) : allTargets,
+    [activeTargetId, allTargets, approvedIds, pendingOnly]);
   const [initialHunkPlacement, setInitialHunkPlacement] = useState<GitDiffHunkPlacement>("first");
   const previousIndexRef = useRef(0);
 
@@ -96,8 +111,8 @@ export function GitDiffReviewDialog({
   }, [activeIndex, activeTarget, activeTargetId]);
 
   useEffect(() => {
-    if (open && activeTargetId && targets.length === 0) onClose();
-  }, [activeTargetId, onClose, open, targets.length]);
+    if (open && activeTargetId && allTargets.length === 0) onClose();
+  }, [activeTargetId, onClose, open, allTargets.length]);
 
   const dataSource = useMemo<GitDiffDataSource>(() => ({
     kind: "live",
@@ -113,7 +128,7 @@ export function GitDiffReviewDialog({
         target.status,
       ),
     },
-  }), [diffOptions, loadDiff, onRequestDiscard, revertHunk, revertLines]);
+  }), [diffOptions, loadDiff, onRequestDiscard, revertHunk, revertLines, tree, untrackedTree]);
 
   const handleDiffOptionsChange = useCallback(async (options: GitDiffOptions) => {
     if (options.whitespace !== gitDiffWhitespaceMode) {
@@ -143,6 +158,19 @@ export function GitDiffReviewDialog({
     if (await onPin(target)) onClose();
   }, [onClose, onPin]);
 
+  const nextPending = useCallback(() => {
+    if (!approvalScope) return;
+    const state = useGitDiffApprovalStore.getState();
+    const index = allTargets.findIndex((target) => target.id === activeTargetId);
+    const ordered = [...allTargets.slice(index + 1), ...allTargets.slice(0, index)];
+    const next = ordered.find((target) => {
+      const key = gitDiffApprovalKey(approvalScope, target.filePath);
+      return getGitDiffApprovalStatus(state.records[key], state.fingerprints[key]) !== "approved";
+    });
+    if (next) { setInitialHunkPlacement("first"); setActiveTargetId(next.id); }
+    else if (pendingOnly) setActiveTargetId(null);
+  }, [activeTargetId, allTargets, approvalScope, pendingOnly]);
+
   return (
     <GitDiffDialogFrame
       open={open}
@@ -152,6 +180,23 @@ export function GitDiffReviewDialog({
         fileName: activeTarget?.fileName ?? initialFilePath,
       })}
     >
+      {approvalScope && <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 bg-surface-container-low px-3 py-2 text-xs text-text-secondary">
+        <span>{t("git.approval.progress", { approved: approvedIds.size, total: allTargets.length })}</span>
+        <label className="flex cursor-pointer items-center gap-2">
+          <input type="checkbox" checked={pendingOnly} onChange={(event) => {
+            setPendingOnly(event.target.checked);
+            if (event.target.checked && activeTargetId && approvedIds.has(activeTargetId)) {
+              setActiveTargetId(allTargets.find((target) => !approvedIds.has(target.id))?.id ?? null);
+            }
+          }} />
+          {t("git.approval.pendingOnly")}
+        </label>
+      </div>}
+      {!activeTarget && allTargets.length > 0 && <div className="flex flex-1 flex-col items-center justify-center gap-3 text-sm text-text-muted">
+        <p>{t("git.approval.allReviewed")}</p>
+        <button type="button" className="ui-focus-ring rounded px-3 py-2 hover:bg-surface-container-high" onClick={() => setPendingOnly(false)}>{t("git.approval.showAll")}</button>
+        <button type="button" className="ui-focus-ring rounded px-3 py-2 hover:bg-surface-container-high" onClick={onClose}>{t("common.close")}</button>
+      </div>}
       {activeTarget && (
         <GitDiffViewer
           key={activeTarget.id}
@@ -177,6 +222,9 @@ export function GitDiffReviewDialog({
             onNavigateToNextFile: () => selectAdjacentFile(1),
             onOpenSource: (lineNumber) => void handleOpenSource(activeTarget, lineNumber),
             onPin: () => void handlePin(activeTarget),
+            approvalKey: approvalScope ? gitDiffApprovalKey(approvalScope, activeTarget.filePath) : undefined,
+            onNextPending: approvalScope && (allTargets.length > 1 || pendingOnly) ? nextPending : undefined,
+            onApproved: pendingOnly ? nextPending : undefined,
           }}
         />
       )}

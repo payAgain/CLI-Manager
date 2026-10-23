@@ -22,6 +22,9 @@ import { useGitTransportLease } from "../../hooks/useGitTransportLease";
 import { GIT_BACKGROUND_REFRESH_INTERVAL_MS } from "../../lib/gitRefreshPolicy";
 import { TerminalPanelHeader } from "../terminal/TerminalPanelHeader";
 import { GitSnapshotPanel } from "./GitSnapshotPanel";
+import { gitDiffApprovalScope } from "../../lib/gitDiffApproval";
+import { useGitDiffApprovalStore } from "../../stores/gitDiffApprovalStore";
+import type { GitDiffOptions } from "../../lib/gitDiffOptions";
 
 interface GitChangesPanelProps {
   open: boolean;
@@ -287,7 +290,6 @@ export function GitChangesPanel({ open, projectPath, projectId, visible = true, 
     discardAll,
     deleteUntrackedPaths,
     discarding,
-    loadFileDiff,
     revertHunk,
     revertLines,
     stageFile,
@@ -359,6 +361,15 @@ export function GitChangesPanel({ open, projectPath, projectId, visible = true, 
   const rootRepoLabel = projectPath?.split(/[\\/]/).filter(Boolean).pop() || t("git.repo.root");
   const activeRepo = activeRepoPath ? repositories.find((repo) => repo.absolutePath === activeRepoPath) : null;
   const activeRepoLabel = activeRepo?.relativePath || rootRepoLabel;
+  const reviewRepositoryPath = activeRepoPath ?? (panelProject?.environment_type === "ssh" ? "" : projectPath ?? "");
+  const approvalScope = panelProject ? gitDiffApprovalScope(panelProject, reviewRepositoryPath) : undefined;
+  useEffect(() => {
+    if (approvalScope) useGitDiffApprovalStore.getState().invalidateScope(approvalScope);
+  }, [approvalScope, changes]);
+  const loadReviewDiff = useCallback(async (filePath: string, status: string, options?: GitDiffOptions) => {
+    if (!panelLease) throw new Error("git_diff_transport_unavailable");
+    return (await panelLease.transport.getFileDiff(reviewRepositoryPath, filePath, status, options)).value;
+  }, [panelLease, reviewRepositoryPath]);
   const diffOpenWorkflow = useGitDiffOpenWorkflow({
     project: panelProject,
     projectPath,
@@ -1319,11 +1330,12 @@ export function GitChangesPanel({ open, projectPath, projectId, visible = true, 
           onClose={() => setDiffModalOpen(false)}
           repositoryPath={activeRepoPath ?? (panelProject?.environment_type === "ssh" ? "" : projectPath)}
           repositoryRelativePath={activeRepo?.relativePath}
+          approvalScope={approvalScope}
           tree={tree}
           untrackedTree={untrackedTree}
           statusFilter={statusFilter}
           initialFilePath={selectedFilePath}
-          loadDiff={loadFileDiff}
+          loadDiff={loadReviewDiff}
           revertHunk={revertHunk}
           revertLines={revertLines}
           onRequestDiscard={handleRequestDiscard}
