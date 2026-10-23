@@ -4,6 +4,7 @@ import type { TerminalSession, PersistedSplit } from "../lib/types";
 import { getCliManagerDataPaths } from "../lib/appPaths";
 import { singleFlight } from "../lib/singleFlight";
 import { persistTerminalSession } from "../lib/terminalConversationRestore";
+import { withTerminalSnapshot } from "../lib/terminalSnapshotCache";
 import {
   migrateTerminalWorkspans,
   sanitizeTerminalWorkspans,
@@ -44,7 +45,8 @@ function enqueuePersistence(write: () => Promise<void>): Promise<void> {
 }
 
 function saveSessionSnapshot(sessions: TerminalSession[], flush = false): Promise<void> {
-  const persistable = sessions.filter(isPersistableSession).map(persistTerminalSession);
+  const persistable = sessions.filter(isPersistableSession)
+    .map((session) => persistTerminalSession(withTerminalSnapshot(session)));
   return enqueuePersistence(async () => {
     const s = await getStore();
     await s.set("sessions", persistable);

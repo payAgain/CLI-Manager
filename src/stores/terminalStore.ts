@@ -29,6 +29,7 @@ import { isDirectCodexStartupCommand, normalizeDirectCodexStartupCommand, resolv
 import { getTerminalTheme } from "../lib/terminalThemes";
 import { prepareTerminalScrollback } from "../lib/terminalScrollback";
 import { resolveTerminalConversationRestore } from "../lib/terminalConversationRestore";
+import { retainTerminalSnapshots, setTerminalSnapshot } from "../lib/terminalSnapshotCache";
 import {
   clearTerminalOutputActivity,
   getTerminalOutputActivity,
@@ -307,8 +308,8 @@ interface TerminalStore {
   handleCliHookEvent: (payload: CliHookPayload, options?: { subagent: boolean }) => string | null;
   handleShellRuntimeEvent: (payload: ShellRuntimePayload) => string | null;
   /** 终端侧栏实时统计刷新序号：Hook 绑定 sessionId / 回合结束时递增，面板立即重拉。 */
-  statsPanelRefreshSeq: number;
-  bumpStatsPanelRefresh: () => void;
+  statsPanelRefreshSeq: Record<string, number>;
+  bumpStatsPanelRefresh: (sessionId: string) => void;
   reorderSessions: (fromId: string, toId: string) => void;
   moveSessionToPane: (sessionId: string, targetPaneId: string, beforeSessionId?: string) => void;
   detachSessionToWorkspan: (sessionId: string, insertAt?: number) => void;
@@ -1486,15 +1487,14 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
   tabNotifications: {},
   tabStatuses: {},
   tabStatusDetails: {},
-  ptyOutputActivityAt: {},
   splits: {},
   hiddenBackgroundSessionIds: new Set<string>(),
   daemonAttachPendingSessionIds: new Set<string>(),
   subagentTranscripts: {},
-  statsPanelRefreshSeq: 0,
+  statsPanelRefreshSeq: {},
 
-  bumpStatsPanelRefresh: () => set((state) => ({
-    statsPanelRefreshSeq: state.statsPanelRefreshSeq + 1,
+  bumpStatsPanelRefresh: (sessionId) => set((state) => ({
+    statsPanelRefreshSeq: { ...state.statsPanelRefreshSeq, [sessionId]: (state.statsPanelRefreshSeq[sessionId] ?? 0) + 1 },
   })),
 
   updateSessionCwd: (sessionId, cwd) => set((state) => ({
@@ -1522,13 +1522,11 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     }
   },
 
-  updateSessionTerminalSnapshot: (sessionId, initialTerminalOutput) => set((state) => ({
-    sessions: state.sessions.map((session) => (
-      session.id === sessionId && (session.kind ?? "pty") === "pty" && session.initialTerminalOutput !== initialTerminalOutput
-        ? { ...session, initialTerminalOutput }
-        : session
-    )),
-  })),
+  updateSessionTerminalSnapshot: (sessionId, initialTerminalOutput) => {
+    const session = get().sessions.find((item) => item.id === sessionId);
+    if (!session || (session.kind ?? "pty") !== "pty") return;
+    setTerminalSnapshot(sessionId, initialTerminalOutput);
+  },
 
   bindRemoteCliSessionIdentity: async (
     sessionId,
@@ -2562,6 +2560,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
       if (persistedSessions.length === 0) return;
 
     const restoredSessions: TerminalSession[] = [];
+    const restoredSnapshots = new Map<string, string>();
     const restoredStatuses: Record<string, SessionStatus> = {};
     const restoredListeners: Record<string, UnlistenFn> = {};
     const daemonAttachPendingSessionIds = new Set<string>();
@@ -2765,7 +2764,6 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
         } : {}),
         remoteHistoryConsumerId: ps.remoteHistoryConsumerId,
         remoteHistorySourceInstanceId: ps.remoteHistorySourceInstanceId,
-        initialTerminalOutput,
         deferStartupUntilInitialOutput,
         deferredStartupCmd: deferStartupUntilInitialOutput ? launchStartupCmd : undefined,
       };
@@ -2792,6 +2790,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
       }
 
       restoredSessions.push(restoredSession);
+      if (initialTerminalOutput !== undefined) restoredSnapshots.set(newSessionId, initialTerminalOutput);
       restoredStatuses[newSessionId] = "running";
       restoredListeners[newSessionId] = unlisten;
 
@@ -2849,6 +2848,9 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     }
     const mirror = buildWorkspanMirror(workspans, activeWorkspanId);
 
+	    // Stage snapshots only after asynchronous setup, immediately before the
+	    // sessions become live. Intermediate lifecycle events must not prune them.
+	    for (const [sessionId, snapshot] of restoredSnapshots) setTerminalSnapshot(sessionId, snapshot);
 	    set({
 	      sessions: restoredSessions,
 	      ...mirror,
@@ -3785,6 +3787,7 @@ function receiveAgentDetection(sessionId: string, detection: AgentDetection): vo
 terminalProcessManager.subscribeAgentDetection(receiveAgentDetection);
 useTerminalStore.subscribe((state, previous) => {
   if (state.sessions === previous.sessions) return;
+  retainTerminalSnapshots(state.sessions);
   retainTerminalOutputActivity(state.sessions);
   retainHookIdentities(state.sessions);
   const liveIds = new Set(state.sessions.map((session) => session.id));

@@ -75,6 +75,8 @@ function sessionStore(initial = {}, barrier) {
   });
   return {
     api: localLoad("src/stores/sessionStore.ts").useSessionStore,
+    snapshots: localLoad("src/lib/terminalSnapshotCache.ts"),
+    activity: localLoad("src/lib/terminalOutputActivity.ts"),
     memory, disk, writes, store, failNextFlush: () => { failSave = true; },
   };
 }
@@ -101,11 +103,16 @@ async function restoreHarness(saved, projects = [], daemon = [], integration = {
   const state = {}, created = [], writes = [], timers = [], notices = [], errors = [];
   const exports = {};
   let sequence = 0;
-  const setState = update => Object.assign(state, typeof update === "function" ? update(state) : update);
+  const setState = update => {
+    const patch = typeof update === "function" ? update(state) : update;
+    Object.assign(state, patch);
+    if (Object.hasOwn(patch, "sessions")) persistence.snapshots.retainTerminalSnapshots(state.sessions);
+  };
   const projectState = { projects, worktrees: [] };
   const sshState = { loaded: true, hosts: [{ id: "host", startup_script: "" }] };
   runInNewContext(restoreCompiled, {
     exports, Date, Map, Set, crypto: { randomUUID: () => `bridge-${++sequence}` },
+    ...persistence.snapshots,
     ...workspan, resolveTerminalConversationRestore,
     ...load("src/lib/agentLaunchPermissions.ts"),
     ...load("src/lib/cliTools.ts"),
@@ -229,8 +236,16 @@ test("deferred startup applies current permissions after scrollback without pers
   assert.equal(session.startupCmd, "gemini");
   assert.equal(session.deferredStartupCmd, "gemini --yolo");
   assert.equal(session.deferStartupUntilInitialOutput, true);
+  assert.equal(session.initialTerminalOutput, undefined);
+  assert.equal(yolo.persistence.snapshots.getTerminalSnapshot(session), "previous output");
+  assert.equal(yolo.persistence.memory.sessions[0].initialTerminalOutput, "previous output");
   assert.equal(yolo.writes.length, 0);
   assert.equal(persistTerminalSession(session).deferredStartupCmd, undefined);
+  yolo.persistence.snapshots.setTerminalSnapshot(session.id, "new output");
+  await yolo.persistence.api.getState().saveSessions(yolo.state.sessions);
+  assert.equal(yolo.persistence.snapshots.getTerminalSnapshot(session), "new output");
+  assert.equal(yolo.persistence.memory.sessions[0].initialTerminalOutput, "new output");
+  assert.equal(JSON.stringify(yolo.state.sessions).includes("previous output"), false);
 });
 
 test("SSH and WSL restore use YOLO without changing remote identity or requiring a Hook installation", async () => {
@@ -258,6 +273,80 @@ test("an in-flight stale write cannot overtake the final snapshot or discard", a
   await h.api.getState().clear();
   await h.api.getState().saveSessions([running()]);
   assert.deepEqual(h.disk.sessions, []);
+});
+
+test("many terminal checkpoints preserve UI identities and publish no terminal-store updates", async () => {
+  const h = sessionStore();
+  const { createStore } = require("zustand/vanilla");
+  const sessions = Array.from({ length: 100 }, (_, index) => shell({
+    id: `pane-${index}`,
+  }));
+  for (const session of sessions) h.snapshots.setTerminalSnapshot(session.id, `loaded-${session.id}`);
+  const state = createStore(() => ({ sessions, statsPanelRefreshSeq: {} }));
+  const action = findNode(node => ts.isPropertyAssignment(node)
+    && node.name.getText(terminalAst) === "updateSessionTerminalSnapshot").initializer.getText(terminalAst);
+  const subscription = findNode(node => ts.isCallExpression(node)
+    && node.expression.getText(terminalAst) === "useTerminalStore.subscribe").arguments[0].getText(terminalAst);
+  const exports = {};
+  runInNewContext(ts.transpileModule(`exports.update = ${action}; exports.reconcile = ${subscription};`, {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText, {
+    exports, ...h.snapshots, ...h.activity, ...load("src/lib/terminalHookIdentity.ts"),
+    get: state.getState, set: state.setState, useTerminalStore: state,
+    terminalProcessManager: { getAgentDetection: () => null },
+    receiveAgentDetection: () => { throw new Error("unexpected detection"); },
+  });
+  state.subscribe(exports.reconcile);
+  let notifications = 0;
+  state.subscribe(() => { notifications++; });
+  for (let round = 0; round < 10; round++) {
+    for (const session of sessions) exports.update(session.id, `${session.id}-snapshot-${round}`);
+  }
+  assert.equal(notifications, 0);
+  assert.equal(state.getState().sessions, sessions);
+  assert.equal(state.getState().sessions[0], sessions[0]);
+  assert.equal(sessions[0].initialTerminalOutput, undefined);
+  await h.api.getState().saveSessions(state.getState().sessions);
+  assert.equal(h.memory.sessions[99].initialTerminalOutput, "pane-99-snapshot-9");
+
+  // A temporary view unmount keeps its snapshot; removing the session clears it.
+  assert.equal(h.snapshots.getTerminalSnapshot(sessions[0]), "pane-0-snapshot-9");
+  state.setState({ sessions: sessions.slice(1) });
+  exports.update("pane-0", "late-unmount");
+  assert.equal(h.snapshots.getTerminalSnapshot(shell({ id: "pane-0" })), undefined);
+  assert.equal(h.snapshots.getTerminalSnapshot(sessions[1]), "pane-1-snapshot-9");
+});
+
+test("snapshot DTOs are captured before queueing and survive exit cleanup after freezing", async () => {
+  const gate = deferred(), h = sessionStore({}, gate.promise);
+  const active = running({ initialTerminalOutput: "loaded" });
+  h.snapshots.setTerminalSnapshot(active.id, "periodic");
+  const first = h.api.getState().saveSessions([active]);
+  await settle();
+  h.snapshots.setTerminalSnapshot(active.id, "final-full-screen");
+  const final = h.api.getState().freezeForExit([active]);
+  h.snapshots.retainTerminalSnapshots([]);
+  const late = h.api.getState().saveSessions([]);
+  gate.resolve();
+  await Promise.all([first, final, late]);
+  assert.equal(h.disk.sessions[0].initialTerminalOutput, "final-full-screen");
+  assert.equal(h.disk.sessions[0].cliSessionId, CURRENT);
+  assert.equal(active.initialTerminalOutput, "loaded");
+});
+
+test("cold restore fallback and empty live screens persist for local, WSL and SSH sessions", async () => {
+  const h = sessionStore();
+  const sessions = ["local", "wsl", "ssh"].map(environmentType => shell({
+    id: environmentType, environmentType, initialTerminalOutput: `${environmentType}-restored`,
+  }));
+  for (const session of sessions) {
+    assert.equal(h.snapshots.getTerminalSnapshot(session), `${session.id}-restored`);
+  }
+  h.snapshots.setTerminalSnapshot("local", "");
+  h.snapshots.setTerminalSnapshot("wsl", "wsl-latest");
+  await h.api.getState().saveSessions(sessions);
+  assert.deepEqual(h.memory.sessions.map(session => session.initialTerminalOutput), ["", "wsl-latest", "ssh-restored"]);
+  assert.equal(h.snapshots.withTerminalSnapshot(sessions[2]), sessions[2]);
 });
 
 test("a failed application exit resumes persistence, including deliberate Agent exit", async () => {
@@ -365,8 +454,9 @@ test("missing IDs and unsupported tools retain screen output but never pick a la
   ].map((s, i) => i === 0 ? { ...s, cliSessionId: undefined } : s) });
   assert.equal(h.created.length, 2);
   assert.deepEqual(h.writes, []);
-  assert.equal(h.state.sessions[0].initialTerminalOutput, "previous answer");
-  assert.equal(h.state.sessions[1].initialTerminalOutput, "other answer");
+  assert.equal(h.persistence.snapshots.getTerminalSnapshot(h.state.sessions[0]), "previous answer");
+  assert.equal(h.persistence.snapshots.getTerminalSnapshot(h.state.sessions[1]), "other answer");
+  assert.ok(h.state.sessions.every(session => session.initialTerminalOutput === undefined));
   assert.equal(h.notices.filter(n => n.args[1]?.description === "terminal.restore.missingId").length, 1);
   assert.equal(h.notices.filter(n => n.args[1]?.description === "terminal.restore.unsupportedTool").length, 1);
 });

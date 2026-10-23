@@ -40,6 +40,28 @@ export interface TerminalTuiDisplayOptions {
   terminalTextColor?: string;
   tuiUserColor?: string;
   tuiAssistantColor?: string;
+  /** Reuse the caller's detection pass, including a negative result. */
+  hasKnownTuiSignature?: boolean;
+}
+
+/** Detect all signatures in one pass; callers must invalidate after parsed output. */
+export function inspectTerminalTuiViewport(terminal: Terminal) {
+  const buffer = terminal.buffer.active;
+  let codex = false;
+  let known = false;
+  let composerPrompt = false;
+  for (let row = 0; row < terminal.rows; row += 1) {
+    const line = buffer.getLine(buffer.viewportY + row);
+    if (!line) continue;
+    const text = line.translateToString(true);
+    codex ||= CODEX_TUI_VIEWPORT_PATTERN.test(text);
+    known ||= codex || OTHER_AI_TUI_VIEWPORT_PATTERN.test(text);
+    composerPrompt ||= /^[\u203a\u276f\u00bb\u2023]\s?/u.test(
+      text.trimStart().replace(TUI_BORDER_PREFIX_PATTERN, ""),
+    );
+    if (codex && composerPrompt) break;
+  }
+  return { codex, known, composerPrompt };
 }
 
 function parseXtermRgbColor(value: string | undefined): number | null {
@@ -91,6 +113,7 @@ export function normalizeTerminalTuiComposerBackground(
     terminalTextColor,
     tuiUserColor,
     tuiAssistantColor,
+    hasKnownTuiSignature,
   }: TerminalTuiDisplayOptions,
 ) {
   const buffer = terminal.buffer.active;
@@ -109,7 +132,7 @@ export function normalizeTerminalTuiComposerBackground(
   );
   const isTuiPromptLine = (line: IBufferLine) => TUI_COMPOSER_PROMPT_PATTERN.test(normalizePromptText(line));
   const hasKnownAiTuiSignature = () => {
-    return hasKnownAiTuiViewport(terminal);
+    return hasKnownTuiSignature ?? hasKnownAiTuiViewport(terminal);
   };
   const getLineBackgroundState = (line: IBufferLine) => {
     const limit = Math.min(terminal.cols, line.length);

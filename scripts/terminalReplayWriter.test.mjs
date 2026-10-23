@@ -276,3 +276,60 @@ test("the production ConPTY capability override also honors replay input isolati
   await write(terminal, "\x1b[c");
   assert.deepEqual(writes, ["\x1b[?61;4c"]);
 });
+
+test("bounded snapshot scans retain ANSI, Unicode, cursor, mouse protocol and alternate screen", async t => {
+  for (const alternate of [false, true]) {
+    const original = createTerminal(t, { scrollback: 9000 });
+    const addon = new SerializeAddon();
+    original.terminal.loadAddon(addon);
+    await write(original.terminal, "\x1b[32m" + Array.from({ length: 5000 }, (_, i) => `行 ${i} café`).join("\r\n")
+      + (alternate ? "\x1b[?1049h\x1b[4;9H备用屏\x1b[6;13H" : "\x1b[6;13H")
+      + "\x1b[?1003h\x1b[?1006h\x1b[?2004h");
+    const linePrototype = Object.getPrototypeOf(original.terminal.buffer.normal.getLine(0));
+    const getCell = linePrototype.getCell;
+    let cells = 0;
+    linePrototype.getCell = function(...args) { cells++; return getCell.apply(this, args); };
+    let tail;
+    try {
+      tail = exports.serializeTerminalSnapshots(original.terminal,
+        scrollback => original.protocol.serializeSnapshot(addon, { scrollback }), 2000, false).snapshot;
+    } finally { linePrototype.getCell = getCell; }
+    assert.ok(cells < 2005 * (original.terminal.cols + 2), `bounded scan visited ${cells} cells`);
+    assert.ok(!tail.includes("行 0 café"));
+    assert.ok(tail.includes("行 4999 café"));
+    const restored = createTerminal(t, { scrollback: 9000 });
+    await replay(restored.terminal, tail);
+    assert.equal(restored.terminal.buffer.active.type, original.terminal.buffer.active.type);
+    assert.equal(restored.terminal.buffer.active.cursorX, original.terminal.buffer.active.cursorX);
+    assert.equal(restored.terminal.buffer.active.cursorY, original.terminal.buffer.active.cursorY);
+    assert.equal(restored.terminal.modes.bracketedPasteMode, true);
+    assert.equal(reportMouse(restored.terminal), reportMouse(original.terminal));
+    for (const bufferName of ["normal", "active"]) {
+      const sourceBuffer = original.terminal.buffer[bufferName], targetBuffer = restored.terminal.buffer[bufferName];
+      for (let row = 0; row < original.terminal.rows; row++) {
+        const sourceLine = sourceBuffer.getLine(sourceBuffer.baseY + row);
+        const targetLine = targetBuffer.getLine(targetBuffer.baseY + row);
+        assert.equal(targetLine.translateToString(true), sourceLine.translateToString(true));
+        assert.equal(targetLine.getCell(0).getFgColor(), sourceLine.getCell(0).getFgColor());
+      }
+    }
+    const complete = exports.serializeTerminalSnapshots(original.terminal,
+      scrollback => original.protocol.serializeSnapshot(addon, { scrollback }), 2000, true);
+    assert.ok(complete.serialized.includes("行 0 café"));
+    assert.equal(complete.snapshot, tail);
+  }
+});
+
+test("small buffers share a single complete scan for tail and checkpoint", async t => {
+  const { terminal, protocol } = createTerminal(t);
+  const addon = new SerializeAddon();
+  terminal.loadAddon(addon);
+  await write(terminal, "small buffer\x1b[?1003h\x1b[?1016h");
+  let scans = 0;
+  const result = exports.serializeTerminalSnapshots(terminal, scrollback => {
+    scans++;
+    return protocol.serializeSnapshot(addon, { scrollback });
+  }, 2000, true);
+  assert.equal(scans, 1);
+  assert.equal(result.snapshot, result.serialized);
+});

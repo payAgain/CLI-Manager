@@ -178,6 +178,7 @@ export class PtyHostSocket {
 
   private readonly pendingStatus = new Map<string, PtyHostStatusEvent>();
   private readonly pendingCheckpoints = new Map<string, {
+    promise: Promise<void>;
     resolve: () => void;
     reject: (error: Error) => void;
     timeoutId: number;
@@ -501,43 +502,43 @@ export class PtyHostSocket {
     cols: number,
     rows: number,
     serializedState: string,
+    isCurrent?: () => boolean,
   ): Promise<void> {
     await this.connect();
+    // Reconnect can await authentication while a reset invalidates the picture.
+    // Check immediately before encoding/sending, not just at the caller boundary.
+    if (isCurrent && !isCurrent()) throw new Error("Terminal checkpoint capture is no longer current");
+    if (this.closedSessions.has(sessionId)) throw new Error("PtyHost session closed");
     if (!this.connectedFeatures.has(FEATURE_CHECKPOINT_REPLAY)) return;
     const key = checkpointKey(sessionId, sequence);
     const existing = this.pendingCheckpoints.get(key);
-    if (existing) {
-      return new Promise<void>((resolve, reject) => {
-        const poll = window.setInterval(() => {
-          if (this.pendingCheckpoints.has(key)) return;
-          window.clearInterval(poll);
-          resolve();
-        }, 10);
-        window.setTimeout(() => {
-          window.clearInterval(poll);
-          reject(new Error("PtyHost checkpoint timed out"));
-        }, REQUEST_TIMEOUT_MS);
-      });
-    }
+    if (existing) return existing.promise;
     const payload = new TextEncoder().encode(serializedState);
     const sessionBytes = new TextEncoder().encode(sessionId);
     if (BINARY_HEADER_BYTES + sessionBytes.length + payload.length > MAX_BINARY_FRAME_BYTES) {
       return;
     }
-    await new Promise<void>((resolve, reject) => {
-      const timeoutId = window.setTimeout(() => {
-        this.pendingCheckpoints.delete(key);
-        reject(new Error("PtyHost checkpoint timed out"));
-      }, REQUEST_TIMEOUT_MS);
-      this.pendingCheckpoints.set(key, { resolve, reject, timeoutId });
-      try {
-        this.sendBinary(BINARY_KIND_CHECKPOINT, sessionId, sequence, cols, rows, payload);
-      } catch (error) {
-        window.clearTimeout(timeoutId);
-        this.pendingCheckpoints.delete(key);
-        reject(error);
-      }
+    let resolve!: () => void;
+    let reject!: (error: Error) => void;
+    const promise = new Promise<void>((onResolved, onRejected) => {
+      resolve = onResolved;
+      reject = onRejected;
     });
+    const timeoutId = window.setTimeout(() => {
+      this.pendingCheckpoints.delete(key);
+      reject(new Error("PtyHost checkpoint timed out"));
+    }, REQUEST_TIMEOUT_MS);
+    // All callers share the ACK outcome, including rejection and disconnect,
+    // without allocating polling timers for the same in-flight checkpoint.
+    this.pendingCheckpoints.set(key, { promise, resolve, reject, timeoutId });
+    try {
+      this.sendBinary(BINARY_KIND_CHECKPOINT, sessionId, sequence, cols, rows, payload);
+    } catch (error) {
+      window.clearTimeout(timeoutId);
+      this.pendingCheckpoints.delete(key);
+      reject(error instanceof Error ? error : new Error(String(error)));
+    }
+    return promise;
   }
 
   private async openSocket(): Promise<void> {

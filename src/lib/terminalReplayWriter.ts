@@ -1,4 +1,22 @@
 import type { Terminal } from "@xterm/xterm";
+import type { ISerializeOptions } from "@xterm/addon-serialize";
+
+
+/** Bound the scan before visiting cells; keep each result independently replayable. */
+export function serializeTerminalSnapshots(
+  terminal: Pick<Terminal, "buffer" | "rows">,
+  serialize: (scrollback?: number) => string,
+  maxLines: number,
+  full: boolean,
+): { snapshot: string; serialized?: string } {
+  const rows = terminal.rows;
+  const altRows = terminal.buffer.active.type === "alternate" ? rows : 0;
+  const scrollback = Math.max(0, maxLines - rows - altRows);
+  const serialized = full ? serialize() : undefined;
+  const snapshot = serialized !== undefined && terminal.buffer.normal.length <= rows + scrollback
+    ? serialized : serialize(scrollback);
+  return { snapshot, serialized };
+}
 
 type ReplayTerminal = Pick<Terminal, "options" | "write">;
 
@@ -61,13 +79,16 @@ export function trackTerminalMouseProtocol(terminal: Pick<Terminal, "parser">) {
       return true;
     }),
   ];
+  const snapshotSuffix = () => {
+    // Do not turn an incomplete old checkpoint into an explicit legacy one.
+    if (!state.inputSafe) return `\x1b]777;${UNKNOWN_MOUSE_ENCODING}\x07`;
+    return state.encoding === "SGR_PIXELS" ? "\x1b[?1016h"
+      : state.encoding === "SGR" ? "\x1b[?1006h" : "\x1b[?1006l";
+  };
   return {
-    serializeSnapshot(serializer: { serialize(): string }): string {
-      const snapshot = serializer.serialize();
-      // Do not turn an incomplete old checkpoint into an explicit legacy one.
-      if (!state.inputSafe) return `${snapshot}\x1b]777;${UNKNOWN_MOUSE_ENCODING}\x07`;
-      return snapshot + (state.encoding === "SGR_PIXELS" ? "\x1b[?1016h"
-        : state.encoding === "SGR" ? "\x1b[?1006h" : "\x1b[?1006l");
+    snapshotSuffix,
+    serializeSnapshot(serializer: { serialize(options?: ISerializeOptions): string }, options?: ISerializeOptions): string {
+      return serializer.serialize(options) + snapshotSuffix();
     },
     dispose() {
       subscriptions.forEach(subscription => subscription.dispose());

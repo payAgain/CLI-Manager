@@ -47,6 +47,8 @@ import { useTerminalOsc } from "../hooks/useTerminalOsc";
 import { useTerminalDisplay } from "../hooks/useTerminalDisplay";
 import { useTerminalInput } from "../hooks/useTerminalInput";
 import { trackTerminalMouseProtocol } from "../lib/terminalReplayWriter";
+import { createTerminalCheckpointCapture } from "../lib/terminalCheckpointCapture";
+import { installTerminalMutationGate, mutateTerminalWhenReady } from "../lib/terminalMutationGate";
 import { createTerminalScrollbackReplay } from "../lib/terminalScrollback";
 import { copyTextToClipboard } from "../lib/systemClipboard";
 import { hasCodexTuiViewport } from "../lib/terminalTuiDisplay";
@@ -106,7 +108,8 @@ let terminalImageAddonFallbackLogged = false;
 const WEBGL_ATLAS_REFRESH_MIN_HIDDEN_MS = 10_000;
 import { toast } from "sonner";
 import { logError, logInfo, logWarn } from "../lib/logger";
-import { registerTerminalSnapshotSource, serializeTerminalAfterWrite } from "../lib/sessionSnapshotPersistence";
+import { registerTerminalSnapshotSource, SNAPSHOT_MAX_LINES } from "../lib/sessionSnapshotPersistence";
+import { getTerminalSnapshot, withTerminalSnapshot } from "../lib/terminalSnapshotCache";
 
 const CODEX_IME_DEBUG_WINDOW_MS = 250;
 const CODEX_IME_DUPLICATE_WINDOW_MS = 120;
@@ -399,7 +402,6 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
   const codexSessionDetectedRef = useRef(false);
   const displayNormalizeOutputRef = useRef<(text: string) => string>((text) => text);
   const displayTransformOutputRef = useRef<(text: string) => string>((text) => text);
-  const displayAfterWriteRef = useRef<((terminal: Terminal) => void) | null>(null);
   const piTerminalCompatibilityRef = useRef<PiTerminalCompatibility | null>(null);
   const terminalScrollbackCustomEnabled = useSettingsStore((s) => s.terminalScrollbackCustomEnabled);
   const terminalScrollbackRows = useSettingsStore((s) => s.terminalScrollbackRows);
@@ -620,7 +622,8 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
   }, [markdownPreviewRatio]);
 
   const getSessionToolContext = useCallback(() => {
-    const session = useTerminalStore.getState().sessions.find((item) => item.id === sessionId);
+    const currentSession = useTerminalStore.getState().sessions.find((item) => item.id === sessionId);
+    const session = currentSession ? withTerminalSnapshot(currentSession) : undefined;
     const project = session?.projectId
       ? useProjectStore.getState().projects.find((item) => item.id === session.projectId)
       : null;
@@ -676,7 +679,6 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
     isTransparentRef,
     normalizeOutputRef: displayNormalizeOutputRef,
     transformOutputRef: displayTransformOutputRef,
-    afterTerminalWriteRef: displayAfterWriteRef,
     outputDiagnosticsRef: piTerminalCompatibilityRef,
     onPtyOutputListenError: (err) => logError("Failed to listen PTY output", { sessionId, err }),
   });
@@ -768,12 +770,6 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
 
     return processed + text.slice(lastIndex);
   };
-  displayAfterWriteRef.current = (terminal) => {
-    if (!isVisibleRef.current) return;
-    tuiColorSync.normalize(terminal);
-    tuiColorSync.schedule(terminal);
-  };
-
   displayTransformOutputRef.current = (text) => processCodexCursorVisibility(
     piTerminalCompatibilityRef.current?.transformOutput(text) ?? text,
   );
@@ -824,13 +820,16 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
       terminal.options.fontSize = fontSize;
       terminal.options.fontFamily = effectiveFontFamily;
     }
-    if (terminal.options.scrollback !== effectiveTerminalScrollbackRows) {
-      terminal.options.scrollback = effectiveTerminalScrollbackRows;
-    }
+    mutateTerminalWhenReady(terminal, () => {
+      // Compare when applied: the user can change back while a prior setting is
+      // queued behind a capture, even if the live value still looks unchanged.
+      if (terminal.options.scrollback !== effectiveTerminalScrollbackRows) {
+        terminal.options.scrollback = effectiveTerminalScrollbackRows;
+      }
+    });
     if (isVisibleRef.current) {
       if (!rendererChanged) clearWebglTextureAtlas();
       tuiColorSync.normalize(terminal);
-      tuiColorSync.schedule(terminal);
     }
     // Theme-only changes can keep the same grid and renderer. Invalidate the
     // whole viewport too; hidden panes retain this work until they are visible.
@@ -866,7 +865,6 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
     scheduleFit(true, becameVisible || rendererRestored);
     if (terminalRef.current) {
       tuiColorSync.normalize(terminalRef.current);
-      tuiColorSync.schedule(terminalRef.current);
     }
   }, [isVisible, lowMemoryMode, disableHardwareAcceleration, linuxGraphicsConstrained, linuxGraphicsDisableWebgl, resolvedTheme, terminalThemeName, terminalTextColor, lightThemePalette, darkThemePalette, tuiColorSync]);
 
@@ -1020,6 +1018,8 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
         leave: hideLinkHoverIcon,
       },
     });
+    const mutationGate = installTerminalMutationGate(terminal,
+      err => logError("Deferred terminal mutation failed", { sessionId, err }));
     const baseDisposables: TerminalSubsystemDisposable[] = [];
     const displayDisposables: TerminalSubsystemDisposable[] = [];
     const inputDisposables: TerminalSubsystemDisposable[] = [];
@@ -1143,7 +1143,16 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
     terminal.loadAddon(serializeAddon);
     const mouseProtocol = trackTerminalMouseProtocol(terminal);
     baseDisposables.push(mouseProtocol);
-    const serializeSnapshot = () => mouseProtocol.serializeSnapshot(serializeAddon);
+    const serializeSnapshot = (scrollback?: number) => mouseProtocol.serializeSnapshot(serializeAddon, { scrollback });
+    const checkpointCapture = createTerminalCheckpointCapture({
+      terminal, gate: mutationGate, maxLines: SNAPSHOT_MAX_LINES,
+      snapshotSuffix: mouseProtocol.snapshotSuffix,
+      serializeSync: serializeSnapshot,
+      getSequence: () => terminalProcessManager.getCommittedOutputSequence(sessionId),
+      getGeneration: () => terminalProcessManager.getOutputGeneration(sessionId),
+      waitForReset: signal => terminalProcessManager.awaitOutputReset(sessionId, signal),
+      isResetPending: () => terminalProcessManager.isOutputResetPending(sessionId),
+    });
     installTerminalUnicode(terminal);
     terminal.loadAddon(webLinksAddon);
     terminal.open(containerRef.current);
@@ -1168,21 +1177,19 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
     linkHoverIcon = createTerminalLinkHoverIcon(terminal, containerRef.current, fontSize);
     baseDisposables.push(linkHoverIcon);
     // 注册定时节流落盘的快照来源：让崩溃/强杀也能恢复到最近一次落盘的画面。
-    const serializeAfterWriteBarrier = (signal: AbortSignal) => serializeTerminalAfterWrite(
-      terminal, serializeSnapshot, signal,
-    );
-    const unregisterSnapshotSource = registerTerminalSnapshotSource(
-      sessionId,
-      serializeAfterWriteBarrier,
-      async (serialized) => {
-        await terminalProcessManager.checkpoint(
-          sessionId,
-          terminal.cols,
-          terminal.rows,
-          serialized,
-        );
-      },
-    );
+    const serializeAfterWriteBarrier = async (signal: AbortSignal, full: boolean) => {
+      const { snapshot, serialized, cols, rows, sequence, generation } = await checkpointCapture.capture(signal, full);
+      const isCurrent = () => terminalProcessManager.getOutputGeneration(sessionId) === generation
+        && !terminalProcessManager.isOutputResetPending(sessionId);
+      return {
+        snapshot, isCurrent,
+        checkpoint: serialized === undefined ? undefined : () => {
+          if (!isCurrent()) return Promise.reject(new Error("Terminal output stream changed before checkpoint upload"));
+          return terminalProcessManager.checkpoint(sessionId, cols, rows, serialized, sequence, isCurrent);
+        },
+      };
+    };
+    const unregisterSnapshotSource = registerTerminalSnapshotSource(sessionId, serializeAfterWriteBarrier);
     baseDisposables.push(searchAddon.onDidChangeResults(handleSearchResults));
 
     const initialWebglReady = syncWebglRenderer(terminal, baseTheme);
@@ -1218,7 +1225,7 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
     applyCodexCursorVisibility(terminal);
     scheduleFit(true);
     const sessionSnapshot = useTerminalStore.getState().sessions.find((item) => item.id === sessionId);
-    const initialTerminalOutput = sessionSnapshot?.initialTerminalOutput;
+    const initialTerminalOutput = getTerminalSnapshot(sessionSnapshot);
     const liveDisplaySnapshot = terminalProcessManager.takeDisplaySnapshot(sessionId);
     const writeDeferredStartup = () => {
       if (!sessionSnapshot?.deferStartupUntilInitialOutput || !sessionSnapshot.startupCmd) return;
@@ -1244,7 +1251,7 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
           try {
             const store = useTerminalStore.getState();
             if (!store.sessions.some((item) => item.id === sessionId)) return;
-            const serializedState = serializeSnapshot();
+            const serializedState = checkpointCapture.finishForDispose();
             terminalProcessManager.saveDisplaySnapshot(sessionId, {
               cols: terminal.cols, rows: terminal.rows, serializedState,
             });
@@ -1565,10 +1572,15 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
     });
     const detachViewport = attachViewport(terminal);
     displayDisposables.push({ dispose: detachViewport });
-    displayDisposables.push(terminal.onRender(() => {
-      if (isVisibleRef.current) tuiColorSync.schedule(terminal);
+    // xterm emits once per parser batch, synchronously before the next paint.
+    // Render-only refreshes (including our color patch) must not rescan cells.
+    displayDisposables.push(terminal.onWriteParsed(() => {
+      if (isVisibleRef.current) tuiColorSync.normalize(terminal);
     }));
     displayDisposables.push(terminal.onScroll(() => {
+      if (isVisibleRef.current) tuiColorSync.schedule(terminal);
+    }));
+    displayDisposables.push(terminal.onResize(() => {
       if (isVisibleRef.current) tuiColorSync.schedule(terminal);
     }));
     const detachIme = attachIme(terminal, {
@@ -1611,6 +1623,7 @@ export function XTermTerminal({ sessionId, isActive = true, isVisible = true, fo
       clearHiddenWebglDisposeTimer();
       resetViewportRefreshState();
       unregisterSnapshotSource();
+      mutationGate.dispose();
       disposeTerminalSubsystem(baseDisposables);
       disposeWebglRenderer();
       terminal.dispose();
