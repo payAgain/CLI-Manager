@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { ArrowLeft, Bot, ChevronRight, Copy } from "lucide-react";
+import { Bot, Copy } from "lucide-react";
 import { toast } from "sonner";
 import { useI18n } from "../../lib/i18n";
 import { getHistoryPathArgs } from "../../lib/historyPathArgs";
@@ -12,6 +12,7 @@ import type { SshAgentHistoryContext } from "../../lib/sshAgentHistory";
 import { fetchRemoteSubagentDetail, fetchRemoteSubagentSessions } from "../../stores/historyStore";
 import { useTerminalStore } from "../../stores/terminalStore";
 import { MarkdownContent } from "../ui/MarkdownContent";
+import { TaskListItem, TaskSection, TaskStatus } from "./TaskList";
 
 function SubagentRecordRow({ record, childSession, selected, onOpen }: {
   record: SubagentRecord;
@@ -36,26 +37,13 @@ function SubagentRecordRow({ record, childSession, selected, onOpen }: {
       toast.error(t("subagentTranscript.copyIdFailed"));
     }
   };
-  return <div className="subagent-browser-row" data-selected={selected || undefined} data-open={Boolean(childSession) || undefined}>
-    <button type="button" onClick={() => onOpen(record)} title={label.title}
-      aria-current={selected ? "true" : undefined} className="ui-focus-ring subagent-browser-open">
-      <Bot size={14} className="shrink-0 text-text-muted" aria-hidden="true" />
-      <span className="subagent-browser-label">
-        <span className="subagent-browser-title">{label.title}</span>
-        <span className="subagent-browser-identity">
-          <span className="subagent-browser-short-id">{label.shortId}</span>
-          {displayStatus && <span className="subagent-browser-status" data-status={displayStatus}>
-            <i aria-hidden="true" />{t(`subagentTranscript.status.${displayStatus}`)}
-          </span>}
-        </span>
-      </span>
-      <ChevronRight size={12} className="shrink-0 text-text-muted" aria-hidden="true" />
-    </button>
-    <button type="button" className="ui-focus-ring subagent-browser-copy" onClick={() => void copyId()}
+  return <TaskListItem title={label.title} icon={<Bot size={14} />} selected={selected} onOpen={() => onOpen(record)}
+    metadata={<span className="task-row__id" title={record.agentId}>{label.shortId}</span>}
+    status={<TaskStatus status={displayStatus === "completed" ? "done" : displayStatus} label={displayStatus ? t(`subagentTranscript.status.${displayStatus}`) : ""} />}
+    actions={<button type="button" className="task-action ui-focus-ring" onClick={() => void copyId()}
       aria-label={t("subagentTranscript.copyId")} title={`${t("subagentTranscript.copyId")} · ${record.agentId}`}>
       <Copy size={12} aria-hidden="true" />
-    </button>
-  </div>;
+    </button>} />;
 }
 
 export function SubagentBrowserPanel({ session, project, refreshSeq = 0 }: { session: TerminalSession | null; project?: Project | null; refreshSeq?: number }) {
@@ -70,7 +58,9 @@ export function SubagentBrowserPanel({ session, project, refreshSeq = 0 }: { ses
   const [messages, setMessages] = useState<HistoryMessage[]>([]);
   const sessions = useTerminalStore(state => state.sessions);
   const activeSessionId = useTerminalStore(state => state.activeSessionId);
-  const childSessions = sessions.filter(child => child.kind === "subagent-transcript" && child.subagent?.parentSessionId === session?.id);
+  const childSessions = useMemo(() => new Map(sessions
+    .filter(child => child.kind === "subagent-transcript" && child.subagent?.parentSessionId === session?.id)
+    .map(child => [child.subagent!.agentId, child])), [sessions, session?.id]);
   const selectedTitle = selected ? resolveSubagentPresentation({ agentId: selected.agentId, recordTitle: selected.title, fallbackTitle: t("subagentTranscript.title") }).title : undefined;
   const generation = useRef(0);
   const configDir = useRef<string | null>(null);
@@ -141,26 +131,23 @@ export function SubagentBrowserPanel({ session, project, refreshSeq = 0 }: { ses
     finally { if (request === generation.current) setLoading(false); }
   };
 
-  return <section className="subagent-browser-panel border-b border-border" aria-label={t("terminal.subagents.title")}>
-    <header className="subagent-browser-header flex items-center gap-2 px-3">
-      {selected ? <button className="ui-focus-ring ui-icon-action" aria-label={t("terminal.subagents.back")} onClick={() => { generation.current += 1; setSelected(null); setMessages([]); setLoading(false); }}><ArrowLeft size={13} /></button> : <Bot size={14} />}
-      <h3 className="min-w-0 truncate text-xs font-medium" title={selectedTitle}>{selectedTitle || t("terminal.subagents.title")}</h3>
-      {!selected && !loading && <span className="text-[11px] tabular-nums text-text-muted">{records.length}</span>}
-      {session && <span className="subagent-browser-parent" title={session.title}>{t("subagentTranscript.reader.parent", { title: session.title })}</span>}
-    </header>
-    <div className="pb-1">
-      {error && <p role="alert" className="p-2 text-xs text-danger">{t("terminal.subagents.error")}</p>}
-      {loading ? <p role="status" className="p-2 text-xs text-text-muted">{t("terminal.subagents.loading")}</p>
-        : selected ? messages.length ? messages.map((message, index) => <article key={index} className="border-b border-border p-2 text-xs">
+  return <TaskSection title={selectedTitle || t("terminal.subagents.title")} count={selected || error ? undefined : records.length} busy={loading}
+    scope={session ? t("subagentTranscript.reader.parent", { title: session.title }) : undefined}
+    onBack={selected ? () => { generation.current += 1; setSelected(null); setMessages([]); setLoading(false); } : undefined}
+    backLabel={t("terminal.subagents.back")}>
+    <div>
+      {error && <p role="alert" className="task-list-empty text-danger">{t("terminal.subagents.error")}</p>}
+      {loading ? <p role="status" className="task-list-empty">{t("terminal.subagents.loading")}</p>
+        : error ? null : selected ? messages.length ? messages.map((message, index) => <article key={index} className="border-b border-border p-2 text-xs">
           <div className="mb-2 text-[11px] text-text-muted">{t(message.role === "user" ? "subagentTranscript.task"
             : message.role === "tool" ? "subagentTranscript.toolResult" : "subagentTranscript.reply")}</div>
           {message.role === "tool" ? <pre className="max-h-60 overflow-auto whitespace-pre-wrap break-words font-mono">{message.content}</pre>
             : <MarkdownContent content={message.content} compact />}
-        </article>) : <p className="p-3 text-xs text-text-muted">{t("subagentTranscript.noIndependentOutput")}</p> : records.length ? records.map(record => {
-          const childSession = childSessions.find(child => child.subagent?.agentId === record.agentId);
+        </article>) : <p className="task-list-empty">{t("subagentTranscript.noIndependentOutput")}</p> : records.length ? records.map(record => {
+          const childSession = childSessions.get(record.agentId);
           return <SubagentRecordRow key={record.agentId} record={record} childSession={childSession}
             selected={Boolean(childSession && activeSessionId === childSession.id)} onOpen={record => void open(record)} />;
-        }) : <p className="px-3 py-2 text-xs leading-relaxed text-text-muted">{t(identity ? "terminal.subagents.empty" : "terminal.subagents.noIdentity")}</p>}
+        }) : <p className="task-list-empty">{t(identity ? "terminal.subagents.empty" : "terminal.subagents.noIdentity")}</p>}
     </div>
-  </section>;
+  </TaskSection>;
 }

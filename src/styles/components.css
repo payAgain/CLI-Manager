@@ -47,7 +47,6 @@
   -webkit-backdrop-filter: none;
 }
 
-#background-tasks-panel,
 #command-history-panel,
 #command-template-panel {
   --terminal-popover-fg: var(--term-panel-fg, #ececec);
@@ -82,8 +81,6 @@
 #command-template-panel .text-on-surface,
 #command-template-panel .text-text-primary,
 #command-template-panel .text-primary,
-#background-tasks-panel .text-on-surface,
-#background-tasks-panel .text-text-primary,
 #command-history-panel .text-on-surface,
 #command-history-panel .text-text-primary,
 #command-history-panel code {
@@ -96,8 +93,6 @@
 
 #command-template-panel .text-on-surface-variant,
 #command-template-panel .text-text-muted,
-#background-tasks-panel .text-on-surface-variant,
-#background-tasks-panel .text-text-muted,
 #command-history-panel .text-on-surface-variant,
 #command-history-panel .text-text-muted {
   color: var(--terminal-popover-muted);
@@ -143,7 +138,6 @@
   box-shadow: none;
 }
 
-#background-tasks-panel .ui-focus-ring:focus-visible,
 #command-template-panel .ui-focus-ring:focus-visible,
 #command-history-panel .ui-focus-ring:focus-visible {
   outline: 1px solid color-mix(in srgb, var(--border) 84%, transparent) !important;
@@ -151,52 +145,6 @@
   box-shadow: none;
 }
 
-#background-tasks-panel {
-  --background-tasks-running: #dd306e;
-  --background-tasks-attention: var(--term-panel-yellow, #e5c453);
-  --background-tasks-done: var(--term-panel-green, #3dd68c);
-  --background-tasks-failed: var(--term-panel-red, #f25e5e);
-}
-
-.background-tasks-panel__list {
-  padding: 0 8px 8px;
-}
-
-.background-tasks-panel__item {
-  border-bottom: 1px solid color-mix(in srgb, var(--term-panel-border, #2e2e2e) 82%, transparent);
-  color: var(--terminal-popover-fg);
-}
-
-.background-tasks-panel__status[data-status="running"] {
-  color: var(--background-tasks-running);
-}
-
-.background-tasks-panel__status[data-status="attention"] {
-  color: var(--background-tasks-attention);
-}
-
-.background-tasks-panel__status[data-status="done"] {
-  color: var(--background-tasks-done);
-}
-
-.background-tasks-panel__status[data-status="failed"] {
-  color: var(--background-tasks-failed);
-}
-
-.background-tasks-panel__action {
-  border-color: color-mix(in srgb, var(--term-panel-border, #2e2e2e) 78%, transparent);
-  background-color: color-mix(in srgb, var(--term-panel-card-inner, #181818) 76%, transparent);
-  color: var(--terminal-popover-fg);
-}
-
-.background-tasks-panel__action:hover:not(:disabled) {
-  background-color: color-mix(in srgb, var(--term-panel-card-inner, #181818) 72%, var(--primary) 18%);
-  color: var(--terminal-popover-fg);
-}
-
-.background-tasks-panel__action--danger {
-  color: var(--background-tasks-running);
-}
 
 #command-history-panel .ui-search-focus-shell input {
   color: var(--terminal-popover-fg);

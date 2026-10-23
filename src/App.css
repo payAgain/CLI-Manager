@@ -9,6 +9,7 @@
 @import "./styles/project-hierarchy.css";
 @import "./styles/history-hierarchy.css";
 @import "./styles/subagent-reader.css";
+@import "./styles/task-sidebar.css";
 /* Design Tokens — Tailwind CSS 4 @theme */
 @theme {
   --color-bg-primary: var(--bg-primary);
