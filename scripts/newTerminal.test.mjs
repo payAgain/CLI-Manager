@@ -22,7 +22,11 @@ const workspaceBinding = load("src/lib/terminalWorkspaceBinding.ts", {
   ...load("src/lib/workspaceTerminals.ts", load("src/lib/terminalProject.ts")),
 });
 const { parseProjectEnvVars } = load("src/lib/projectEnv.ts");
-const { resolveNewTerminalContext: context, resolveNewTerminalCommand: command } = load("src/lib/newTerminal.ts", { parseProjectEnvVars });
+const resumeArgs = load("src/lib/resumeCliArgs.ts");
+const launchCommand = load("src/lib/projectStartupCommand.ts", resumeArgs);
+const historyCommand = load("src/lib/historyResumeCommand.ts", { ...launchCommand, ...load("src/lib/cliTools.ts") });
+const workspaceLaunch = load("src/lib/worktreeLaunch.ts", { ...resumeArgs, ...launchCommand, ...historyCommand, ...load("src/lib/cliTools.ts") });
+const { resolveNewTerminalContext: context, resolveNewTerminalCommand: command } = load("src/lib/newTerminal.ts", { parseProjectEnvVars, ...workspaceLaunch });
 const { resolveDirectCliToolCommand } = load("src/lib/cliTools.ts");
 const { createAgentTerminalMetadata } = load("src/lib/agentTerminal.ts");
 const project = {

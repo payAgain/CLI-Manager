@@ -1,4 +1,5 @@
 import type { Project, TerminalSession, WorktreeRecord, TerminalWorkspaceBinding } from "./types";
+import { freshWorkspaceAgentArgs } from "./worktreeLaunch";
 import { parseProjectEnvVars } from "./projectEnv";
 
 export interface NewTerminalContext {
@@ -43,6 +44,6 @@ export function resolveNewTerminalCommand(context: NewTerminalContext, tool: str
   const project = context.project;
   // Project arguments only belong to that Agent; never clone a live conversation's resume command.
   return project?.cli_tool.trim().toLowerCase() === tool && !project.startup_cmd.trim()
-    ? [tool, project.cli_args.trim()].filter(Boolean).join(" ")
+    ? [tool, freshWorkspaceAgentArgs(project.cli_args, tool)].filter(Boolean).join(" ")
     : tool;
 }
