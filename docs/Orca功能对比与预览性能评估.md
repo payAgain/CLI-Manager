@@ -10,7 +10,7 @@
 - 本次主线核查固定到 [main 提交 0efc842](https://github.com/stablyai/orca/commit/0efc842028a159809e8d4b4979945d3d95b8c400)，提交时间为 2026-10-23 09:16:59 UTC。后续 main 变化不包含在这个核查点内。
 - 前次源码快照实际是同日的 `6d473f4`，问题在于能力总结覆盖不完整、未明确版本范围，不能简单归因于使用很旧的 Orca。
 - 官网文档持续更新，下表标为“当前文档”的能力不代表全部在 v1.4.237 新增。发布说明中的 Native Chat 仍为 experimental；关闭构建开关的 layout-owner 改造不计入正式启用能力。
-- CLI-Manager 对照基线为 `30f913ac`。统一快速跳转已在独立 `codex/unified-quick-jump` worktree 实现，尚未合入该基线；本轮独立分支为 `codex/review-and-inbox`。
+- CLI-Manager 对照基线为 `30f913ac`。统一快速跳转在独立 `codex/unified-quick-jump` worktree 实现；本轮验证包在 `codex/review-and-inbox` 开发分支整合快速跳转、Diff 批准和通知收件箱，主工作区基线未改动。
 
 ## 功能差异与取舍
 

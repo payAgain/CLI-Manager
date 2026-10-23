@@ -313,6 +313,7 @@ const SEARCH_DEBOUNCE_MS = 220;
 let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 let searchRequestSeq = 0;
 let openProjectRequestSeq = 0;
+let pendingOpenProject: { project: Project; requestSeq: number; promise: Promise<void> } | null = null;
 const inFlightGitChangeRequests = new Map<string, Promise<GitFileChange[]>>();
 const nonGitProjectPaths = new Set<string>();
 let refreshVisibleStateInFlight: Promise<void> | null = null;
@@ -710,7 +711,8 @@ export const useFileExplorerStore = create<FileExplorerStore>((set, get) => ({
       throw new Error("remote_project_capability_unsupported:files");
     }
     const current = get().project;
-    if (isSameProjectFileLocation(current, project)) {
+    const sameLocation = isSameProjectFileLocation(current, project);
+    if (sameLocation) {
       if (current !== project) {
         set((state) => ({
           project,
@@ -719,7 +721,12 @@ export const useFileExplorerStore = create<FileExplorerStore>((set, get) => ({
           )),
         }));
       }
-      return;
+      if (pendingOpenProject?.requestSeq === openProjectRequestSeq
+        && isSameProjectFileLocation(pendingOpenProject.project, project)) {
+        await pendingOpenProject.promise;
+        return;
+      }
+      if (project.environment_type !== "ssh" || get().remoteFileContext) return;
     }
 
     const requestSeq = ++openProjectRequestSeq;
@@ -737,7 +744,7 @@ export const useFileExplorerStore = create<FileExplorerStore>((set, get) => ({
     const openFiles = editorWorkspace?.openFiles ?? [];
     const activeFilePath = editorWorkspace?.activeFilePath ?? null;
     const activeFile = openFiles.find((file) => file.path === activeFilePath) ?? openFiles[0] ?? null;
-    set({
+    set(sameLocation ? { loading: true } : {
       project,
       remoteFileContext: null,
       tree: [],
@@ -757,39 +764,48 @@ export const useFileExplorerStore = create<FileExplorerStore>((set, get) => ({
       gitChanges: [],
       clipboard: null,
     });
-    void releaseRemoteFileContext(previousRemoteFileContext);
-    let remoteContext: SshRemoteFileContext | null = null;
-    try {
-      remoteContext = project.environment_type === "ssh" ? await buildSshRemoteFileContext(project) : null;
-      if (remoteContext) await waitForRemoteFileContextRelease(remoteContext);
-      if (requestSeq !== openProjectRequestSeq || !isSameProjectFileContext(get().project, project)) return;
-      set({ remoteFileContext: remoteContext });
-      const [tree, gitChanges] = await Promise.all([
-        remoteContext ? sshRemoteListDir(remoteContext) : listDir(project.path, ""),
-        remoteContext ? Promise.resolve([]) : fetchGitChanges(project.path),
-      ]);
-      if (
-        requestSeq !== openProjectRequestSeq
-        || !isSameProjectFileContext(get().project, project)
-        || get().remoteFileContext !== remoteContext
-      ) {
-        return;
+    if (!sameLocation) void releaseRemoteFileContext(previousRemoteFileContext);
+    // Defer initialization until its promise is registered, so another caller can await it.
+    const initialization = Promise.resolve().then(async () => {
+      let remoteContext: SshRemoteFileContext | null = null;
+      try {
+        if (requestSeq !== openProjectRequestSeq || !isSameProjectFileLocation(get().project, project)) return;
+        remoteContext = project.environment_type === "ssh" ? await buildSshRemoteFileContext(project) : null;
+        if (remoteContext) await waitForRemoteFileContextRelease(remoteContext);
+        if (requestSeq !== openProjectRequestSeq || !isSameProjectFileLocation(get().project, project)) return;
+        set({ remoteFileContext: remoteContext });
+        const [tree, gitChanges] = await Promise.all([
+          remoteContext ? sshRemoteListDir(remoteContext) : listDir(project.path, ""),
+          remoteContext ? Promise.resolve([]) : fetchGitChanges(project.path),
+        ]);
+        if (
+          requestSeq !== openProjectRequestSeq
+          || !isSameProjectFileLocation(get().project, project)
+          || get().remoteFileContext !== remoteContext
+        ) {
+          return;
+        }
+        set({ tree, gitChanges, loading: false });
+      } catch (err) {
+        if (requestSeq !== openProjectRequestSeq || !isSameProjectFileLocation(get().project, project)) return;
+        if (get().remoteFileContext === remoteContext) {
+          set({ remoteFileContext: null });
+          void releaseRemoteFileContext(remoteContext);
+        }
+        logError("Failed to open project files", err);
+        toast.error("文件列表加载失败", { description: String(err) });
+        set(sameLocation ? { loading: false } : { tree: [], gitChanges: [], loading: false });
       }
-      set({ tree, gitChanges, loading: false });
-    } catch (err) {
-      if (requestSeq !== openProjectRequestSeq || !isSameProjectFileContext(get().project, project)) return;
-      if (get().remoteFileContext === remoteContext) {
-        set({ remoteFileContext: null });
-        void releaseRemoteFileContext(remoteContext);
-      }
-      logError("Failed to open project files", err);
-      toast.error("文件列表加载失败", { description: String(err) });
-      set({ tree: [], gitChanges: [], loading: false });
-    }
+    }).finally(() => {
+      if (pendingOpenProject?.requestSeq === requestSeq) pendingOpenProject = null;
+    });
+    pendingOpenProject = { project, requestSeq, promise: initialization };
+    await initialization;
   },
 
   closeProject: () => {
     openProjectRequestSeq += 1;
+    pendingOpenProject = null;
     const currentState = get();
     const remoteFileContext = currentState.remoteFileContext;
     const editorWorkspaces = currentState.project
