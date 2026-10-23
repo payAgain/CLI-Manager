@@ -1308,10 +1308,11 @@ export function Sidebar({
   }, []);
 
   const handleRequestDiscardSelectedWorktrees = useCallback(() => {
+    if (worktrees.some(item => selectedWorktreeIds.has(item.id) && item.origin === "discovered")) return;
     const items = Array.from(selectedWorktreeIds)
       .map((id) => {
         const worktree = worktrees.find((item) => item.id === id);
-        if (!worktree) return null;
+        if (!worktree || worktree.origin === "discovered") return null;
         const project = projects.find((item) => item.id === worktree.project_id);
         if (!project) return null;
         return { project, worktree };
@@ -2492,6 +2493,8 @@ export function Sidebar({
                 <button
                   className="context-menu-item"
                   role="menuitem"
+                  disabled={contextMenu.worktree.origin === "discovered"}
+                  title={contextMenu.worktree.origin === "discovered" ? t("worktree.externalManagedElsewhere") : undefined}
                   onClick={() => {
                     if (rejectMissingWorktree(contextMenu.worktree)) {
                       setContextMenu(null);
@@ -2564,6 +2567,8 @@ export function Sidebar({
                   <button
                     className="context-menu-item danger"
                     role="menuitem"
+                    disabled={worktrees.some(item => selectedWorktreeIds.has(item.id) && item.origin === "discovered")}
+                    title={worktrees.some(item => selectedWorktreeIds.has(item.id) && item.origin === "discovered") ? t("worktree.externalManagedElsewhere") : undefined}
                     onClick={() => {
                       handleRequestDiscardSelectedWorktrees();
                       setContextMenu(null);
@@ -2576,6 +2581,8 @@ export function Sidebar({
                 <button
                   className="context-menu-item danger"
                   role="menuitem"
+                  disabled={contextMenu.worktree.origin === "discovered"}
+                  title={contextMenu.worktree.origin === "discovered" ? t("worktree.externalManagedElsewhere") : undefined}
                   onClick={() => {
                     setDiscardTarget({ project: contextMenu.project, worktree: contextMenu.worktree });
                     setContextMenu(null);

@@ -70,6 +70,9 @@ function focusDestination(): void {
 
 export function CommandPalette({ prepareCreate }: { prepareCreate?: () => Promise<boolean> } = {}) {
   const { isOpen, close } = useCommandPaletteStore();
+  useEffect(() => {
+    if (isOpen) void useProjectStore.getState().refreshWorktrees();
+  }, [isOpen]);
   const { t } = useI18n();
   const [query, setQuery] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);

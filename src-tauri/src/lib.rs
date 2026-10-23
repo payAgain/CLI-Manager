@@ -1101,6 +1101,7 @@ pub fn run() {
             commands::git::git_watch_start,
             commands::git::git_watch_stop,
             commands::git_worktree::git_worktree_validate,
+            commands::git_worktree::git_worktree_list,
             commands::git_worktree::git_worktree_create,
             commands::git_worktree::git_worktree_check_deps,
             commands::git_worktree::git_worktree_merge,

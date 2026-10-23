@@ -10,6 +10,7 @@ import { TerminalTabs } from "./components/TerminalTabs";
 import { CommandPalette } from "./components/CommandPalette";
 import { NotificationInboxPanel } from "./components/NotificationInbox";
 import { useNotificationInbox } from "./hooks/useNotificationInbox";
+import { useWorktreeDiscovery } from "./hooks/useWorktreeDiscovery";
 import { activateNotificationTarget } from "./lib/notificationInboxNavigation";
 import type { SettingsTab } from "./components/SettingsModal";
 const loadSettingsModal = () => import("./components/SettingsModal").then((module) => ({ default: module.SettingsModal }));
@@ -339,6 +340,7 @@ function runDeferredStartupTasks(): void {
 
 function App() {
   useNotificationInbox();
+  useWorktreeDiscovery();
   const { language, t } = useI18n();
   const loadSettings = useSettingsStore((s) => s.load);
   const settingsLoaded = useSettingsStore((s) => s.loaded);
