@@ -44,7 +44,7 @@ impl RecentHookEvents {
 
 /// hook 上报的消费出口：主进程实现为 Tauri 事件，daemon 实现为帧广播 + 缓存
 /// （Issue #123 Phase 2 复用点：HTTP 解析/校验逻辑两侧共享，只有出口不同）。
-pub type HookPayloadSink = Arc<dyn Fn(ClaudeHookPayload) + Send + Sync + 'static>;
+pub type HookPayloadSink = Arc<dyn Fn(ClaudeHookPayload) -> Result<(), String> + Send + Sync + 'static>;
 
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -207,11 +207,11 @@ fn handle_stream(
         return;
     }
 
-    let accepted = recent_events
-        .lock()
-        .map(|mut recent| recent.accept(payload.remote_event_id.as_deref()))
-        .unwrap_or(true);
-    if !accepted {
+    let event_id = payload.remote_event_id.clone();
+    let duplicate = recent_events.lock().map(|recent| {
+        event_id.as_ref().is_some_and(|id| recent.ids.contains(id.trim()))
+    }).unwrap_or(false);
+    if duplicate {
         write_response(&mut stream, "204 No Content", "");
         return;
     }
@@ -248,7 +248,13 @@ fn handle_stream(
         remote_sequence: payload.remote_sequence,
     };
 
-    sink(payload);
+    if let Err(error) = sink(payload) {
+        warn!("cli hook persistence failed: {error}");
+        write_response(&mut stream, "503 Service Unavailable", "hook persistence unavailable");
+        return;
+    }
+    // Remember only after the durable sink succeeds; failed requests must retry.
+    if let Ok(mut recent) = recent_events.lock() { recent.accept(event_id.as_deref()); }
 
     write_response(&mut stream, "204 No Content", "");
 }

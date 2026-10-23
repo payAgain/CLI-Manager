@@ -1,5 +1,6 @@
 use chardetng::{EncodingDetector, Iso2022JpDetection, Utf8Detection};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::Path;
 
@@ -73,6 +74,9 @@ pub struct GitFileDiffPayload {
     pub can_revert_hunks: bool,
     pub byte_length: usize,
     pub line_count: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content_fingerprint: Option<String>,
+    pub review_version: u8,
 }
 
 fn build_diff_payload(
@@ -89,6 +93,8 @@ fn build_diff_payload(
         can_revert_hunks,
         byte_length,
         line_count,
+        content_fingerprint: None,
+        review_version: 1,
     })
 }
 
@@ -125,20 +131,31 @@ fn diff(
 
     let args = diff_args(&path, &request.status, options, legacy);
     let refs = args.iter().map(String::as_str).collect::<Vec<_>>();
-    let output = run_git(&repo, &refs, false, READ_TIMEOUT).or_else(|_| {
-        let fallback = diff_args(&path, "A", options, false);
-        let fallback_refs = fallback.iter().map(String::as_str).collect::<Vec<_>>();
-        run_git(&repo, &fallback_refs, false, READ_TIMEOUT)
-    })?;
-    tracked_payload(output, options)
+    let output = match run_git(&repo, &refs, false, READ_TIMEOUT) {
+        Ok(output) => output,
+        Err(error) if request.status == "A" => {
+            let unborn = run_git(&repo, &["status", "--porcelain=v2", "--branch", "--untracked-files=no", "--", &path], false, READ_TIMEOUT)
+                .map(|output| String::from_utf8_lossy(&output.stdout).lines().any(|line| line == "# branch.oid (initial)"))
+                .unwrap_or(false);
+            if !unborn {
+                return Err(error);
+            }
+            return untracked_diff(&repo, &path);
+        }
+        Err(error) => return Err(error),
+    };
+    let mut payload = tracked_payload(output, options)?;
+    if request.status == "A" { payload.can_revert_hunks = false; }
+    Ok(payload)
 }
 
-fn diff_args(path: &str, status: &str, options: GitDiffOptions, legacy: bool) -> Vec<String> {
+fn diff_args(path: &str, _status: &str, options: GitDiffOptions, _legacy: bool) -> Vec<String> {
     let mut args = vec![
         "diff".to_string(),
         "--no-ext-diff".to_string(),
         "--no-textconv".to_string(),
         "--no-color".to_string(),
+        "--full-index".to_string(),
         format!("--unified={}", options.context_lines),
     ];
     match options.whitespace {
@@ -146,9 +163,7 @@ fn diff_args(path: &str, status: &str, options: GitDiffOptions, legacy: bool) ->
         GitDiffWhitespaceMode::IgnoreEol => args.push("--ignore-space-at-eol".to_string()),
         GitDiffWhitespaceMode::IgnoreAll => args.push("--ignore-all-space".to_string()),
     }
-    if legacy || status != "A" {
-        args.push("HEAD".to_string());
-    }
+    args.push("HEAD".to_string());
     args.extend(["--".to_string(), path.to_string()]);
     args
 }
@@ -156,6 +171,8 @@ fn diff_args(path: &str, status: &str, options: GitDiffOptions, legacy: bool) ->
 fn untracked_diff(repo: &Path, path: &str) -> Result<GitFileDiffPayload, String> {
     let target = repo.join(path);
     validate_untracked_target(&target)?;
+    let metadata = fs::metadata(&target).map_err(|_| "remote_git_file_read_failed")?;
+    if metadata.len() > MAX_DIFF_BYTES as u64 { return Err("git_diff_too_large".to_string()); }
     let bytes = fs::read(target).map_err(|_| "remote_git_file_read_failed")?;
     if bytes.len() > MAX_DIFF_BYTES {
         return Err("git_diff_too_large".to_string());
@@ -170,15 +187,24 @@ fn untracked_diff(repo: &Path, path: &str) -> Result<GitFileDiffPayload, String>
     }
     let (text, _) = decode_diff_text(&bytes);
     let line_count = text.lines().count();
+    #[cfg(unix)]
+    let mode = {
+        use std::os::unix::fs::PermissionsExt;
+        if metadata.permissions().mode() & 0o111 != 0 { "100755" } else { "100644" }
+    };
+    #[cfg(not(unix))]
+    let mode = "100644";
     let mut content = format!(
-        "diff --git a/{path} b/{path}\nnew file mode 100644\n--- /dev/null\n+++ b/{path}\n@@ -0,0 +1,{line_count} @@\n"
+        "diff --git a/{path} b/{path}\nnew file mode {mode}\n--- /dev/null\n+++ b/{path}\n@@ -0,0 +1,{line_count} @@\n"
     );
-    for line in text.lines() {
+    for line in text.split_inclusive('\n') {
         content.push('+');
         content.push_str(line);
-        content.push('\n');
+        if !line.ends_with('\n') { content.push_str("\n\\ No newline at end of file\n"); }
     }
-    build_diff_payload(content, false)
+    let mut payload = build_diff_payload(content, false)?;
+    payload.content_fingerprint = Some(format!("{:x}", Sha256::digest(&bytes)));
+    Ok(payload)
 }
 
 fn tracked_payload(

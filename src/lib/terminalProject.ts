@@ -91,6 +91,10 @@ export function findWorktreeForSession(
     return findWorktreeForSession(parentSession, sessions, worktrees, seenSessionIds);
   }
 
+  if ((session.kind ?? "pty") === "pty" && session.workspace !== undefined) {
+    return worktrees.find(worktree => worktree.id === session.workspace?.worktreeId
+      && worktree.project_id === session.workspace?.projectId) ?? null;
+  }
   if (session.worktreeId) {
     return worktrees.find((worktree) => worktree.id === session.worktreeId) ?? null;
   }
@@ -152,6 +156,9 @@ export function resolveProjectForSession(
       ?? null;
   }
 
+  if ((session.kind ?? "pty") === "pty" && session.workspace !== undefined) {
+    return projectById.get(session.workspace?.projectId ?? "") ?? null;
+  }
   if (session.projectId) {
     const project = projectById.get(session.projectId);
     if (project) return project;

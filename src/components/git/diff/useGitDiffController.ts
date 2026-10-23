@@ -54,6 +54,8 @@ export function useGitDiffController({
 }: UseGitDiffControllerOptions): GitDiffController {
   const { t } = useI18n();
   const [diffText, setDiffText] = useState("");
+  const [contentFingerprint, setContentFingerprint] = useState<string | undefined>();
+  const [reviewVersion, setReviewVersion] = useState<number | undefined>();
   const [loading, setLoading] = useState(false);
   const [reverting, setReverting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -87,6 +89,8 @@ export function useGitDiffController({
     setError(null);
     setPayloadAllowsPartialRevert(false);
     setMetadata({ byteLength: 0, lineCount: 0 });
+    setContentFingerprint(undefined);
+    setReviewVersion(undefined);
 
     if (snapshotContent !== undefined) {
       try {
@@ -95,6 +99,7 @@ export function useGitDiffController({
           canRevertHunks: false,
         });
         setDiffText(payload.content);
+        setContentFingerprint(payload.contentFingerprint);
         setMetadata({ byteLength: payload.byteLength, lineCount: payload.lineCount });
       } catch {
         setDiffText("");
@@ -117,6 +122,8 @@ export function useGitDiffController({
       .then((payload) => {
         if (cancelled) return;
         setDiffText(payload.content);
+        setContentFingerprint(payload.contentFingerprint);
+        setReviewVersion(payload.reviewVersion);
         setMetadata({ byteLength: payload.byteLength, lineCount: payload.lineCount });
         setPayloadAllowsPartialRevert(payload.canRevertHunks);
       })
@@ -124,6 +131,7 @@ export function useGitDiffController({
         if (cancelled) return;
         const message = loadError instanceof Error ? loadError.message : String(loadError);
         if (message.includes("binary_file")) setError(t("files.error.binaryFile"));
+        else if (message.includes("git_diff_symlink_unsupported") || message.includes("remote_git_symlink_rejected")) setError(t("git.approval.symlinkUnsupported"));
         else if (message.includes("git_diff_too_large")) setError(t("git.diff.tooLarge"));
         else if (message.includes("ssh_agent_capability_missing:gitDiffOptions")) {
           setError(t("git.diff.sshAgentUpgradeRequired"));
@@ -201,6 +209,8 @@ export function useGitDiffController({
 
   return {
     diffText,
+    contentFingerprint,
+    reviewVersion,
     loading: loading || parseResult.parsing,
     reverting,
     error,
@@ -223,5 +233,6 @@ export function useGitDiffController({
     requestDiscard,
     revertHunk,
     revertSelectedLines,
+    reload: () => setLoadRevision((revision) => revision + 1),
   };
 }

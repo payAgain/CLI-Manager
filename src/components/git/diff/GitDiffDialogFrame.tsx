@@ -30,7 +30,7 @@ export function GitDiffDialogFrame({
         ref={contentRef}
         showCloseButton={false}
         aria-describedby={undefined}
-        className="h-[85vh] w-[calc(100vw-1rem)] max-w-6xl overflow-hidden rounded-lg border p-0 shadow-2xl sm:w-[calc(100vw-2rem)]"
+        className="flex h-[85vh] w-[calc(100vw-1rem)] max-w-6xl flex-col overflow-hidden rounded-lg border p-0 shadow-2xl sm:w-[calc(100vw-2rem)]"
         overlayClassName="z-[100] bg-black/60"
         style={{
           ...(useTerminalTheme ? TERMINAL_DIFF_ROOT_STYLE : DEFAULT_DIFF_ROOT_STYLE),

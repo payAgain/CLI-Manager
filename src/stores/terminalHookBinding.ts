@@ -78,19 +78,30 @@ export function resolveCliHookTarget(input: {
   }
 
   const source = input.source ?? null;
-  if (!source || !input.cwd?.trim()) return { tabId: null, reason: "not-found" };
+  if (!source) return { tabId: null, reason: "not-found" };
 
   const sourceCandidates = input.candidates.filter((candidate) => (
     candidate.source === source
     && environmentMatches(candidate)
   ));
-  const boundOwner = input.sessionId?.trim()
-    ? sourceCandidates.find((candidate) => candidate.cliSessionId === input.sessionId?.trim())
-    : undefined;
-  if (boundOwner) return { tabId: boundOwner.id, reason: "bound-session" };
+  const sessionId = input.sessionId?.trim();
+  const boundOwners = sessionId
+    ? sourceCandidates.filter((candidate) => candidate.cliSessionId === sessionId)
+    : [];
+  if (boundOwners.length === 1) return { tabId: boundOwners[0].id, reason: "bound-session" };
+  if (boundOwners.length > 1) return { tabId: null, reason: "ambiguous" };
+
+  // A global Hook can come from Desktop, Orca or another terminal in the same
+  // checkout. Directory/output activity is not proof that it owns this PTY.
+  // The daemon rewrites external IDs only after checking process ancestry.
+  if (input.rawTabId.startsWith("external:") || !input.cwd?.trim()) {
+    return { tabId: null, reason: "not-found" };
+  }
 
   const pathCandidates = sourceCandidates.filter((candidate) => (
-    pathMatches(input.cwd!, candidate.paths, input.wslDistroName)
+    // Legacy tab-ID recovery must never replace another conversation's identity.
+    (!candidate.cliSessionId?.trim() || candidate.cliSessionId === sessionId)
+    && pathMatches(input.cwd!, candidate.paths, input.wslDistroName)
   ));
   if (pathCandidates.length === 1) {
     return { tabId: pathCandidates[0].id, reason: "unique-path" };

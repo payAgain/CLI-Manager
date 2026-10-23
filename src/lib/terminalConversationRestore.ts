@@ -1,6 +1,8 @@
 import { resolveAgentTerminalMetadata } from "./agentTerminal";
 import { resolveCliToolHistorySourceId } from "./cliTools";
 import { buildHistoryResumeCommand } from "./historyResumeCommand";
+import { applyConversationCwd } from "./terminalConversationCwd";
+import { freshWorkspaceAgentArgs } from "./worktreeLaunch";
 import type { Project, TerminalSession } from "./types";
 
 /** Persist the current Agent, including manual starts, without retaining a dead process identity. */
@@ -29,7 +31,7 @@ export interface TerminalConversationRestore {
   cliSessionId?: string;
   isAgentSession: boolean;
   cliTool?: string;
-  issue?: "missingId" | "unsupportedTool";
+  issue?: "missingId" | "unsupportedTool" | "unsupportedLaunch";
 }
 
 /** Recreate a conversation by exact identity; directory-scoped "last" can select another pane's chat. */
@@ -59,11 +61,20 @@ export function resolveTerminalConversationRestore(
   if (!id || !/^[a-zA-Z0-9][a-zA-Z0-9._:-]*$/.test(id)) {
     return { isAgentSession: false, issue: "missingId" };
   }
-  const command = buildHistoryResumeCommand({ source, session_id: id }, project);
+  const target = saved.conversationResumeTarget?.tool === source && saved.conversationResumeTarget.sessionId === id
+    ? saved.conversationResumeTarget : undefined;
+  const resumeProject = target && project
+    ? { ...project, cli_args: freshWorkspaceAgentArgs(project.cli_args, source) } : project;
+  const command = buildHistoryResumeCommand({ source, session_id: id }, resumeProject);
   if (!command) return { isAgentSession: false, issue: "unsupportedTool" };
-  const resumeCommand = source === "codex"
+  let resumeCommand = source === "codex"
     ? command.replace(/^codex resume /, "codex resume --no-alt-screen ")
     : command;
+  if (target) {
+    const directedCommand = applyConversationCwd(resumeCommand, target, saved.shell || project?.shell);
+    if (!directedCommand) return { isAgentSession: false, issue: "unsupportedLaunch" };
+    resumeCommand = directedCommand;
+  }
   // A Windows shell may enter WSL through the launch command instead of shell="wsl".
   const prefix = commandMatch ? saved.startupCmd!.slice(0, commandMatch.index).trim() : "";
   const wslPrefix = /^wsl(?:\.exe)?(?:\s|$)/i.test(prefix) ? prefix : "";

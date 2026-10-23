@@ -14,11 +14,15 @@ export interface GitDiffWirePayload {
   canRevertHunks: boolean;
   byteLength?: number;
   lineCount?: number;
+  contentFingerprint?: string;
+  reviewVersion?: number;
 }
 
 export interface NormalizedGitDiffPayload extends GitDiffMetadata {
   content: string;
   canRevertHunks: boolean;
+  contentFingerprint?: string;
+  reviewVersion?: number;
 }
 
 export function getGitDiffByteLength(content: string): number {
@@ -46,6 +50,9 @@ export function normalizeGitDiffPayload(
     canRevertHunks: payload.canRevertHunks,
     byteLength: normalizeCount(payload.byteLength, () => getGitDiffByteLength(payload.content)),
     lineCount: normalizeCount(payload.lineCount, () => countGitDiffLines(payload.content)),
+    ...(payload.contentFingerprint && /^[a-f0-9]{64}$/.test(payload.contentFingerprint)
+      ? { contentFingerprint: payload.contentFingerprint } : {}),
+    ...(payload.reviewVersion === 1 ? { reviewVersion: 1 } : {}),
   };
   if (normalized.byteLength > GIT_DIFF_MAX_BYTES || normalized.lineCount > GIT_DIFF_MAX_LINES) {
     throw new Error("git_diff_too_large");

@@ -46,6 +46,8 @@ export interface SshRemoteGitDiff {
   canRevertHunks: boolean;
   byteLength?: number;
   lineCount?: number;
+  contentFingerprint?: string;
+  reviewVersion?: number;
 }
 
 export function createSshRemoteGitConsumerId(

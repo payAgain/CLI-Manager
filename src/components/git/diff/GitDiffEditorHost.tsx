@@ -21,6 +21,8 @@ import { X } from "../../icons";
 import { GitDiffViewer } from "./GitDiffViewer";
 import type { GitDiffDataSource } from "./types";
 import type { GitDiffHunkPlacement } from "./reviewNavigation";
+import { getGitDiffApprovalStatus, gitDiffApprovalKey, gitDiffApprovalScope } from "../../../lib/gitDiffApproval";
+import { useGitDiffApprovalStore } from "../../../stores/gitDiffApprovalStore";
 
 interface GitDiffEditorHostProps {
   project: Project;
@@ -36,6 +38,10 @@ export function GitDiffEditorHost({
   const { t } = useI18n();
   const activeIndex = workspace.tabs.findIndex((tab) => tab.id === workspace.activeId);
   const activeTab = activeIndex >= 0 ? workspace.tabs[activeIndex] : null;
+  const approvalScope = activeTab ? gitDiffApprovalScope(project, activeTab.repositoryId) : null;
+  useEffect(() => {
+    if (approvalScope) useGitDiffApprovalStore.getState().invalidateScope(approvalScope);
+  }, [approvalScope, activeTab?.revision]);
   const { lease, loading, error } = useGitTransportLease(project, Boolean(activeTab));
   const leaseRef = useRef(lease);
   leaseRef.current = lease;
@@ -173,6 +179,16 @@ export function GitDiffEditorHost({
     activateTab(context.key, nextTab.id);
   }, [activateTab, activeIndex, context.key, workspace.tabs]);
 
+  const nextPending = useCallback(() => {
+    const state = useGitDiffApprovalStore.getState();
+    const tabs = [...workspace.tabs.slice(activeIndex + 1), ...workspace.tabs.slice(0, activeIndex)];
+    const next = tabs.find((tab) => {
+      const key = gitDiffApprovalKey(gitDiffApprovalScope(project, tab.repositoryId), tab.filePath);
+      return getGitDiffApprovalStatus(state.records[key], state.fingerprints[key]) !== "approved";
+    });
+    if (next) { setInitialHunkPlacement("first"); activateTab(context.key, next.id); }
+  }, [activateTab, activeIndex, context.key, project, workspace.tabs]);
+
   const openSource = useCallback(async (lineNumber?: number) => {
     if (!activeTab || activeTab.status === "D") return;
     try {
@@ -258,6 +274,8 @@ export function GitDiffEditorHost({
             gitDiffOpenMode === "editor" ? "dialog" : "editor",
           ),
           pinActive: gitDiffOpenMode === "editor",
+          approvalKey: approvalScope ? gitDiffApprovalKey(approvalScope, activeTab.filePath) : undefined,
+          onNextPending: workspace.tabs.length > 1 ? nextPending : undefined,
         }}
       />
       <ConfirmDialog

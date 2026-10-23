@@ -26,6 +26,9 @@ import { useTerminalStore, type SplitTerminalOptions, type TabNotificationState 
 import { TERMINAL_PANEL_WIDTH_DEFAULTS, useSettingsStore } from "../stores/settingsStore";
 import { useWorktreeStore } from "../stores/worktreeStore";
 import { useProjectStore } from "../stores/projectStore";
+import { useNotificationInboxStore } from "../stores/notificationInboxStore";
+import { useNotificationInboxAutoRead } from "../hooks/useNotificationInbox";
+import { getUnreadCountsBySession } from "../lib/notificationInbox";
 import { useSshHostStore } from "../stores/sshHostStore";
 import { useFileExplorerStore } from "../stores/fileExplorerStore";
 import { useI18n, type TranslationKey } from "../lib/i18n";
@@ -61,6 +64,8 @@ import {
   type TerminalSidePanelTab,
 } from "./terminal/TerminalSidePanel";
 import { WorktreeFinishDialog } from "./worktree/WorktreeFinishDialog";
+import { WorktreeContinuationDialog } from "./worktree/WorktreeContinuationDialog";
+import { useWorktreeContinuationStore } from "../stores/worktreeContinuationStore";
 import { FileExplorerSidebar } from "./files/LazyFileExplorerSidebar";
 import { openWindowsTerminal } from "../lib/externalTerminal";
 import { normalizeDirectCodexStartupCommand, resolveProjectStartupCommand } from "../lib/projectStartupCommand";
@@ -481,6 +486,7 @@ interface SortableTabProps {
   isActive: boolean;
   isEditing: boolean;
   notification: TabNotificationState;
+  unreadCount: number;
   vendor?: VendorKey | null;
   cliToolIcon?: CliToolIconKey | null;
   worktree?: WorktreeRecord | null;
@@ -580,6 +586,7 @@ function SortableTab({
   isActive,
   isEditing,
   notification,
+  unreadCount,
   vendor,
   cliToolIcon,
   worktree,
@@ -795,6 +802,11 @@ function SortableTab({
                 />
               )}
               <span className="ui-terminal-tab-title min-w-0 flex-1 truncate" title={displayTitle}>{displayTitle}</span>
+              {unreadCount > 0 && <span
+                className="shrink-0 rounded px-1 text-[11px] font-medium tabular-nums text-[var(--primary)]"
+                title={t("inbox.tabUnread", { count: unreadCount })}
+                aria-label={t("inbox.tabUnread", { count: unreadCount })}
+              >{unreadCount > 99 ? "99+" : unreadCount}</span>}
             </>
           )}
           <button
@@ -1294,6 +1306,8 @@ function PaneTabBar({
   darkThemePalette,
 }: PaneTabBarProps) {
   const { t } = useI18n();
+  const unreadTargets = useNotificationInboxStore(state => state.unreadTargets);
+  const unreadCounts = useMemo(() => getUnreadCountsBySession(unreadTargets, sessions), [unreadTargets, sessions]);
   const workspanEnabled = useSettingsStore((s) => s.workspanEnabled);
   const { setNodeRef, isOver } = useDroppable({ id: `${PANE_DROP_PREFIX}${pane.id}` });
   const tabMenuTheme = getTerminalTheme(terminalThemeName, resolvedTheme, lightThemePalette, darkThemePalette);
@@ -1557,6 +1571,7 @@ function PaneTabBar({
               isActive={session.id === activeSessionId}
               isEditing={editingSessionId === session.id}
               notification={tabNotifications[session.id] ?? "none"}
+              unreadCount={unreadCounts.get(session.id) ?? 0}
               vendor={inferSessionVendor(session, projectById.get(session.projectId!))}
               cliToolIcon={inferSessionCliToolIcon(session, projectById.get(session.projectId!))}
               worktree={session.worktreeId ? worktreeById.get(session.worktreeId) ?? null : null}
@@ -1620,6 +1635,9 @@ function PaneTabBar({
                   })()}
                   <ContextMenuItem onSelect={onNewTab}>{t("terminal.toolbar.newTerminal")}</ContextMenuItem>
                   <ContextMenuItem onSelect={() => onDuplicateSession(session)}>{t("terminal.tab.duplicate")}</ContextMenuItem>
+                  <ContextMenuItem onSelect={() => window.setTimeout(() => useWorktreeContinuationStore.getState().open(session.id), 0)}>
+                    {t("worktree.continue.menu")}
+                  </ContextMenuItem>
                   {terminalBackgroundEnabled && terminalBackgroundImagePath && (
                     hiddenBackgroundSessionIds.has(session.id) ? (
                       <ContextMenuItem onSelect={() => onShowBackground(session.id)}>{t("terminal.tab.showBackground")}</ContextMenuItem>
@@ -1883,6 +1901,11 @@ function PaneLeafView({
   const activePaneSession = effectivePaneActiveSessionId
     ? paneSessions.find((session) => session.id === effectivePaneActiveSessionId) ?? null
     : null;
+  useNotificationInboxAutoRead(
+    effectivePaneActiveSessionId,
+    isLayoutVisible && !historyActive,
+    isAppFocused && effectivePaneActiveSessionId === activeSessionId,
+  );
   const paneMarker = resolveTerminalPaneMarker({
     isLayoutVisible: isLayoutVisible && !historyActive,
     isSplitLayout: allPanes.length > 1,
@@ -1957,6 +1980,8 @@ function PaneLeafView({
           <div
             key={session.id}
             className="absolute inset-0"
+            data-terminal-session-id={session.id}
+            data-terminal-visible={isLayoutVisible && !historyActive && session.id === effectivePaneActiveSessionId ? "true" : "false"}
             style={{ display: session.id === effectivePaneActiveSessionId ? "block" : "none" }}
           >
             {session.kind === "file-editor" ? (
@@ -2665,13 +2690,17 @@ export function TerminalTabs({
     [scopedSessionIds, sessions]
   );
   const allPanes = activeWorkspanLayout?.panes ?? [];
+  const activeWorkspanPaneId = activeWorkspanLayout?.workspan.activePaneId ?? null;
   const activeFullscreenPaneId = useMemo(() => {
-    if (!fullscreenPaneId) return null;
+    // Session activation can originate outside this component (quick jump,
+    // Sidebar, keyboard shortcuts, or an existing editor). Never keep the
+    // newly active pane hidden behind a different pane's fullscreen view.
+    if (!fullscreenPaneId || fullscreenPaneId !== activeWorkspanPaneId) return null;
     const pane = allPanes.find((item) => item.id === fullscreenPaneId);
     if (!pane) return null;
     if (scopedSessionIds && !pane.sessionIds.some((sessionId) => scopedSessionIds.has(sessionId))) return null;
     return fullscreenPaneId;
-  }, [allPanes, fullscreenPaneId, scopedSessionIds]);
+  }, [activeWorkspanPaneId, allPanes, fullscreenPaneId, scopedSessionIds]);
   const preferredScopedSessionId = useMemo(() => {
     if (!scopedSessionIds) return null;
     if (activeSessionId && scopedSessionIds.has(activeSessionId)) return activeSessionId;
@@ -3035,7 +3064,8 @@ export function TerminalTabs({
         await openWindowsTerminal([{ title, cwd: newTerminalContext.cwd, shell: newTerminalContext.shell, startupCmd }]);
       } else {
         await createSession(newTerminalContext.projectId, newTerminalContext.cwd, title, startupCmd,
-          newTerminalContext.envVars, newTerminalContext.shell, undefined, newTerminalContext.worktreeId, newTerminalContext.sshHostId);
+          newTerminalContext.envVars, newTerminalContext.shell, undefined, newTerminalContext.worktreeId, newTerminalContext.sshHostId,
+          undefined, undefined, undefined, newTerminalContext.workspace);
       }
       closeHistory();
       setActiveWorkspaceTab("terminal");
@@ -3147,6 +3177,7 @@ export function TerminalTabs({
       session.shell ?? undefined,
       undefined,
       session.worktreeId,
+      session.sshHostId, undefined, undefined, undefined, session.workspace,
     ).then(() => {
       closeHistory();
       setActiveWorkspaceTab("terminal");
@@ -4287,6 +4318,7 @@ export function TerminalTabs({
         worktree={finishTarget?.worktree ?? null}
         onClose={() => setFinishTarget(null)}
       />
+      <WorktreeContinuationDialog onContinued={() => { closeHistory(); setActiveWorkspaceTab("terminal"); }} />
       <ConfirmDialog
         open={!!discardTarget}
         title={t("worktree.discard.title", { name: discardTarget?.worktree.name ?? "" })}

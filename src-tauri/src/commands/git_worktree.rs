@@ -640,6 +640,78 @@ fn conflict_files(project_path: &Path) -> Vec<String> {
     }
 }
 
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct GitDiscoveredWorktree {
+    pub path: String,
+    pub branch: String,
+    pub head: String,
+    pub missing: bool,
+}
+
+// NUL porcelain keeps spaces, newlines and non-ASCII paths intact. Never use
+// status/fetch/prune here: discovery only reads Git's worktree registrations.
+fn parse_discovered_worktrees(output: &str) -> Vec<GitDiscoveredWorktree> {
+    output
+        .split("\0\0")
+        .filter_map(|record| {
+            let mut entry = GitDiscoveredWorktree {
+                path: String::new(),
+                branch: String::new(),
+                head: String::new(),
+                missing: false,
+            };
+            for field in record.split('\0') {
+                if field == "bare" {
+                    return None;
+                }
+                if let Some(path) = field.strip_prefix("worktree ") {
+                    entry.path = path.to_string();
+                }
+                if let Some(branch) = field.strip_prefix("branch refs/heads/") {
+                    entry.branch = branch.to_string();
+                }
+                if let Some(head) = field.strip_prefix("HEAD ") {
+                    entry.head = head.to_string();
+                }
+                if field == "prunable" || field.starts_with("prunable ") {
+                    entry.missing = true;
+                }
+            }
+            (!entry.path.is_empty()).then_some(entry)
+        })
+        .collect()
+}
+
+fn discover_git_worktrees(project_path: &str) -> Result<Vec<GitDiscoveredWorktree>, String> {
+    let repo = open_main_repo(project_path)?;
+    let root = repo.workdir().ok_or("bare_repository_unsupported")?;
+    let output = run_git_raw(root, ["worktree", "list", "--porcelain", "-z"])?;
+    if !output.success {
+        return Err(format!("git_failed: {}", output.combined()));
+    }
+    let root_key = normalize_path_for_compare(root);
+    Ok(parse_discovered_worktrees(&output.stdout)
+        .into_iter()
+        .filter_map(|mut entry| {
+            let path = local_path_from_input(&entry.path);
+            if normalize_path_for_compare(&path) == root_key {
+                return None;
+            }
+            entry.path = path_to_git_arg(&path);
+            entry.missing |= !path.is_dir();
+            Some(entry)
+        })
+        .collect())
+}
+
+#[tauri::command]
+pub async fn git_worktree_list(project_path: String) -> Result<Vec<GitDiscoveredWorktree>, String> {
+    tokio::task::spawn_blocking(move || discover_git_worktrees(&project_path))
+        .await
+        .map_err(|e| format!("task_failed: {e}"))?
+}
+
 #[tauri::command]
 pub async fn git_worktree_validate(project_path: String) -> Result<bool, String> {
     tokio::task::spawn_blocking(move || {
@@ -881,6 +953,78 @@ mod tests {
     use std::fs;
     use std::io;
     use std::path::{Path, PathBuf};
+
+    #[test]
+    fn discovery_parses_nul_paths_detached_locked_and_prunable_entries() {
+        let entries = super::parse_discovered_worktrees(
+            "worktree /repo/bare\0bare\0\0worktree /trees/中文 with\nnewline\0HEAD abc123\0branch refs/heads/codex/task\0locked keep\0\0worktree /trees/detached\0HEAD def456\0detached\0\0worktree /trees/gone\0HEAD aaaa\0prunable gitdir missing\0\0",
+        );
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[0].path, "/trees/中文 with\nnewline");
+        assert_eq!(entries[0].branch, "codex/task");
+        assert!(!entries[0].missing);
+        assert_eq!(entries[1].head, "def456");
+        assert!(entries[1].branch.is_empty());
+        assert!(entries[2].missing);
+    }
+
+    #[test]
+    fn discovery_reads_external_worktrees_from_main_or_linked_checkout_without_mutation() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("repo");
+        let repo = git2::Repository::init(&root).unwrap();
+        let tree_id = repo.index().unwrap().write_tree().unwrap();
+        let tree = repo.find_tree(tree_id).unwrap();
+        let signature = git2::Signature::now("Test", "test@example.invalid").unwrap();
+        repo.commit(Some("HEAD"), &signature, &signature, "fixture", &tree, &[])
+            .unwrap();
+        let external = temp.path().join("external with spaces");
+        let detached = temp.path().join("detached");
+        super::run_git_checked(
+            &root,
+            [
+                "worktree",
+                "add",
+                "-b",
+                "codex/external",
+                external.to_str().unwrap(),
+            ],
+        )
+        .unwrap();
+        super::run_git_checked(&root, ["worktree", "lock", external.to_str().unwrap()]).unwrap();
+        super::run_git_checked(
+            &root,
+            ["worktree", "add", "--detach", detached.to_str().unwrap()],
+        )
+        .unwrap();
+        let before = super::run_git_raw(&root, ["worktree", "list", "--porcelain", "-z"])
+            .unwrap()
+            .stdout;
+        let status = super::run_git_checked(&root, ["status", "--porcelain"]).unwrap();
+        let entries = super::discover_git_worktrees(root.to_str().unwrap()).unwrap();
+        assert_eq!(entries.len(), 2);
+        assert!(entries
+            .iter()
+            .any(|entry| entry.branch == "codex/external" && !entry.missing));
+        assert!(entries
+            .iter()
+            .any(|entry| entry.branch.is_empty() && !entry.head.is_empty()));
+        let linked_entries = super::discover_git_worktrees(external.to_str().unwrap()).unwrap();
+        assert_eq!(linked_entries.len(), 2);
+        assert!(linked_entries
+            .iter()
+            .all(|entry| entry.branch != "codex/external"));
+        assert_eq!(
+            before,
+            super::run_git_raw(&root, ["worktree", "list", "--porcelain", "-z"])
+                .unwrap()
+                .stdout
+        );
+        assert_eq!(
+            status,
+            super::run_git_checked(&root, ["status", "--porcelain"]).unwrap()
+        );
+    }
 
     #[test]
     fn validates_task_names() {

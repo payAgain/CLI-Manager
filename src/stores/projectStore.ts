@@ -6,12 +6,14 @@ import { useSettingsStore } from "./settingsStore";
 import { logWarn } from "../lib/logger";
 import { defaultShellForOs, getOsPlatform, normalizeShellForOs, normalizeShellKey } from "../lib/shell";
 import { validateSshToolConfigRoot } from "../lib/sshToolIntegration";
+import { discoverWorktrees } from "../lib/worktreeDiscovery";
 import type {
   Project, CreateProjectInput, UpdateProjectInput,
   Group, CreateGroupInput, TreeNode, WorktreeRecord,
 } from "../lib/types";
 
 let inflightFetchAll: Promise<void> | null = null;
+let inflightWorktreeRefresh: Promise<void> | null = null;
 
 interface ProjectStore {
   projects: Project[];
@@ -23,6 +25,7 @@ interface ProjectStore {
   projectHealth: Record<string, boolean>;
   setSearchQuery: (q: string) => void;
   fetchAll: (reason?: ProjectFetchReason) => Promise<void>;
+  refreshWorktrees: () => Promise<void>;
   fetchProjects: () => Promise<void>;
   fetchGroups: () => Promise<void>;
   refreshProjectDiagnostics: () => Promise<void>;
@@ -160,11 +163,12 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
       try {
         const policy = resolveProjectFetchPolicy(reason);
         const db = await getDb();
-        const [groups, projects, worktrees] = await Promise.all([
+        const [groups, projects, managedWorktrees] = await Promise.all([
           db.select<Group[]>("SELECT * FROM groups ORDER BY sort_order, name"),
           db.select<Project[]>("SELECT * FROM projects ORDER BY sort_order, name"),
           selectWorktreesOrEmpty(db),
         ]);
+        const worktrees = await discoverWorktrees(projects, managedWorktrees, reason === "interactive");
         // Path health check
         let projectHealth = get().projectHealth;
         if (policy.includePathHealth && projects.length > 0) {
@@ -185,6 +189,22 @@ export const useProjectStore = create<ProjectStore>((set, get) => ({
       }
     })();
     return inflightFetchAll;
+  },
+
+  refreshWorktrees: async () => {
+    if (inflightFetchAll) return inflightFetchAll;
+    if (inflightWorktreeRefresh) return inflightWorktreeRefresh;
+    inflightWorktreeRefresh = (async () => {
+      const { projects, worktrees } = get();
+      try {
+        const next = await discoverWorktrees(projects, worktrees);
+        // A project edit/removal or a managed worktree update owns its newer
+        // snapshot; a late focus refresh must not resurrect the old location.
+        if (get().projects !== projects || get().worktrees !== worktrees || inflightFetchAll) return;
+        set({ worktrees: next, tree: buildTree(get().groups, projects, get().searchQuery, next) });
+      } finally { inflightWorktreeRefresh = null; }
+    })();
+    return inflightWorktreeRefresh;
   },
 
   refreshProjectDiagnostics: async () => {

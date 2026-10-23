@@ -11,6 +11,7 @@ import { DEFAULT_DIFF_ROOT_STYLE, TERMINAL_DIFF_ROOT_STYLE } from "./theme";
 import { stepReviewNavigation, type GitDiffNavigationDirection } from "./reviewNavigation";
 import type { GitDiffDataSource, GitDiffReviewContext, GitDiffTarget } from "./types";
 import { useGitDiffController } from "./useGitDiffController";
+import { GitDiffApprovalBar } from "./GitDiffApprovalBar";
 
 export interface GitDiffViewerProps {
   target: GitDiffTarget;
@@ -141,6 +142,15 @@ export function GitDiffViewer({
           onClose={onClose}
         />
       )}
+      {review?.approvalKey && dataSource.kind === "live" && <GitDiffApprovalBar
+        approvalKey={review.approvalKey}
+        target={target}
+        dataSource={dataSource}
+        controller={controller}
+        exact={!diffOptions || diffOptions.whitespace === "exact"}
+        onNextPending={review.onNextPending}
+        onApproved={review.onApproved}
+      />}
       <GitDiffContent
         controller={controller}
         fallbackEditorTheme={viewerThemeTone === "dark" ? "vs-dark" : "vs"}

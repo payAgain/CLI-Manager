@@ -9,7 +9,7 @@ export type CodexLaunchSessionSelection =
   | { kind: "last" }
   | { kind: "interactive" };
 
-function tokenizeCliArgs(cliArgs: string): CliArgToken[] {
+export function tokenizeCliArgs(cliArgs: string): CliArgToken[] {
   const tokens: CliArgToken[] = [];
   let index = 0;
 

@@ -54,6 +54,21 @@ const CLIENT_OUTPUT_LOW_WATERMARK: usize = 5_000;
 const CLIENT_OUTPUT_QUEUE_MAX_BYTES: usize = 2 * 1024 * 1024;
 const CLIENT_CONTROL_QUEUE_MAX_FRAMES: usize = 256;
 
+/// A durable duplicate is not proof of delivery: a previous process may have
+/// committed and stopped before updating runtime state or broadcasting the Hook.
+/// Transport-local receipt caches suppress normal retries after this completes;
+/// after a crash, delivery is deliberately at least once while the DB stays unique.
+fn deliver_durable_hook(
+    mut value: serde_json::Value,
+    persist: impl FnOnce(&serde_json::Value) -> Result<bool, String>,
+    deliver: impl FnOnce(serde_json::Value),
+) -> Result<(), String> {
+    let _inserted = persist(&value)?;
+    value["inboxDurable"] = serde_json::Value::Bool(true);
+    deliver(value);
+    Ok(())
+}
+
 struct ReplayFrame {
     cols: u16,
     rows: u16,
@@ -759,9 +774,9 @@ impl DaemonHost {
         }
     }
 
-    pub(crate) fn accept_remote_hook_event(&self, value: serde_json::Value) {
+    pub(crate) fn accept_remote_hook_event(&self, value: serde_json::Value) -> Result<(), String> {
         let Some(tab_id) = value.get("tabId").and_then(serde_json::Value::as_str) else {
-            return;
+            return Ok(());
         };
         let project_name = self.get_session(tab_id).and_then(|session| {
             session.lock().ok().and_then(|entry| {
@@ -783,13 +798,13 @@ impl DaemonHost {
         });
         let Some(project_name) = project_name else {
             log::warn!("rejected remote Hook event with an unknown SSH session binding");
-            return;
+            return Ok(());
         };
         let payload = match remote_hook_payload_from_spool(&value) {
             Ok(payload) => payload,
             Err(error) => {
                 log::warn!("rejected invalid remote Hook event: {error}");
-                return;
+                return Ok(());
             }
         }
         .with_remote_project_name(project_name);
@@ -799,8 +814,11 @@ impl DaemonHost {
             .ok()
             .and_then(|sink| sink.as_ref().cloned());
         if let Some(sink) = sink {
-            sink(payload);
+            sink(payload)?;
+        } else {
+            return Err("notification_hook_sink_unavailable".into());
         }
+        Ok(())
     }
 
     #[cfg(test)]
@@ -810,7 +828,7 @@ impl DaemonHost {
         cwd: Option<String>,
         shell: Option<String>,
     ) -> Result<(), &'static str> {
-        self.reserve_session_with_launch(session_id, cwd, shell, None)
+        self.reserve_session_with_launch(session_id, cwd, shell, None, None)
     }
 
     fn reserve_session_with_launch(
@@ -819,6 +837,7 @@ impl DaemonHost {
         cwd: Option<String>,
         shell: Option<String>,
         ssh_launch: Option<&SshLaunchPlan>,
+        workspace: Option<serde_json::Value>,
     ) -> Result<(), &'static str> {
         let mut sessions = self
             .sessions
@@ -834,6 +853,7 @@ impl DaemonHost {
             session_id.to_string(),
             Arc::new(Mutex::new(SessionEntry {
                 meta: SessionMeta {
+                    workspace,
                     session_id: session_id.to_string(),
                     root_pid: None,
                     root_started_at: None,
@@ -988,16 +1008,41 @@ impl DaemonHost {
         {
             return true;
         }
-        let Some(session_id) = payload.get("tabId").and_then(|v| v.as_str()) else {
-            return true;
-        };
-        let Some(session) = self.get_session(session_id) else {
+        let Some(session_id) = payload.get("tabId").and_then(|v| v.as_str()).map(str::to_owned) else {
             return true;
         };
         // Hook helpers wait for this response, so their ancestry remains observable.
         self.refresh_agents();
         let Ok(tracker) = self.agent_tracker.lock() else {
             return false;
+        };
+        let session = if let Some(session) = self.get_session(&session_id) {
+            session
+        } else {
+            // Missing/inherited launch variables must not turn a shared cwd into
+            // PTY ownership. Recover only the unique live Agent ancestor.
+            let Some(pid) = payload.get("hookProcessId").and_then(|v| v.as_u64())
+                .and_then(|pid| u32::try_from(pid).ok()) else {
+                return true;
+            };
+            let source = payload.get("source").and_then(|v| v.as_str());
+            let sessions = self.sessions.lock().map(|sessions| {
+                sessions.values().cloned().collect::<Vec<_>>()
+            }).unwrap_or_default();
+            let owners = sessions.into_iter().filter_map(|session| {
+                let entry = session.lock().ok()?;
+                let agent = entry.meta.agent_detection.as_ref()?.agent.as_ref()?;
+                if !entry.meta.alive || entry.meta.environment_type.as_deref() == Some("ssh")
+                    || source != Some(agent.tool.as_str()) || !tracker.belongs_to(pid, agent.pid) {
+                    return None;
+                }
+                let id = entry.meta.session_id.clone();
+                drop(entry);
+                Some((id, session))
+            }).collect::<Vec<_>>();
+            let [(id, session)] = owners.as_slice() else { return true };
+            payload["tabId"] = serde_json::json!(id);
+            Arc::clone(session)
         };
         let Ok(entry) = session.lock() else {
             return false;
@@ -1691,22 +1736,23 @@ impl DaemonServer {
         let dispatcher = DispatcherHandle::start("daemon");
         let hook_sink: HookPayloadSink = Arc::new(move |payload| {
             let Ok(mut value) = serde_json::to_value(&payload) else {
-                return;
+                return Ok(());
             };
             if !hook_host.correlate_agent_hook(&mut value) {
-                return;
+                return Ok(());
             }
-            // 仅当没有已连接的前端客户端时（app 已彻底退到后台，例如托盘退出后
-            // 转入后台继续执行）才拉起 app 处理审批或回答。app 正在运行时，事件会通过
-            // 下方 broadcast_hook 送达前端，由前端决定是否通知/切换，绝不在此
-            // 抢占前台——否则用户在其他应用里工作时会被 PermissionRequest（含
-            // Codex 改代码时的误报）强制切回 CLI-Manager。
-            if hook_host.client_count() == 0 {
-                maybe_activate_app_for_hook(&payload);
-            }
-            dispatcher.try_enqueue(payload.to_notification_job());
-            hook_host.update_task_status_from_hook(&value);
-            hook_host.broadcast_hook(value);
+            deliver_durable_hook(value, crate::commands::notification_inbox::record_hook, |value| {
+                // 仅当没有已连接的前端客户端时才拉起 app 处理审批或回答。
+                // app 正在运行时交给前端决定通知/切换，绝不抢占前台。
+                if hook_host.client_count() == 0 {
+                    let target_tab_id = value.get("tabId").and_then(|id| id.as_str())
+                        .unwrap_or_else(|| payload.tab_id());
+                    maybe_activate_app_for_hook(&payload, target_tab_id);
+                }
+                dispatcher.try_enqueue(payload.to_notification_job());
+                hook_host.update_task_status_from_hook(&value);
+                hook_host.broadcast_hook(value);
+            })
         });
         server.host.set_hook_sink(Arc::clone(&hook_sink));
         spawn_hook_listener(hook_listener, token, hook_sink);
@@ -2381,6 +2427,8 @@ impl DaemonServer {
             cwd.clone(),
             shell.clone(),
             ssh_launch.as_ref(),
+            env_vars.as_ref().and_then(|env| env.get("CLI_MANAGER_WORKSPACE"))
+                .and_then(|value| serde_json::from_str(value).ok()),
         ) {
             return err_frame(id, message);
         }
@@ -2493,7 +2541,7 @@ fn read_line_bounded(reader: &mut BufReader<TcpStream>) -> Option<String> {
     }
 }
 
-fn maybe_activate_app_for_hook(payload: &crate::claude_hook::ClaudeHookPayload) {
+fn maybe_activate_app_for_hook(payload: &crate::claude_hook::ClaudeHookPayload, target_tab_id: &str) {
     if !payload.requires_user_response() {
         return;
     }
@@ -2514,7 +2562,7 @@ fn maybe_activate_app_for_hook(payload: &crate::claude_hook::ClaudeHookPayload) 
         return;
     }
     let mut command = Command::new(app_exe);
-    command.args(["--restore-background-session", payload.tab_id()]);
+    command.args(["--restore-background-session", target_tab_id]);
     #[cfg(target_os = "windows")]
     {
         use std::os::windows::process::CommandExt;
@@ -2539,6 +2587,7 @@ mod tests {
     fn test_session(session_id: &str, buffer: SessionBuffer, next_sequence: u64) -> SharedSession {
         Arc::new(Mutex::new(SessionEntry {
             meta: SessionMeta {
+                workspace: None,
                 session_id: session_id.to_string(),
                 root_pid: None,
                 root_started_at: None,
@@ -2599,16 +2648,47 @@ mod tests {
     }
 
     #[test]
+    fn durable_hook_retry_after_commit_still_updates_runtime_and_broadcasts() {
+        let host = DaemonHost::new();
+        host.reserve_session("durable-retry", None, None).unwrap();
+        let value = serde_json::json!({ "tabId": "durable-retry", "source": "codex", "event": "Stop" });
+        // false means the original process committed the row before it stopped.
+        deliver_durable_hook(value, |_| Ok(false), |value| {
+            host.update_task_status_from_hook(&value);
+            host.broadcast_hook(value);
+        }).unwrap();
+        assert_eq!(host.get_session("durable-retry").unwrap().lock().unwrap().meta.task_status.as_deref(), Some("done"));
+        let cached = host.hook_cache.lock().unwrap();
+        assert_eq!(cached.len(), 1);
+        assert_eq!(cached[0].get("inboxDurable").and_then(serde_json::Value::as_bool), Some(true));
+    }
+
+    #[test]
+    fn failed_hook_commit_does_not_broadcast_or_acknowledge() {
+        let host = DaemonHost::new();
+        host.reserve_session("durable-failure", None, None).unwrap();
+        let result = deliver_durable_hook(
+            serde_json::json!({ "tabId": "durable-failure", "event": "Stop" }),
+            |_| Err("disk unavailable".into()),
+            |value| { host.update_task_status_from_hook(&value); host.broadcast_hook(value); },
+        );
+        assert_eq!(result.unwrap_err(), "disk unavailable");
+        assert_eq!(host.hook_cache.lock().unwrap().len(), 0);
+        assert!(host.get_session("durable-failure").unwrap().lock().unwrap().meta.task_status.is_none());
+    }
+
+    #[test]
     fn remote_hook_binding_injects_sidebar_project_for_claude_and_codex() {
         for (index, source) in ["claude", "codex"].into_iter().enumerate() {
             let host = DaemonHost::new();
             let tab_id = format!("tab-{index}");
             let launch = remote_hook_launch(source);
-            host.reserve_session_with_launch(&tab_id, None, None, Some(&launch))
+            host.reserve_session_with_launch(&tab_id, None, None, Some(&launch), None)
                 .unwrap();
             let (sender, receiver) = std::sync::mpsc::channel();
             host.set_hook_sink(Arc::new(move |payload| {
                 sender.send(payload.to_notification_job()).unwrap();
+                Ok(())
             }));
 
             host.accept_remote_hook_event(serde_json::json!({
@@ -2626,7 +2706,7 @@ mod tests {
                 "sessionId": format!("session-{index}"),
                 "remoteCwd": launch.remote_path,
                 "occurredAt": 1,
-            }));
+            })).unwrap();
 
             let job = receiver.try_recv().unwrap();
             assert_eq!(job.source, source);
@@ -3050,6 +3130,28 @@ mod tests {
     }
 
     #[test]
+    fn workspace_binding_survives_metadata_round_trip_independently_of_cwd() {
+        let host = DaemonHost::new();
+        let workspace = serde_json::json!({
+            "id": "main:repo", "projectId": "repo", "path": "/repo", "environmentType": "local"
+        });
+        host.reserve_session_with_launch("bound", Some("/elsewhere".into()), None, None, Some(workspace.clone())).unwrap();
+        let session = host.get_session("bound").unwrap();
+        let meta = session.lock().unwrap().meta.clone();
+        let round_trip: SessionMeta = serde_json::from_value(serde_json::to_value(meta).unwrap()).unwrap();
+        assert_eq!(round_trip.workspace, Some(workspace));
+        assert_eq!(round_trip.cwd.as_deref(), Some("/elsewhere"));
+        host.reserve_session_with_launch("unscoped", None, None, None, Some(serde_json::Value::Null)).unwrap();
+        let unscoped = host.get_session("unscoped").unwrap();
+        assert!(serde_json::to_value(&unscoped.lock().unwrap().meta).unwrap().get("workspace").unwrap().is_null());
+        let unscoped_round_trip: SessionMeta = serde_json::from_value(serde_json::to_value(&unscoped.lock().unwrap().meta).unwrap()).unwrap();
+        assert_eq!(unscoped_round_trip.workspace, Some(serde_json::Value::Null));
+        host.reserve_session("legacy", None, None).unwrap();
+        let legacy = host.get_session("legacy").unwrap();
+        assert!(serde_json::to_value(&legacy.lock().unwrap().meta).unwrap().get("workspace").is_none());
+    }
+
+    #[test]
     fn session_reservation_is_atomic_for_duplicate_ids() {
         let host = Arc::new(DaemonHost::new());
         let barrier = Arc::new(std::sync::Barrier::new(2));
@@ -3247,6 +3349,19 @@ mod tests {
             .write("two", &format!("exec {}/codex\r", dir.display()))
             .unwrap();
         let replaced_shell = wait("two", Some("codex"));
+        let second_agent = replaced_shell.agent_detection.as_ref().unwrap().agent.as_ref().unwrap();
+        let mut external = serde_json::json!({
+            "tabId":"external:codex:outside", "sessionId":"outside", "source":"codex",
+            "event":"Stop", "cwd":dir, "hookProcessId":std::process::id(),
+        });
+        assert!(host.correlate_agent_hook(&mut external));
+        assert_eq!(external["tabId"], "external:codex:outside",
+            "unrelated same-directory Hook must remain outside every PTY");
+        assert!(external.get("agentRunId").is_none());
+        external["hookProcessId"] = serde_json::json!(second_agent.pid);
+        assert!(host.correlate_agent_hook(&mut external));
+        assert_eq!(external["tabId"], "two", "only the owning PTY can be recovered");
+        assert_eq!(external["agentRunId"], second_agent.run_id);
         assert_eq!(
             replaced_shell.root_pid,
             replaced_shell.agent_detection.unwrap().agent.map(|a| a.pid)

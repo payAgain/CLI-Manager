@@ -303,8 +303,11 @@ impl PtyManager {
     /// 既进 Linux shell，又能在 claude 经 interop 调 Windows 端 cli-manager.exe 时回传。
     /// 合并已有 WSLENV（注入批次或进程环境），不覆盖用户原有项。
     fn apply_wsl_env_forwarding(env_vars: &mut HashMap<String, String>) {
-        const FORWARD: [&str; 4] = [
+        const FORWARD: [&str; 7] = [
             "CLI_MANAGER_TAB_ID",
+            "CLI_MANAGER_PROJECT_ID",
+            "CLI_MANAGER_WORKTREE_ID",
+            "CLI_MANAGER_WORKSPACE",
             "CLI_MANAGER_NOTIFY_PORT",
             "CLI_MANAGER_NOTIFY_TOKEN",
             "COLORTERM",

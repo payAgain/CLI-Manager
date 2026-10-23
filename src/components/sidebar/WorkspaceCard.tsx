@@ -23,7 +23,7 @@ interface WorkspaceCardProps {
   onContextMenu: (e: MouseEvent) => void;
 }
 
-export function WorkspaceCard({ project, terminals, name, branch, selected, primary, compact, invalid, onSelect, onOpen, onContextMenu }: WorkspaceCardProps) {
+export function WorkspaceCard({ project, worktree, terminals, name, branch, selected, primary, compact, invalid, onSelect, onOpen, onContextMenu }: WorkspaceCardProps) {
   const { t } = useI18n();
   const statuses = useTerminalStore((s) => s.sessionStatuses);
   const notifications = useTerminalStore((s) => s.tabNotifications);
@@ -35,6 +35,9 @@ export function WorkspaceCard({ project, terminals, name, branch, selected, prim
   const launchAction = projectTerminalLaunchLabel(project);
   const launchLabel = t(launchAction);
   const branchValue = branch.trim();
+  const workspacePath = worktree?.path || (project.environment_type === "ssh" ? project.remote_path : project.path);
+  const workspaceHint = [name, branchValue && branchValue !== name.trim() ? branchValue : "",
+    t("workspace.directory", { path: workspacePath })].filter(Boolean).join("\n");
   const metadataIsPath = /^(?:[a-z]:[\\/]|[\\/]|~[\\/])/i.test(branchValue);
   const showMetadata = !compact && Boolean(branchValue) && branchValue !== name.trim() && !metadataIsPath;
   const showPrimaryBadge = primary && name.trim() !== t("workspace.primaryName");
@@ -47,7 +50,7 @@ export function WorkspaceCard({ project, terminals, name, branch, selected, prim
       onClick={onSelect} onDoubleClick={onOpen} onContextMenu={onContextMenu}>
       <div className="ui-workspace-card-title">
         <span className="ui-workspace-kind-icon" aria-hidden="true">{primary ? <GitBranch size={13} strokeWidth={1.6} /> : <WorktreeIcon className="h-3.5 w-3.5" />}</span>
-        <span className="ui-workspace-card-identity" title={branchValue && branchValue !== name.trim() ? `${name}\n${branch}` : name}>
+        <span className="ui-workspace-card-identity" title={workspaceHint}>
           <span className="ui-workspace-card-name">{name}</span>
           {showMetadata && <span className="ui-workspace-card-branch">{branch}</span>}
         </span>
@@ -71,12 +74,16 @@ export function WorkspaceCard({ project, terminals, name, branch, selected, prim
           const icon = resolveCliToolIconKey(agent);
           const agentName = agent === "pi" ? "Pi" : CLI_TOOL_DESCRIPTORS.find(tool => tool.id === agent)?.label ?? agent;
           const title = session.title.trim() || t("workspace.unnamedTerminal");
+          const terminalHint = [agentName ? `${title} · ${agentName}` : title,
+            t("workspace.terminalOwner", { name }), t("workspace.directory", { path: workspacePath }),
+            session.cwd || session.remotePath ? t("workspace.terminalDirectory", { path: session.cwd || session.remotePath || "" }) : "",
+            t("workspace.terminalBindingHint")].filter(Boolean).join("\n");
           return <button key={session.id} type="button" className="ui-workspace-session ui-focus-ring"
           data-active={session.id === activeId} data-notification={notifications[session.id] ?? "none"}
           aria-current={session.id === activeId ? "true" : undefined}
           onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") e.stopPropagation(); }}
           onDoubleClick={(e) => e.stopPropagation()}
-          onClick={(e) => { e.stopPropagation(); onSelect(e); setActive(session.id); }} title={agentName ? `${title} · ${agentName}` : title}>
+          onClick={(e) => { e.stopPropagation(); onSelect(e); setActive(session.id); }} title={terminalHint}>
           <span className="ui-workspace-session-agent" title={agentName || undefined} aria-hidden="true">
             {icon ? <CliToolIcon icon={icon} size={14} /> : <Terminal size={14} strokeWidth={1.5} />}
           </span>

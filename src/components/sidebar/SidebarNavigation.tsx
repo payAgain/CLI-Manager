@@ -1,8 +1,10 @@
 import { toast } from "sonner";
-import { History, Layers, TerminalSquare } from "lucide-react";
+import { History, Layers, Search, TerminalSquare } from "lucide-react";
 import { useHistoryStore } from "../../stores/historyStore";
 import { useI18n } from "../../lib/i18n";
 import type { SettingsTab } from "../SettingsModal";
+import { useCommandPaletteStore } from "../CommandPalette";
+import { useSettingsStore } from "../../stores/settingsStore";
 
 export function SidebarNavigation({ collapsed, allTerminalsActive, onOpenSettings, onShowTerminals }: {
   collapsed: boolean;
@@ -11,6 +13,7 @@ export function SidebarNavigation({ collapsed, allTerminalsActive, onOpenSetting
   onShowTerminals: () => void;
 }) {
   const { t } = useI18n();
+  const shortcut = useSettingsStore(s => s.keyboardShortcuts.commandPalette);
   const historyOpen = useHistoryStore((s) => s.isOpen);
   const openHistory = () => {
     void useHistoryStore.getState().openHistory()
@@ -18,6 +21,12 @@ export function SidebarNavigation({ collapsed, allTerminalsActive, onOpenSetting
   };
   return (
     <nav className="ui-sidebar-navigation" data-collapsed={collapsed} aria-label={t("workspace.label")}>
+      <button type="button" className="ui-sidebar-nav-item ui-focus-ring"
+        aria-label={t("palette.quickJump")} title={`${t("palette.quickJump")}${shortcut ? ` (${shortcut})` : ""}`}
+        onClick={() => useCommandPaletteStore.getState().toggle()}>
+        <Search size={14} aria-hidden="true" />{!collapsed && <><span>{t("palette.quickJump")}</span>
+          {shortcut && <span className="ml-auto shrink-0 text-[11px] text-[var(--text-muted)]">{shortcut}</span>}</>}
+      </button>
       <button type="button" className="ui-sidebar-nav-item ui-focus-ring" data-active={allTerminalsActive && !historyOpen}
         aria-current={allTerminalsActive && !historyOpen ? "page" : undefined}
         aria-label={t("sidebar.tree.allTerminals")} title={t("sidebar.tree.allTerminals")} onClick={() => {

@@ -109,7 +109,56 @@ fn cli_options_match_git_flags() {
     );
     assert!(ignore_all.iter().any(|value| value == "--ignore-all-space"));
     assert!(ignore_all.iter().any(|value| value == "--unified=20"));
-    assert!(!ignore_all.iter().any(|value| value == "HEAD"));
+    assert!(ignore_all.iter().any(|value| value == "HEAD"));
+}
+
+#[test]
+fn staged_addition_reviews_full_working_file_including_after_stage_edits() {
+    let temp = init_repo("initial\n");
+    let repo = Repository::open(temp.path()).unwrap();
+    fs::write(temp.path().join("new.txt"), "staged\n").unwrap();
+    let mut index = repo.index().unwrap();
+    index.add_path(std::path::Path::new("new.txt")).unwrap();
+    index.write().unwrap();
+    for content in ["staged\n", "updated\n"] {
+        fs::write(temp.path().join("new.txt"), content).unwrap();
+        let payload = get_file_diff(temp.path().to_str().unwrap(), "new.txt", "A", GitDiffOptions::default()).unwrap();
+        assert!(payload.content.contains(&format!("+{content}")));
+        assert!(payload.content.contains("--- /dev/null"));
+        assert!(!payload.can_revert_hunks);
+        assert_eq!(payload.review_version, 1);
+    }
+}
+
+#[test]
+fn staged_addition_in_unborn_repository_is_reviewable() {
+    let temp = tempfile::tempdir().unwrap();
+    let repo = Repository::init(temp.path()).unwrap();
+    fs::write(temp.path().join("new.txt"), "first\n").unwrap();
+    let mut index = repo.index().unwrap();
+    index.add_path(std::path::Path::new("new.txt")).unwrap();
+    index.write().unwrap();
+    let payload = get_file_diff(temp.path().to_str().unwrap(), "new.txt", "A", GitDiffOptions::default()).unwrap();
+    assert!(payload.content.contains("+first\n"));
+    assert!(!payload.can_revert_hunks);
+}
+
+#[test]
+fn untracked_review_preserves_crlf_and_missing_final_newline() {
+    let temp = init_repo("initial\n");
+    fs::write(temp.path().join("new.txt"), "first\r\nsecond").unwrap();
+    let payload = get_file_diff(temp.path().to_str().unwrap(), "new.txt", "U", GitDiffOptions::default()).unwrap();
+    assert!(payload.content.contains("+first\r\n+second\n\\ No newline at end of file\n"));
+    assert_eq!(payload.content_fingerprint.as_ref().map(String::len), Some(64));
+}
+
+#[cfg(unix)]
+#[test]
+fn untracked_symlink_is_not_reviewed_as_target_file_content() {
+    let temp = init_repo("initial\n");
+    std::os::unix::fs::symlink("tracked.txt", temp.path().join("link.txt")).unwrap();
+    let error = get_file_diff(temp.path().to_str().unwrap(), "link.txt", "U", GitDiffOptions::default()).unwrap_err();
+    assert_eq!(error, "git_diff_symlink_unsupported");
 }
 
 #[test]

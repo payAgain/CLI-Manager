@@ -8,6 +8,10 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Sidebar } from "./components/sidebar";
 import { TerminalTabs } from "./components/TerminalTabs";
 import { CommandPalette } from "./components/CommandPalette";
+import { NotificationInboxPanel } from "./components/NotificationInbox";
+import { useNotificationInbox } from "./hooks/useNotificationInbox";
+import { useWorktreeDiscovery } from "./hooks/useWorktreeDiscovery";
+import { activateNotificationTarget } from "./lib/notificationInboxNavigation";
 import type { SettingsTab } from "./components/SettingsModal";
 const loadSettingsModal = () => import("./components/SettingsModal").then((module) => ({ default: module.SettingsModal }));
 const SettingsModal = lazy(loadSettingsModal);
@@ -335,6 +339,8 @@ function runDeferredStartupTasks(): void {
 }
 
 function App() {
+  useNotificationInbox();
+  useWorktreeDiscovery();
   const { language, t } = useI18n();
   const loadSettings = useSettingsStore((s) => s.load);
   const settingsLoaded = useSettingsStore((s) => s.loaded);
@@ -455,30 +461,30 @@ function App() {
     return startRuntimeDiagnostics();
   }, [debugMode]);
 
-  const handleToggleTerminalFullscreen = useCallback(() => {
+  const handleToggleTerminalFullscreen = useCallback(async () => {
     const nextFullscreen = !terminalFullscreen;
     if (!IN_TAURI) {
       setTerminalFullscreen(nextFullscreen);
-      return;
+      return true;
     }
 
-    void (async () => {
-      try {
-        const appWindow = getCurrentWindow();
-        if (nextFullscreen) {
-          const alreadyMaximized = await appWindow.isMaximized();
-          terminalFullscreenMaximizedRef.current = !alreadyMaximized;
-          if (!alreadyMaximized) await appWindow.toggleMaximize();
-        } else if (terminalFullscreenMaximizedRef.current) {
-          await appWindow.unmaximize();
-          terminalFullscreenMaximizedRef.current = false;
-        }
-        setTerminalFullscreen(nextFullscreen);
-      } catch (err) {
-        toast.error(nextFullscreen ? t("notifications.fullscreen.enterFailed") : t("notifications.fullscreen.exitFailed"), { description: String(err) });
-        logWarn("Failed to toggle terminal fullscreen", err);
+    try {
+      const appWindow = getCurrentWindow();
+      if (nextFullscreen) {
+        const alreadyMaximized = await appWindow.isMaximized();
+        terminalFullscreenMaximizedRef.current = !alreadyMaximized;
+        if (!alreadyMaximized) await appWindow.toggleMaximize();
+      } else if (terminalFullscreenMaximizedRef.current) {
+        await appWindow.unmaximize();
+        terminalFullscreenMaximizedRef.current = false;
       }
-    })();
+      setTerminalFullscreen(nextFullscreen);
+      return true;
+    } catch (err) {
+      toast.error(nextFullscreen ? t("notifications.fullscreen.enterFailed") : t("notifications.fullscreen.exitFailed"), { description: String(err) });
+      logWarn("Failed to toggle terminal fullscreen", err);
+      return false;
+    }
   }, [terminalFullscreen, t]);
 
   const handleToggleSidebarShortcut = useCallback(() => {
@@ -1420,7 +1426,8 @@ function App() {
         </div>
       )}
       <WorkspaceStatusBar terminalScope={projectScopedTerminalViewEnabled ? terminalScope : undefined} />
-      <CommandPalette />
+      <CommandPalette prepareCreate={async () => !terminalFullscreen || await handleToggleTerminalFullscreen()} />
+      <NotificationInboxPanel onOpenTarget={activateNotificationTarget} />
       <ExternalSessionSyncDialog />
       <Suspense fallback={null}>
         {settingsEverOpened && (

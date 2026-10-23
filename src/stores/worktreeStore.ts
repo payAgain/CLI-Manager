@@ -1,7 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { create } from "zustand";
 import { getDb } from "../lib/db";
-import { logWarn } from "../lib/logger";
 import { hasConfiguredCliTool } from "../lib/projectCli";
 import { projectSupportsCapability } from "../lib/projectCapabilities";
 import type { Project, TerminalSession, WorktreeIsolationStrategy, WorktreeRecord } from "../lib/types";
@@ -35,6 +34,7 @@ export type WorktreeIsolationDecision = "prompt" | "auto" | "none";
 export const WORKTREE_CREATE_IN_PROGRESS = "worktree_create_in_progress";
 
 const inFlightWorktreeCreates = new Set<string>();
+let followingProjectWorktrees = false;
 
 const RESERVED_WINDOWS_WORKTREE_NAMES = new Set([
   "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
@@ -71,19 +71,6 @@ interface WorktreeStore {
 
 function normalizeStrategy(value: string | null | undefined): WorktreeIsolationStrategy {
   return value === "prompt" || value === "autoParallel" || value === "always" ? value : "disabled";
-}
-
-function isMissingWorktreesTableError(err: unknown): boolean {
-  const message = String(err).toLowerCase();
-  if (!message.includes("no such table: worktrees")) return false;
-  return !(
-    message.includes("migration") ||
-    message.includes("checksum") ||
-    message.includes("previously applied") ||
-    message.includes("modified") ||
-    message.includes("initialization") ||
-    message.includes("init failed")
-  );
 }
 
 function hasSameProjectTerminalSession(projectId: string, sessions: TerminalSession[]): boolean {
@@ -172,19 +159,23 @@ export const useWorktreeStore = create<WorktreeStore>((set, get) => ({
   validatingProjects: {},
 
   loadWorktrees: async () => {
-    const db = await getDb();
-    try {
-      const worktrees = await db.select<WorktreeRecord[]>("SELECT * FROM worktrees ORDER BY created_at DESC");
-      set({ worktrees, loaded: true });
-    } catch (err) {
-      if (!isMissingWorktreesTableError(err)) throw err;
-      logWarn("worktree table is not available yet", err);
-      set({ worktrees: [], loaded: true });
+    // Subscribe after initialization, avoiding the existing project/settings/
+    // terminal store import cycle. Both stores then share one Git snapshot.
+    if (!followingProjectWorktrees) {
+      followingProjectWorktrees = true;
+      useProjectStore.subscribe((state, previous) => {
+        if (state.worktrees !== previous.worktrees) {
+          set({ worktrees: state.worktrees, loaded: state.loaded });
+        }
+      });
     }
+    if (!useProjectStore.getState().loaded) await useProjectStore.getState().fetchAll("startup");
+    else await useProjectStore.getState().refreshWorktrees();
+    set({ worktrees: useProjectStore.getState().worktrees, loaded: true });
   },
 
   markMissingWorktrees: async () => {
-    const active = get().worktrees.filter((worktree) => worktree.status === "active");
+    const active = get().worktrees.filter((worktree) => worktree.status === "active" && worktree.origin !== "discovered");
     if (active.length === 0) return;
     let exists: boolean[];
     try {
@@ -289,6 +280,7 @@ export const useWorktreeStore = create<WorktreeStore>((set, get) => ({
   },
 
   mergeWorktree: async (worktree) => {
+    if (worktree.origin === "discovered") throw new Error("external_worktree_read_only");
     const project = useProjectStore.getState().projects.find((item) => item.id === worktree.project_id);
     if (!project) throw new Error("project_not_found");
     return invoke<GitWorktreeMergeResult>("git_worktree_merge", {
@@ -299,6 +291,7 @@ export const useWorktreeStore = create<WorktreeStore>((set, get) => ({
   },
 
   removeWorktree: async (worktree, deleteBranch) => {
+    if (worktree.origin === "discovered") throw new Error("external_worktree_read_only");
     const project = useProjectStore.getState().projects.find((item) => item.id === worktree.project_id);
     if (!project) throw new Error("project_not_found");
     const terminalStore = useTerminalStore.getState();
