@@ -1743,7 +1743,9 @@ impl DaemonServer {
                 // 仅当没有已连接的前端客户端时才拉起 app 处理审批或回答。
                 // app 正在运行时交给前端决定通知/切换，绝不抢占前台。
                 if hook_host.client_count() == 0 {
-                    maybe_activate_app_for_hook(&payload);
+                    let target_tab_id = value.get("tabId").and_then(|id| id.as_str())
+                        .unwrap_or_else(|| payload.tab_id());
+                    maybe_activate_app_for_hook(&payload, target_tab_id);
                 }
                 dispatcher.try_enqueue(payload.to_notification_job());
                 hook_host.update_task_status_from_hook(&value);
@@ -2535,7 +2537,7 @@ fn read_line_bounded(reader: &mut BufReader<TcpStream>) -> Option<String> {
     }
 }
 
-fn maybe_activate_app_for_hook(payload: &crate::claude_hook::ClaudeHookPayload) {
+fn maybe_activate_app_for_hook(payload: &crate::claude_hook::ClaudeHookPayload, target_tab_id: &str) {
     if !payload.requires_user_response() {
         return;
     }
@@ -2556,7 +2558,7 @@ fn maybe_activate_app_for_hook(payload: &crate::claude_hook::ClaudeHookPayload) 
         return;
     }
     let mut command = Command::new(app_exe);
-    command.args(["--restore-background-session", payload.tab_id()]);
+    command.args(["--restore-background-session", target_tab_id]);
     #[cfg(target_os = "windows")]
     {
         use std::os::windows::process::CommandExt;
