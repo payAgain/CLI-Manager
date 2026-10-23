@@ -220,6 +220,15 @@ fn is_title_noise_block_tag(tag: &str) -> bool {
             | "instructions"
             | "session-context"
             | "system-reminder"
+            | "local-command-caveat"
+            | "local-command-stdout"
+            | "local-command-stderr"
+            | "command-name"
+            | "command-message"
+            | "command-args"
+            | "bash-input"
+            | "bash-stdout"
+            | "bash-stderr"
             | "workflow"
     )
 }
@@ -256,6 +265,44 @@ fn is_injected_prompt_title_line(line: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::title_candidate_from_text;
+
+    #[test]
+    fn claude_local_command_records_are_not_session_titles() {
+        for tag in [
+            "local-command-caveat",
+            "local-command-stdout",
+            "local-command-stderr",
+            "command-name",
+            "command-message",
+            "command-args",
+            "bash-input",
+            "bash-stdout",
+            "bash-stderr",
+        ] {
+            let block = format!("<{tag}>internal command content</{tag}>");
+            assert_eq!(title_candidate_from_text(&block), None, "{tag}");
+            for separator in ["", "\n", "\n\n"] {
+                assert_eq!(
+                    title_candidate_from_text(&format!("{block}{separator}修复会话标题")),
+                    Some("修复会话标题".into()),
+                    "{tag}"
+                );
+            }
+            assert_eq!(
+                title_candidate_from_text(&format!("<{tag}>unfinished command")),
+                None,
+                "{tag}"
+            );
+        }
+        assert_eq!(
+            title_candidate_from_text("<command-name>/model</command-name>\n<command-message>model</command-message>\n<command-args>opus</command-args>"),
+            None
+        );
+        assert_eq!(
+            title_candidate_from_text("解释 <local-command-caveat> 的用途"),
+            Some("解释 <local-command-caveat> 的用途".into())
+        );
+    }
 
     #[test]
     fn desktop_open_page_context_is_not_a_session_title() {

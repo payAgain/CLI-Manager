@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 
-pub const PARSER_VERSION: u32 = 3;
+pub const PARSER_VERSION: u32 = 4;
 pub const INDEX_SCHEMA_VERSION: u32 = 2;
 const SEARCH_TEXT_LIMIT: usize = 16 * 1024;
 const TITLE_LIMIT: usize = 240;
@@ -218,8 +218,11 @@ pub fn apply_jsonl_line(
     if let Some((role, content)) = parse_message(&value) {
         state.message_count = state.message_count.saturating_add(1);
         append_search_text(&mut state.search_text, &content);
-        let candidate =
-            title::title_candidate_from_text(&content).map(|text| excerpt(&text, TITLE_LIMIT));
+        let candidate = if value.get("isMeta").and_then(Value::as_bool) == Some(true) {
+            None
+        } else {
+            title::title_candidate_from_text(&content).map(|text| excerpt(&text, TITLE_LIMIT))
+        };
         if state.first_message.is_none() {
             state.first_message = candidate.clone();
         }
@@ -799,6 +802,51 @@ mod tests {
         );
         assert_eq!(state.message_count, 2);
         assert!(state.search_text.contains(context));
+    }
+
+    #[test]
+    fn claude_title_ignores_commands_and_meta_but_keeps_them_in_history() {
+        let contents = [
+            "<local-command-caveat>The command below was run locally.</local-command-caveat>",
+            "<command-name>/model</command-name><command-message>model</command-message><command-args>opus</command-args>",
+            "<local-command-stdout>Set model to opus</local-command-stdout>",
+            "Skill instructions loaded by the CLI",
+            "修复 Claude 的会话名称展示",
+        ];
+        let lines: Vec<String> = contents
+            .iter()
+            .enumerate()
+            .map(|(index, content)| {
+                serde_json::json!({
+                    "type": "user",
+                    "isMeta": index == 3,
+                    "message": {"role": "user", "content": [{"type": "text", "text": content}]}
+                })
+                .to_string()
+            })
+            .collect();
+        let commands_only = parse_detail(
+            "claude",
+            "instance",
+            "artifact",
+            "fallback",
+            "project",
+            1,
+            2,
+            3,
+            lines[..4].to_vec(),
+        );
+        assert_eq!(commands_only.summary.title, "fallback");
+
+        let detail = parse_detail(
+            "claude", "instance", "artifact", "fallback", "project", 1, 2, 3, lines,
+        );
+        assert_eq!(detail.summary.title, contents[4]);
+        assert_eq!(detail.summary.message_count, contents.len());
+        assert_eq!(detail.messages.len(), contents.len());
+        for (message, content) in detail.messages.iter().zip(contents) {
+            assert_eq!(message.content, content);
+        }
     }
 
     #[test]

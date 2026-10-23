@@ -40,7 +40,7 @@ const OOM_HISTORY_DETAIL_WARN_BYTES: usize = 10 * 1024 * 1024;
 
 const OOM_HISTORY_MESSAGES_WARN_COUNT: usize = 2_000;
 const CODEX_HISTORY_INDEX_TEXT_MAX_CHARS: usize = 4_000;
-const HISTORY_INDEX_V2_ADAPTER_PARSER_VERSION: i64 = 4;
+const HISTORY_INDEX_V2_ADAPTER_PARSER_VERSION: i64 = 5;
 const HISTORY_INDEX_V2_ADAPTER_MODEL_VERSION: i64 = 1;
 const OPENCODE_SESSION_LOCATOR_MARKER: &str = "#session=";
 const DAEMON_READY_WAIT_ATTEMPTS: usize = 60;
@@ -2455,7 +2455,7 @@ pub(crate) fn invalidate_history_caches() {
 // 内存索引（HISTORY_SESSION_INDEX）每次 App 启动后为空，首次读取历史索引必须
 // 全量解析所有 JSONL（可能上千个），冷启动耗时不可接受。这里把 per-file 解析结果落盘，
 // 重启后载入作为 build_history_index 的 previous，按 fingerprint 仅重解析变更文件。
-const HISTORY_INDEX_CACHE_VERSION: u32 = 13;
+const HISTORY_INDEX_CACHE_VERSION: u32 = 14;
 const HISTORY_INDEX_CACHE_FILE: &str = "history-index-cache.json";
 
 static HISTORY_INDEX_CACHE_DIR: OnceLock<PathBuf> = OnceLock::new();
@@ -6944,7 +6944,11 @@ fn scan_session_inner(
 
         if let Some(mut msg) = parse_message(&value) {
             message_count += 1;
-            let title_candidate = message_title_candidate(&msg);
+            let title_candidate = if value.get("isMeta").and_then(Value::as_bool) == Some(true) {
+                None
+            } else {
+                message_title_candidate(&msg)
+            };
             if first_message.is_none() {
                 first_message = title_candidate.clone();
             }
@@ -13217,6 +13221,45 @@ mod tests {
         let computed = scan_session_computation(&file, 1, 2);
 
         assert_eq!(computed.session_id, "claude-session");
+    }
+
+    #[test]
+    fn build_session_computation_title_skips_claude_commands_and_meta_without_changing_messages() {
+        let temp_dir = TempDir::new().unwrap();
+        let file = temp_dir.path().join("claude-session.jsonl");
+        let contents = [
+            "<local-command-caveat>The command below was run locally.</local-command-caveat>",
+            "<command-name>/model</command-name>\n<command-message>model</command-message>\n<command-args>opus</command-args>",
+            "<local-command-stdout>Set model to opus</local-command-stdout>",
+            "Skill instructions loaded by the CLI",
+            "修复 Claude 的会话名称展示",
+        ];
+        let lines: Vec<String> = contents
+            .iter()
+            .enumerate()
+            .map(|(index, content)| {
+                serde_json::json!({
+                    "type": "user",
+                    "isMeta": index == 3,
+                    "message": {"role": "user", "content": [{"type": "text", "text": content}]}
+                })
+                .to_string()
+            })
+            .collect();
+        write_text(&file, &lines[..4].join("\n"));
+        let commands_only = scan_session_computation(&file, 1, 2);
+        assert_eq!(commands_only.title, commands_only.session_id);
+
+        write_text(&file, &lines.join("\n"));
+        let summary = scan_session_computation(&file, 1, 2);
+        let (detail_summary, messages) = scan_session_computation_with_messages(&file, 1, 2);
+        assert_eq!(summary.title, contents[4]);
+        assert_eq!(detail_summary.title, contents[4]);
+        assert_eq!(detail_summary.message_count, contents.len());
+        assert_eq!(messages.len(), contents.len());
+        for (message, content) in messages.iter().zip(contents) {
+            assert_eq!(message.content, content);
+        }
     }
 
     #[test]
