@@ -2,15 +2,16 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { pathToFileURL } from "node:url";
+import { dirname, join, resolve } from "node:path";
+import { createRequire } from "node:module";
+import { runInNewContext } from "node:vm";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import ts from "typescript";
 
 const tempDir = mkdtempSync(join(tmpdir(), "cli-manager-session-rebind-"));
 process.on("exit", () => rmSync(tempDir, { recursive: true, force: true }));
 
 const source = readFileSync(new URL("../src/stores/terminalCliSession.ts", import.meta.url), "utf8");
-const terminalStoreSource = readFileSync(new URL("../src/stores/terminalStore.ts", import.meta.url), "utf8");
 const output = ts.transpileModule(source, {
   compilerOptions: { module: ts.ModuleKind.ES2022, target: ts.ScriptTarget.ES2022 },
 }).outputText;
@@ -42,24 +43,29 @@ test("内存已绑定但持久化快照缺失 ID 时仍需自愈保存", () => {
   assert.equal(resolveCliSessionRebind(undefined, incomingId).changed, true);
 });
 
-test("Hook 对账持久化快照后，恢复时优先使用明确 ID", () => {
-  const storeFile = ts.createSourceFile("terminalStore.ts", terminalStoreSource, ts.ScriptTarget.Latest, true);
-  function findHookBody(node) {
-    if (ts.isPropertyAssignment(node) && ts.isIdentifier(node.name)
-      && node.name.text === "handleCliHookEvent" && ts.isArrowFunction(node.initializer)) {
-      return node.initializer.body.getText(storeFile);
-    }
-    return ts.forEachChild(node, findHookBody);
+test("Hook 对账持久化快照后，恢复时优先使用明确 ID", async () => {
+  const require = createRequire(import.meta.url), cache = new Map();
+  function load(path) {
+    if (cache.has(path)) return cache.get(path);
+    const exports = {}; cache.set(path, exports);
+    const compiled = ts.transpileModule(readFileSync(path, "utf8"), {
+      compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+    }).outputText;
+    runInNewContext(compiled, {
+      exports, Date,
+      require: name => name.startsWith(".") ? load(resolve(dirname(path), `${name}.ts`)) : require(name),
+    });
+    return exports;
   }
-  const hookBody = findHookBody(storeFile);
-  assert.equal(typeof hookBody, "string");
-
-  assert.match(
-    hookBody,
-    /const persistedSession = useSessionStore\.getState\(\)\.sessions\.find[\s\S]*?const persistedCliSessionRebind = resolveCliSessionRebind\(persistedSession\?\.cliSessionId, cliSessionId\);[\s\S]*?if \(persistedCliSessionRebind\.changed \|\| boundSession\?\.environmentType === "ssh"\) \{\s*void queueSshSessionPersistence\(get\(\)\.sessions\)/,
-  );
-  assert.match(
-    terminalStoreSource,
-    /const conversation = resolveTerminalConversationRestore\(ps, restoreProject\);/,
-  );
+  const { persistChangedHookIdentity } = load(fileURLToPath(new URL("../src/lib/terminalHookIdentity.ts", import.meta.url)));
+  const { resolveTerminalConversationRestore } = load(fileURLToPath(new URL("../src/lib/terminalConversationRestore.ts", import.meta.url)));
+  for (const environmentType of ["local", "wsl", "ssh"]) {
+    const current = { id: environmentType, cwd: "/repo", title: "codex", cliTool: "codex", isAgentSession: true, cliSessionId: "current-session", environmentType };
+    let saved = { ...current, cliSessionId: undefined }, writes = 0;
+    await persistChangedHookIdentity(current, saved, async () => { saved = { ...current }; writes++; });
+    assert.equal(writes, 1);
+    assert.equal(resolveTerminalConversationRestore(saved).cliSessionId, "current-session");
+    await persistChangedHookIdentity(current, saved, async () => { writes++; });
+    assert.equal(writes, 1);
+  }
 });

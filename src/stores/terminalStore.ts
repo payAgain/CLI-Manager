@@ -1,3 +1,4 @@
+import { observeHookIdentity, isDetectionOlderThanHook, persistChangedHookIdentity, retainHookIdentities } from "../lib/terminalHookIdentity";
 import { inferWslDistroFromCwd, resolveSubagentConfigDir } from "../lib/subagentBrowser";
 import { isSubagentActivityHook, isSubagentCompletionHook } from "../lib/subagentHookRouting";
 import { useCommandHistoryStore } from "./commandHistoryStore";
@@ -28,6 +29,12 @@ import { isDirectCodexStartupCommand, normalizeDirectCodexStartupCommand, resolv
 import { getTerminalTheme } from "../lib/terminalThemes";
 import { prepareTerminalScrollback } from "../lib/terminalScrollback";
 import { resolveTerminalConversationRestore } from "../lib/terminalConversationRestore";
+import {
+  clearTerminalOutputActivity,
+  getTerminalOutputActivity,
+  recordTerminalOutputActivity,
+  retainTerminalOutputActivity,
+} from "../lib/terminalOutputActivity";
 import { normalizeHexColor } from "../lib/terminalColor";
 import { useSettingsStore } from "./settingsStore";
 import { useSessionStore } from "./sessionStore";
@@ -148,7 +155,6 @@ export interface ShellRuntimePayload {
 }
 
 const SHELL_RUNTIME_MONITORING_ENV = "CLI_MANAGER_SHELL_RUNTIME_MONITORING";
-const PTY_OUTPUT_ACTIVITY_UPDATE_INTERVAL_MS = 1000;
 const TAB_STATUS_PRIORITY: Record<TabNotificationState, number> = {
   none: 0,
   done: 1,
@@ -274,7 +280,6 @@ interface TerminalStore {
   tabNotifications: Record<string, TabNotificationState>;
   tabStatuses: Record<string, TabStatusSources>;
   tabStatusDetails: Record<string, TabStatusDetails>;
-  ptyOutputActivityAt: Record<string, number>;
   splits: Record<string, SplitState>;
   hiddenBackgroundSessionIds: Set<string>;
   /** 仅运行态：XTerm 输出监听就绪后才可执行 daemon attach。 */
@@ -1556,17 +1561,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     return true;
   },
 
-  recordPtyOutputActivity: (sessionId) => {
-    const now = Date.now();
-    const previous = get().ptyOutputActivityAt[sessionId] ?? 0;
-    if (now - previous < PTY_OUTPUT_ACTIVITY_UPDATE_INTERVAL_MS) return;
-    set((state) => ({
-      ptyOutputActivityAt: {
-        ...state.ptyOutputActivityAt,
-        [sessionId]: now,
-      },
-    }));
-  },
+  recordPtyOutputActivity: (sessionId) => recordTerminalOutputActivity(sessionId),
 
   createSession: async (projectId, cwd, title, startupCmd, envVars, shell, paneId, worktreeId, sshHostId, cliSessionId, remoteHistoryConsumerId, remoteHistorySourceInstanceId) => {
     const os = await getOsPlatform();
@@ -1711,7 +1706,6 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     const newNotifications = { ...state.tabNotifications };
     const newTabStatuses = { ...state.tabStatuses };
     const newTabStatusDetails = { ...state.tabStatusDetails };
-    const newPtyOutputActivityAt = { ...state.ptyOutputActivityAt };
     const newSubagentTranscripts = { ...state.subagentTranscripts };
     delete newSubagentTranscripts[id];
     const owner = findWorkspanBySession(state.workspans, id);
@@ -1729,7 +1723,6 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     delete newNotifications[id];
     delete newTabStatuses[id];
     delete newTabStatusDetails[id];
-    delete newPtyOutputActivityAt[id];
 
     // Drop in-memory background overrides for closed sessions (R8).
     const prevHidden = state.hiddenBackgroundSessionIds;
@@ -1751,7 +1744,6 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
       tabNotifications: newNotifications,
       tabStatuses: newTabStatuses,
       tabStatusDetails: newTabStatusDetails,
-      ptyOutputActivityAt: newPtyOutputActivityAt,
       subagentTranscripts: newSubagentTranscripts,
       splits: {},
       daemonAttachPendingSessionIds: newDaemonAttachPending,
@@ -1924,7 +1916,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
             paths: [session.cwd, worktree?.path, project?.path].filter((path): path is string => Boolean(path?.trim())),
             cliSessionId: session.cliSessionId,
             environmentType: session.environmentType,
-            outputActivityAt: state.ptyOutputActivityAt[session.id],
+            outputActivityAt: getTerminalOutputActivity(session.id),
           };
         }),
     });
@@ -1951,8 +1943,11 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     if (payload.agentDetection) receiveAgentDetection(tabId, payload.agentDetection);
     const target = get().sessions.find((session) => session.id === tabId);
     if (target && !acceptsAgentHook(target, payload)) return null;
+    // Independent Hook processes may arrive out of order. Metadata has its own
+    // watermark because child events do not update the parent task status.
+    const metadataCurrent = observeHookIdentity(tabId, payload.timestamp);
     // Hooks also establish identity when the process is in a WSL/SSH guest.
-    if (target) {
+    if (target && metadataCurrent) {
       const next = applyHookAgentIdentity(target, payload);
       if (next !== target) {
         clearHookRunningTimeout(tabId);
@@ -1968,53 +1963,34 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     const remoteTranscriptRef = payload.environmentType === "ssh" ? payload.remoteTranscriptRef?.trim() : undefined;
     const cliReasoningEffort = payload.reasoningEffort?.trim();
     let boundNewCliSessionId = false;
-    if ((cliSessionId || remoteTranscriptRef || cliReasoningEffort) && get().sessions.some((session) => session.id === tabId)) {
-      set((state) => ({
-        sessions: state.sessions.map((session) => {
-          if (session.id !== tabId) return session;
-          const cliSessionRebind = resolveCliSessionRebind(session.cliSessionId, cliSessionId);
-          if (cliSessionRebind.changed) {
-            boundNewCliSessionId = true;
-          }
-          return {
+    if (metadataCurrent && (cliSessionId || remoteTranscriptRef || cliReasoningEffort)) {
+      const session = get().sessions.find((item) => item.id === tabId);
+      if (session) {
+        const cliSessionRebind = resolveCliSessionRebind(session.cliSessionId, cliSessionId);
+        boundNewCliSessionId = cliSessionRebind.changed;
+        const transcriptChanged = Boolean(remoteTranscriptRef && session.remoteTranscriptRef !== remoteTranscriptRef);
+        const reasoningChanged = Boolean(cliReasoningEffort && session.cliReasoningEffort !== cliReasoningEffort);
+        if (cliSessionRebind.changed || transcriptChanged || reasoningChanged) {
+          const next = {
             ...session,
             ...(cliSessionRebind.changed ? { cliSessionId: cliSessionRebind.cliSessionId } : {}),
-            runtimeAgentObservedAtMs: Math.max(session.runtimeAgentObservedAtMs ?? 0, Date.now()),
-            ...(remoteTranscriptRef && session.remoteTranscriptRef !== remoteTranscriptRef
-              ? { remoteTranscriptRef }
-              : {}),
-            ...(cliReasoningEffort && session.cliReasoningEffort !== cliReasoningEffort
-              ? { cliReasoningEffort }
-              : {}),
+            ...(transcriptChanged ? { remoteTranscriptRef } : {}),
+            ...(reasoningChanged ? { cliReasoningEffort } : {}),
           };
-        }),
-      }));
-      const boundSession = get().sessions.find((session) => session.id === tabId);
-      const persistedSession = useSessionStore.getState().sessions.find((session) => session.id === tabId);
-      const persistedCliSessionRebind = resolveCliSessionRebind(persistedSession?.cliSessionId, cliSessionId);
-      if (persistedCliSessionRebind.changed || boundSession?.environmentType === "ssh") {
-        void queueSshSessionPersistence(get().sessions).catch((error) => {
-          logWarn("Failed to persist CLI session identity", {
-            sessionId: tabId,
-            error,
-          });
-        });
+          set((current) => ({ sessions: current.sessions.map((item) => item.id === tabId ? next : item) }));
+        }
       }
+    }
+    const boundSession = get().sessions.find((session) => session.id === tabId);
+    if (boundSession && metadataCurrent && (boundSession !== target || cliSessionId || remoteTranscriptRef || cliReasoningEffort)) {
+      const persistedSession = useSessionStore.getState().sessions.find((session) => session.id === tabId);
+      void persistChangedHookIdentity(boundSession, persistedSession, () => queueSshSessionPersistence(get().sessions))
+        .catch((error) => logWarn("Failed to persist CLI session identity", { sessionId: tabId, error }));
     }
     // Child events share the parent's conversation identity, not its task state.
     if (options?.subagent) return tabId;
     const updatedAt = payload.timestamp ?? new Date().toISOString();
     const status = mapCliHookEvent(payload.event);
-    // SessionStart 绑定 id、回合结束/失败时立刻踢侧栏重拉用量，避免等 10s 轮询才「闪一下」出来。
-    if (
-      boundNewCliSessionId ||
-      payload.event === "Stop" ||
-      payload.event === "StopFailure" ||
-      payload.event === "UserPromptSubmit"
-    ) {
-      set((state) => ({ statsPanelRefreshSeq: state.statsPanelRefreshSeq + 1 }));
-    }
-    if (!status) return tabId;
     // 乱序防御：各 hook 事件由独立进程上报，到达顺序不保证；丢弃比已记录
     // 状态更旧的事件（如 Stop 之后才迟到的 UserPromptSubmit）。
     const previousAt = get().tabStatuses[tabId]?.hookUpdatedAt;
@@ -2023,22 +1999,31 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
       const existing = Date.parse(previousAt);
       if (Number.isFinite(incoming) && Number.isFinite(existing) && incoming < existing) return tabId;
     }
+    // SessionStart 绑定 id、回合结束/失败时立刻踢侧栏重拉用量，避免等 10s 轮询才「闪一下」出来。
+    if (
+      boundNewCliSessionId ||
+      payload.event === "Stop" ||
+      payload.event === "StopFailure" ||
+      payload.event === "UserPromptSubmit"
+    ) {
+      set((state) => ({
+        statsPanelRefreshSeq: { ...state.statsPanelRefreshSeq, [tabId]: (state.statsPanelRefreshSeq[tabId] ?? 0) + 1 },
+      }));
+    }
+    if (!status) return tabId;
     if (status === "running") {
       scheduleHookRunningTimeout(tabId, updatedAt);
     } else {
       clearHookRunningTimeout(tabId);
     }
+    const terminalOutputStopped = status === "done" || status === "failed";
+    if (terminalOutputStopped) clearTerminalOutputActivity(tabId);
     set((state) => {
       const next = buildTabStatusUpdate(state, tabId, "hook", status, updatedAt);
-      const terminalOutputStopped = status === "done" || status === "failed";
-      const ptyOutputActivityAt = terminalOutputStopped
-        ? { ...state.ptyOutputActivityAt }
-        : null;
-      if (ptyOutputActivityAt) delete ptyOutputActivityAt[tabId];
       if (!terminalOutputStopped) return next;
 
       const tabStatus = next.tabStatuses[tabId];
-      if (!tabStatus?.shell) return { ...next, ptyOutputActivityAt: ptyOutputActivityAt! };
+      if (!tabStatus?.shell) return next;
       const resolved: TabStatusSources = { ...tabStatus };
       delete resolved.shell;
       delete resolved.shellUpdatedAt;
@@ -2046,7 +2031,6 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
         tabStatuses: { ...next.tabStatuses, [tabId]: resolved },
         tabNotifications: { ...next.tabNotifications, [tabId]: getTabStatusEntry(resolved) },
         tabStatusDetails: { ...next.tabStatusDetails, [tabId]: getTabStatusDetails(resolved) },
-        ptyOutputActivityAt: ptyOutputActivityAt!,
       };
     });
     return tabId;
@@ -2475,7 +2459,6 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     const newNotifications = { ...state.tabNotifications };
     const newTabStatuses = { ...state.tabStatuses };
     const newTabStatusDetails = { ...state.tabStatusDetails };
-    const newPtyOutputActivityAt = { ...state.ptyOutputActivityAt };
     const newSubagentTranscripts = { ...state.subagentTranscripts };
     const newHidden = new Set(state.hiddenBackgroundSessionIds);
     const newDaemonAttachPending = new Set(state.daemonAttachPendingSessionIds);
@@ -2485,7 +2468,6 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
       delete newNotifications[closedSessionId];
       delete newTabStatuses[closedSessionId];
       delete newTabStatusDetails[closedSessionId];
-      delete newPtyOutputActivityAt[closedSessionId];
       delete newSubagentTranscripts[closedSessionId];
       newHidden.delete(closedSessionId);
       newDaemonAttachPending.delete(closedSessionId);
@@ -2509,7 +2491,6 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
       tabNotifications: newNotifications,
       tabStatuses: newTabStatuses,
       tabStatusDetails: newTabStatusDetails,
-      ptyOutputActivityAt: newPtyOutputActivityAt,
       splits: {},
       hiddenBackgroundSessionIds: newHidden,
       daemonAttachPendingSessionIds: newDaemonAttachPending,
@@ -3776,13 +3757,14 @@ function receiveAgentDetection(sessionId: string, detection: AgentDetection): vo
   const state = useTerminalStore.getState();
   const session = state.sessions.find((item) => item.id === sessionId);
   if (!session || (session.kind ?? "pty") !== "pty") return;
+  if (isDetectionOlderThanHook(sessionId, detection.updatedAtMs)) return;
   const next = applyAgentDetection(session, detection);
   if (next === session) return;
   const sameRun = session.runtimeAgent?.runId === next.runtimeAgent?.runId
     || (session.runtimeAgent?.source === "hook" && session.runtimeAgent.tool === next.runtimeAgent?.tool
       && session.cliSessionId === next.cliSessionId);
   if (sameRun) {
-    useTerminalStore.setState({ sessions: state.sessions.map((item) => item.id === sessionId ? next : item), statsPanelRefreshSeq: state.statsPanelRefreshSeq + 1 });
+    useTerminalStore.setState({ sessions: state.sessions.map((item) => item.id === sessionId ? next : item), statsPanelRefreshSeq: { ...state.statsPanelRefreshSeq, [sessionId]: (state.statsPanelRefreshSeq[sessionId] ?? 0) + 1 } });
     void queueSshSessionPersistence(useTerminalStore.getState().sessions).catch((error) => {
       logWarn("Failed to persist Agent session snapshot", { sessionId, error });
     });
@@ -3794,7 +3776,7 @@ function receiveAgentDetection(sessionId: string, detection: AgentDetection): vo
     tabStatuses: { ...state.tabStatuses, [sessionId]: {} },
     tabNotifications: { ...state.tabNotifications, [sessionId]: "none" },
     tabStatusDetails: { ...state.tabStatusDetails, [sessionId]: { status: "none", updatedAt: null } },
-    statsPanelRefreshSeq: state.statsPanelRefreshSeq + 1,
+    statsPanelRefreshSeq: { ...state.statsPanelRefreshSeq, [sessionId]: (state.statsPanelRefreshSeq[sessionId] ?? 0) + 1 },
   });
   void queueSshSessionPersistence(useTerminalStore.getState().sessions).catch((error) => {
     logWarn("Failed to persist Agent identity reset", { sessionId, error });
@@ -3803,6 +3785,14 @@ function receiveAgentDetection(sessionId: string, detection: AgentDetection): vo
 terminalProcessManager.subscribeAgentDetection(receiveAgentDetection);
 useTerminalStore.subscribe((state, previous) => {
   if (state.sessions === previous.sessions) return;
+  retainTerminalOutputActivity(state.sessions);
+  retainHookIdentities(state.sessions);
+  const liveIds = new Set(state.sessions.map((session) => session.id));
+  if (Object.keys(state.statsPanelRefreshSeq).some((id) => !liveIds.has(id))) {
+    useTerminalStore.setState({ statsPanelRefreshSeq: Object.fromEntries(
+      Object.entries(state.statsPanelRefreshSeq).filter(([id]) => liveIds.has(id)),
+    ) });
+  }
   const previousIds = new Set(previous.sessions.map((session) => session.id));
   for (const session of state.sessions) {
     if (previousIds.has(session.id)) continue;

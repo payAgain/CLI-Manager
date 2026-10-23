@@ -403,8 +403,8 @@ export function TerminalStatsPanel({ activeSessionId, open, visible = true, embe
   const { canSave, saveSession, saveSessionDialog } = useSaveSessionToSidebar();
   const terminalStatsCardVisibility = useSettingsStore((state) => state.terminalStatsCardVisibility);
   const terminalStatsCardOrder = useSettingsStore((state) => state.terminalStatsCardOrder);
-  const terminalSessions = useTerminalStore((state) => state.sessions);
-  const statsPanelRefreshSeq = useTerminalStore((state) => state.statsPanelRefreshSeq);
+  const terminalSession = useTerminalStore((state) => state.sessions.find((session) => session.id === activeSessionId) ?? null);
+  const statsPanelRefreshSeq = useTerminalStore((state) => activeSessionId ? state.statsPanelRefreshSeq[activeSessionId] ?? 0 : 0);
   const projects = useProjectStore((state) => state.projects);
   const worktrees = useWorktreeStore((state) => state.worktrees);
 
@@ -421,11 +421,6 @@ export function TerminalStatsPanel({ activeSessionId, open, visible = true, embe
   const remoteHistoryContextRef = useRef<SshAgentHistoryContext | null>(null);
   const wasPanelActiveRef = useRef(false);
   const freshDetailRef = useRef(false);
-
-  const terminalSession = useMemo(
-    () => terminalSessions.find((session) => session.id === activeSessionId) ?? null,
-    [terminalSessions, activeSessionId]
-  );
 
   const project = useMemo(
     () => projects.find((item) => item.id === terminalSession?.projectId) ?? null,
