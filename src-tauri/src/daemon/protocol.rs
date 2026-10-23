@@ -232,10 +232,21 @@ pub struct AgentDetection {
     pub updated_at_ms: u64,
 }
 
+fn deserialize_workspace<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<serde_json::Value>, D::Error> {
+    // Missing = legacy; explicit null = a terminal created without a workspace.
+    serde_json::Value::deserialize(deserializer).map(Some)
+}
+
 /// daemon 会话元数据（List/Attach 应答用）。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionMeta {
+    /// Immutable workspace ownership supplied at launch, independent of shell cwd.
+    /// Missing on older daemons; JSON null explicitly denotes an unscoped terminal.
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_workspace")]
+    pub workspace: Option<serde_json::Value>,
     pub session_id: String,
     /// Read-only process identity; absent on older daemons or reserved sessions.
     #[serde(default)]

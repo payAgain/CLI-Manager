@@ -1,4 +1,4 @@
-import type { Project, TerminalSession, WorktreeRecord } from "./types";
+import type { Project, TerminalSession, WorktreeRecord, TerminalWorkspaceBinding } from "./types";
 import { parseProjectEnvVars } from "./projectEnv";
 
 export interface NewTerminalContext {
@@ -9,6 +9,7 @@ export interface NewTerminalContext {
   shell?: string;
   envVars?: Record<string, string>;
   worktreeId?: string;
+  workspace?: TerminalWorkspaceBinding | null;
   sshHostId?: string;
   remote: boolean;
 }
@@ -32,6 +33,7 @@ export function resolveNewTerminalContext(
     shell: remote ? undefined : session?.shell || project?.shell || defaultShell,
     envVars: Object.keys(envVars).length ? envVars : undefined,
     worktreeId: worktree?.id ?? session?.worktreeId,
+    workspace: session?.workspace,
     sshHostId: remote ? session?.sshHostId || project?.ssh_host_id || undefined : undefined,
     remote,
   };

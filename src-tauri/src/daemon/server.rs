@@ -828,7 +828,7 @@ impl DaemonHost {
         cwd: Option<String>,
         shell: Option<String>,
     ) -> Result<(), &'static str> {
-        self.reserve_session_with_launch(session_id, cwd, shell, None)
+        self.reserve_session_with_launch(session_id, cwd, shell, None, None)
     }
 
     fn reserve_session_with_launch(
@@ -837,6 +837,7 @@ impl DaemonHost {
         cwd: Option<String>,
         shell: Option<String>,
         ssh_launch: Option<&SshLaunchPlan>,
+        workspace: Option<serde_json::Value>,
     ) -> Result<(), &'static str> {
         let mut sessions = self
             .sessions
@@ -852,6 +853,7 @@ impl DaemonHost {
             session_id.to_string(),
             Arc::new(Mutex::new(SessionEntry {
                 meta: SessionMeta {
+                    workspace,
                     session_id: session_id.to_string(),
                     root_pid: None,
                     root_started_at: None,
@@ -2425,6 +2427,8 @@ impl DaemonServer {
             cwd.clone(),
             shell.clone(),
             ssh_launch.as_ref(),
+            env_vars.as_ref().and_then(|env| env.get("CLI_MANAGER_WORKSPACE"))
+                .and_then(|value| serde_json::from_str(value).ok()),
         ) {
             return err_frame(id, message);
         }
@@ -2583,6 +2587,7 @@ mod tests {
     fn test_session(session_id: &str, buffer: SessionBuffer, next_sequence: u64) -> SharedSession {
         Arc::new(Mutex::new(SessionEntry {
             meta: SessionMeta {
+                workspace: None,
                 session_id: session_id.to_string(),
                 root_pid: None,
                 root_started_at: None,
@@ -2678,7 +2683,7 @@ mod tests {
             let host = DaemonHost::new();
             let tab_id = format!("tab-{index}");
             let launch = remote_hook_launch(source);
-            host.reserve_session_with_launch(&tab_id, None, None, Some(&launch))
+            host.reserve_session_with_launch(&tab_id, None, None, Some(&launch), None)
                 .unwrap();
             let (sender, receiver) = std::sync::mpsc::channel();
             host.set_hook_sink(Arc::new(move |payload| {
@@ -3122,6 +3127,28 @@ mod tests {
         };
         assert_eq!(summary["cleaned_count"], 0);
         assert!(host.sessions.lock().unwrap().contains_key(session_id));
+    }
+
+    #[test]
+    fn workspace_binding_survives_metadata_round_trip_independently_of_cwd() {
+        let host = DaemonHost::new();
+        let workspace = serde_json::json!({
+            "id": "main:repo", "projectId": "repo", "path": "/repo", "environmentType": "local"
+        });
+        host.reserve_session_with_launch("bound", Some("/elsewhere".into()), None, None, Some(workspace.clone())).unwrap();
+        let session = host.get_session("bound").unwrap();
+        let meta = session.lock().unwrap().meta.clone();
+        let round_trip: SessionMeta = serde_json::from_value(serde_json::to_value(meta).unwrap()).unwrap();
+        assert_eq!(round_trip.workspace, Some(workspace));
+        assert_eq!(round_trip.cwd.as_deref(), Some("/elsewhere"));
+        host.reserve_session_with_launch("unscoped", None, None, None, Some(serde_json::Value::Null)).unwrap();
+        let unscoped = host.get_session("unscoped").unwrap();
+        assert!(serde_json::to_value(&unscoped.lock().unwrap().meta).unwrap().get("workspace").unwrap().is_null());
+        let unscoped_round_trip: SessionMeta = serde_json::from_value(serde_json::to_value(&unscoped.lock().unwrap().meta).unwrap()).unwrap();
+        assert_eq!(unscoped_round_trip.workspace, Some(serde_json::Value::Null));
+        host.reserve_session("legacy", None, None).unwrap();
+        let legacy = host.get_session("legacy").unwrap();
+        assert!(serde_json::to_value(&legacy.lock().unwrap().meta).unwrap().get("workspace").is_none());
     }
 
     #[test]

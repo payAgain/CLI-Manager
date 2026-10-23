@@ -3059,7 +3059,8 @@ export function TerminalTabs({
         await openWindowsTerminal([{ title, cwd: newTerminalContext.cwd, shell: newTerminalContext.shell, startupCmd }]);
       } else {
         await createSession(newTerminalContext.projectId, newTerminalContext.cwd, title, startupCmd,
-          newTerminalContext.envVars, newTerminalContext.shell, undefined, newTerminalContext.worktreeId, newTerminalContext.sshHostId);
+          newTerminalContext.envVars, newTerminalContext.shell, undefined, newTerminalContext.worktreeId, newTerminalContext.sshHostId,
+          undefined, undefined, undefined, newTerminalContext.workspace);
       }
       closeHistory();
       setActiveWorkspaceTab("terminal");
@@ -3171,6 +3172,7 @@ export function TerminalTabs({
       session.shell ?? undefined,
       undefined,
       session.worktreeId,
+      session.sshHostId, undefined, undefined, undefined, session.workspace,
     ).then(() => {
       closeHistory();
       setActiveWorkspaceTab("terminal");

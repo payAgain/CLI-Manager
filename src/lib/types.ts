@@ -393,12 +393,25 @@ export interface SyncedHistoryPaneSession {
   updatedAt: number;
 }
 
+/** Immutable launch ownership. cwd may change without moving this terminal. */
+export interface TerminalWorkspaceBinding {
+  id: string;
+  projectId: string;
+  /** Absent for the project's primary checkout, whose id is main:<projectId>. */
+  worktreeId?: string;
+  path: string;
+  environmentType: ProjectEnvironmentType;
+  sshHostId?: string;
+}
+
 export interface TerminalSession {
   id: string;
   /** 本次 PTY 启动时间，用于将无 Hook 的 SSH Codex 终端安全关联到远端历史。 */
   createdAtMs?: number;
   projectId?: string;
   worktreeId?: string;
+  /** undefined = legacy, null = explicitly unscoped; infer legacy ownership only once. */
+  workspace?: TerminalWorkspaceBinding | null;
   title: string;
   // 重建 PTY 必需参数
   cwd?: string;

@@ -130,3 +130,43 @@ test("open shell tabs count independently of Agent type and exclude non-PTY pane
   ], [main], []);
   assert.deepEqual(ids(index.primaryByProject.get(main.id)), ["pi-one", "pi-two", "shell"]);
 });
+
+const { bindTerminalWorkspace, terminalWorkspaceEnvironment } = load("../src/lib/terminalWorkspaceBinding.ts");
+
+test("a primary binding survives cd into another Worktree, persistence and catalog refresh", () => {
+  const tree = { id: "feature", project_id: main.id, path: "E:/trees/feature" };
+  const binding = bindTerminalWorkspace({ projectId: main.id, cwd: main.path }, [main], [tree]);
+  assert.equal(binding.workspace.id, `main:${main.id}`);
+  const session = JSON.parse(JSON.stringify(terminal("primary", { ...binding, cwd: tree.path })));
+  assert.deepEqual(ids(indexWorkspaceTerminals([session], [main], [tree]).primaryByProject.get(main.id)), ["primary"]);
+  assert.deepEqual(bindTerminalWorkspace(session, [main], [tree]), binding);
+});
+
+test("an explicit Worktree never falls into primary after removal or a directory change", () => {
+  const tree = { id: "feature", project_id: main.id, path: "E:/trees/feature" };
+  const binding = bindTerminalWorkspace({ projectId: main.id, worktreeId: tree.id, cwd: tree.path }, [main], [tree]);
+  const session = terminal("child", { ...binding, cwd: main.path });
+  const index = indexWorkspaceTerminals([session], [main], []);
+  assert.equal(index.primaryByProject.has(main.id), false);
+  assert.deepEqual(ids(index.byWorktree.get(tree.id)), ["child"]);
+  assert.equal(bindTerminalWorkspace(session, [main], []).workspace.path, tree.path);
+});
+
+test("unscoped terminals remain unscoped and cannot inherit another terminal's environment identity", () => {
+  const binding = bindTerminalWorkspace({ cwd: "/unregistered" }, [main], []);
+  const session = terminal("shell", { ...binding, cwd: main.path });
+  assert.equal(indexWorkspaceTerminals([session], [main], []).bySession.has("shell"), false);
+  const env = terminalWorkspaceEnvironment(null, { CLI_MANAGER_WORKSPACE: "old", CLI_MANAGER_WORKTREE_ID: "old", CLI_MANAGER_PROJECT_ID: "old", APP_ENV: "kept" });
+  assert.equal(env.CLI_MANAGER_WORKSPACE, "null");
+  assert.equal(env.CLI_MANAGER_WORKTREE_ID, "");
+  assert.equal(env.CLI_MANAGER_PROJECT_ID, "");
+  assert.equal(env.APP_ENV, "kept");
+});
+
+test("legacy SSH ownership is fixed to the correct host even after cd and serializes for the daemon", () => {
+  const p = project("remote", "ssh:remote", { environment_type: "ssh", ssh_host_id: "host-b", remote_path: "/srv/repo" });
+  const binding = bindTerminalWorkspace({ cwd: "/srv/repo", environmentType: "ssh", sshHostId: "host-b" }, [p], []);
+  assert.equal(binding.workspace.sshHostId, "host-b");
+  assert.equal(binding.workspace.path, "/srv/repo");
+  assert.deepEqual(JSON.parse(terminalWorkspaceEnvironment(binding.workspace).CLI_MANAGER_WORKSPACE), binding.workspace);
+});

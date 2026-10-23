@@ -95,18 +95,19 @@ const restoreCompiled = ts.transpileModule(`let restoreInProgress = false; ${lau
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
 }).outputText;
 
-async function restoreHarness(saved, projects = [], daemon = [], integration = {}, settings = {}) {
+async function restoreHarness(saved, projects = [], daemon = [], integration = {}, settings = {}, worktrees = []) {
   const persistence = sessionStore(saved);
   await persistence.api.getState().load();
   const state = {}, created = [], writes = [], timers = [], notices = [], errors = [];
   const exports = {};
   let sequence = 0;
   const setState = update => Object.assign(state, typeof update === "function" ? update(state) : update);
-  const projectState = { projects, worktrees: [] };
+  const projectState = { projects, worktrees };
   const sshState = { loaded: true, hosts: [{ id: "host", startup_script: "" }] };
   runInNewContext(restoreCompiled, {
     exports, Date, Map, Set, crypto: { randomUUID: () => `bridge-${++sequence}` },
     ...workspan, resolveTerminalConversationRestore,
+    ...load("src/lib/terminalWorkspaceBinding.ts"),
     ...load("src/lib/agentLaunchPermissions.ts"),
     ...load("src/lib/cliTools.ts"),
     useSessionStore: persistence.api,
@@ -169,7 +170,7 @@ test("project and Worktree blank-terminal actions suppress SSH Agent fallback an
   };
   for (const environment of ["local", "wsl", "ssh"]) {
     const p = project({ environment_type: environment, shell: environment === "wsl" ? "wsl" : "zsh", ssh_host_id: "host", remote_path: "/remote/repo" });
-    const h = await restoreHarness({}, [p], [], {}, { agentPermissionMode: "yolo" });
+    const h = await restoreHarness({}, [p], [], {}, { agentPermissionMode: "yolo" }, [{ id: "wt", project_id: p.id, path: "/repo/worktree", status: "active" }]);
     for (const name of ["handleNewProjectTerminal", "handleNewWorktreeTerminal"]) {
       const calls = [], exports = {};
       runInNewContext(ts.transpileModule(`exports.callback = ${findCallback(name)};`, { compilerOptions: { module: ts.ModuleKind.CommonJS } }).outputText, {

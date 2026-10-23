@@ -18,6 +18,9 @@ function load(path, dependencies = {}, names) {
   return exports;
 }
 
+const workspaceBinding = load("src/lib/terminalWorkspaceBinding.ts", {
+  ...load("src/lib/workspaceTerminals.ts", load("src/lib/terminalProject.ts")),
+});
 const { parseProjectEnvVars } = load("src/lib/projectEnv.ts");
 const { resolveNewTerminalContext: context, resolveNewTerminalCommand: command } = load("src/lib/newTerminal.ts", { parseProjectEnvVars });
 const { resolveDirectCliToolCommand } = load("src/lib/cliTools.ts");
@@ -97,10 +100,11 @@ test("SSH launch uses the selected Agent's existing Hook installation and config
     integrations: [{ host_id: host.id, source: "claude", configured_root: "/claude-host", cleanup_state: "active", hook_record_json: "{}" }],
   };
   const { resolvePtyLaunch } = load("src/stores/terminalStore.ts", {
-    useProjectStore: { getState: () => ({ projects: [remoteProject] }) },
+    useProjectStore: { getState: () => ({ projects: [remoteProject], worktrees: [] }) },
     useSettingsStore: { getState: () => ({ agentPermissionMode: "manual" }) },
     useSshHostStore: { getState: () => ({ loaded: true, hosts: [host] }) },
     useSshAgentIntegrationStore: { getState: () => integration },
+    ...workspaceBinding,
     resolveSshToolSource, resolveDirectCliToolCommand, applyAgentLaunchPermissions, resolveProjectStartupCommand,
     parseProjectEnvVars, getCurrentTerminalColors: () => ({}),
     parseStoredSshHookReport: () => ({ status: "installed", installationId: "install-a", remoteMachineId: "machine-a" }),

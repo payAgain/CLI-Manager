@@ -15,6 +15,7 @@ import type {
   SshDisconnectReason,
   SubagentTranscriptSource,
   TerminalSession,
+  TerminalWorkspaceBinding,
   TerminalScope,
 } from "../lib/types";
 import {
@@ -27,6 +28,7 @@ import { logError, logInfo, logWarn, recordCrashActivity } from "../lib/logger";
 import { isDirectCodexStartupCommand, normalizeDirectCodexStartupCommand, resolveProjectStartupCommand, withCodexLightTuiTheme } from "../lib/projectStartupCommand";
 import { getTerminalTheme } from "../lib/terminalThemes";
 import { prepareTerminalScrollback } from "../lib/terminalScrollback";
+import { bindTerminalWorkspace, terminalWorkspaceEnvironment } from "../lib/terminalWorkspaceBinding";
 import { resolveTerminalConversationRestore } from "../lib/terminalConversationRestore";
 import { normalizeHexColor } from "../lib/terminalColor";
 import { useSettingsStore } from "./settingsStore";
@@ -108,6 +110,7 @@ export type TabNotificationState = TerminalExitNotificationState;
 export type ShellRuntimeEventName = "command_started" | "command_finished" | "prompt_shown";
 
 interface DaemonSessionState {
+  workspace?: TerminalWorkspaceBinding | null;
   alive: boolean;
   cwd?: string | null;
   shell?: string | null;
@@ -240,6 +243,7 @@ export interface SplitTerminalOptions {
   envVars?: Record<string, string>;
   shell?: string;
   worktreeId?: string;
+  workspace?: TerminalWorkspaceBinding | null;
 }
 
 interface HookToolStatus {
@@ -280,7 +284,7 @@ interface TerminalStore {
   /** 仅运行态：XTerm 输出监听就绪后才可执行 daemon attach。 */
   daemonAttachPendingSessionIds: Set<string>;
   subagentTranscripts: Record<string, SubagentTranscriptContent>;
-  createSession: (projectId?: string, cwd?: string, title?: string, startupCmd?: string, envVars?: Record<string, string>, shell?: string, paneId?: string, worktreeId?: string, sshHostId?: string, cliSessionId?: string, remoteHistoryConsumerId?: string, remoteHistorySourceInstanceId?: string) => Promise<string>;
+  createSession: (projectId?: string, cwd?: string, title?: string, startupCmd?: string, envVars?: Record<string, string>, shell?: string, paneId?: string, worktreeId?: string, sshHostId?: string, cliSessionId?: string, remoteHistoryConsumerId?: string, remoteHistorySourceInstanceId?: string, workspace?: TerminalWorkspaceBinding | null) => Promise<string>;
   closeSession: (id: string) => Promise<void>;
   setActive: (id: string) => void;
   setWorkspanModeEnabled: (enabled: boolean) => void;
@@ -383,32 +387,25 @@ function resolveDaemonAttachUpdatedAt(attach: DaemonSessionState): string {
 function resolveAttachedDaemonSession(
   persisted: TerminalSession | undefined,
   attach: DaemonSessionState
-): Pick<TerminalSession, "projectId" | "worktreeId" | "title" | "cwd" | "shell" | "environmentType" | "sshHostId" | "remotePath" | "connectionState" | "disconnectReason"> {
+): Pick<TerminalSession, "projectId" | "worktreeId" | "workspace" | "title" | "cwd" | "shell" | "environmentType" | "sshHostId" | "remotePath" | "connectionState" | "disconnectReason"> {
   const projectState = useProjectStore.getState();
   const cwd = persisted?.cwd ?? attach.cwd ?? undefined;
-  const worktree = persisted?.worktreeId
-    ? projectState.worktrees.find((item) => item.id === persisted.worktreeId) ?? null
-    : findWorktreeByPath(projectState.worktrees, cwd);
-  const sshProject = attach.environmentType === "ssh"
-    ? projectState.projects.find((item) => (
-        item.environment_type === "ssh"
-        && item.ssh_host_id === attach.sshHostId
-        && item.remote_path === attach.remotePath
-      )) ?? null
-    : null;
-  const project = persisted?.projectId
-    ? projectState.projects.find((item) => item.id === persisted.projectId) ?? null
-    : worktree
-      ? projectState.projects.find((item) => item.id === worktree.project_id) ?? null
-      : sshProject ?? findProjectByPath(projectState.projects, cwd);
+  const binding = bindTerminalWorkspace({
+    ...persisted, cwd,
+    workspace: attach.workspace !== undefined ? attach.workspace : persisted?.workspace,
+    environmentType: persisted?.environmentType ?? (attach.environmentType === "ssh" ? "ssh" : attach.environmentType === "wsl" ? "wsl" : undefined),
+    sshHostId: persisted?.sshHostId ?? attach.sshHostId ?? undefined,
+    remotePath: persisted?.remotePath ?? attach.remotePath ?? undefined,
+  }, projectState.projects, projectState.worktrees);
+  const worktree = projectState.worktrees.find(item => item.id === binding.worktreeId);
+  const project = projectState.projects.find(item => item.id === binding.projectId);
   const fallbackTitle = worktree?.name || project?.name || basenameFromPath(cwd) || translateCurrent("terminal.backgroundTasks.untitled");
   return {
-    projectId: persisted?.projectId ?? project?.id,
-    worktreeId: persisted?.worktreeId ?? worktree?.id,
+    ...binding,
     title: isGenericDaemonSessionTitle(persisted?.title) ? fallbackTitle : persisted!.title,
     cwd,
     shell: persisted?.shell ?? attach.shell,
-    environmentType: persisted?.environmentType ?? (attach.environmentType === "ssh" ? "ssh" : undefined),
+    environmentType: binding.workspace?.environmentType ?? persisted?.environmentType ?? (attach.environmentType === "ssh" ? "ssh" : undefined),
     sshHostId: persisted?.sshHostId ?? attach.sshHostId ?? undefined,
     remotePath: persisted?.remotePath ?? attach.remotePath ?? undefined,
     connectionState: (persisted?.environmentType === "ssh" || attach.environmentType === "ssh")
@@ -1134,6 +1131,7 @@ export function formatManualDirectCodexInputForPty(command: string, shell?: Shel
 }
 
 export interface DetachedPtyLaunchOptions {
+  workspace?: TerminalWorkspaceBinding | null;
   projectId?: string;
   worktreeId?: string;
   sshHostId?: string;
@@ -1207,12 +1205,13 @@ interface SshLaunchPayload extends SshConnectionSpecPayload {
 }
 
 interface ResolvedPtyLaunch {
+  binding: Pick<TerminalSession, "projectId" | "worktreeId" | "workspace">;
   shell: string | null;
   startupCmd?: string;
   /** Persist the user's command, so a later mode change does not replay injected flags. */
   baseStartupCmd?: string;
   startupHandledByLaunch: boolean;
-  environmentType?: "ssh";
+  environmentType?: TerminalSession["environmentType"];
   sshHostId?: string;
   remotePath?: string;
   invokeArgs: {
@@ -1315,6 +1314,18 @@ function getRestoredAgentTerminalMetadata(
 
 
 async function resolvePtyLaunch(options: DetachedPtyLaunchOptions, os: OsPlatform): Promise<ResolvedPtyLaunch> {
+  const projectState = useProjectStore.getState();
+  if (options.projectId && !projectState.projects.some(project => project.id === options.projectId)) {
+    throw new Error("project_not_found");
+  }
+  if (options.workspace === undefined && options.worktreeId && !projectState.worktrees.some(worktree =>
+    worktree.id === options.worktreeId && (!options.projectId || worktree.project_id === options.projectId) && worktree.status !== "missing")) {
+    throw new Error("worktree_not_found");
+  }
+  const binding = bindTerminalWorkspace({
+    ...options, cwd: options.cwd ?? undefined, environmentType: options.sshHostId ? "ssh" : undefined,
+  }, projectState.projects, projectState.worktrees);
+  options = { ...options, ...binding, cwd: options.cwd ?? binding.workspace?.path };
   const project = options.projectId
     ? useProjectStore.getState().projects.find((item) => item.id === options.projectId)
     : undefined;
@@ -1384,6 +1395,7 @@ async function resolvePtyLaunch(options: DetachedPtyLaunchOptions, os: OsPlatfor
     }
 
     return {
+      binding,
       shell: null,
       startupCmd: resolvedStartupCmd,
       baseStartupCmd,
@@ -1393,7 +1405,7 @@ async function resolvePtyLaunch(options: DetachedPtyLaunchOptions, os: OsPlatfor
       remotePath,
       invokeArgs: {
         cwd: null,
-        envVars: null,
+        envVars: terminalWorkspaceEnvironment(binding.workspace ?? null),
         shell: null,
         hookEnvEnabled: false,
         terminalColors: getCurrentTerminalColors(),
@@ -1409,7 +1421,7 @@ async function resolvePtyLaunch(options: DetachedPtyLaunchOptions, os: OsPlatfor
           agentInstallationId: hookBridgeEnabled ? agentInstallation?.installation_id ?? "" : "",
           agentRemoteMachineId: hookBridgeEnabled ? agentInstallation?.remote_machine_id ?? "" : "",
           toolSource: hookBridgeEnabled ? toolSource ?? "" : "",
-          environmentOverrides: resolvedEnvironmentOverrides,
+          environmentOverrides: terminalWorkspaceEnvironment(binding.workspace ?? null, resolvedEnvironmentOverrides),
           initializationCommand: host.startup_script.trim() || null,
           startupCommand: resolvedStartupCmd ?? null,
         },
@@ -1420,6 +1432,8 @@ async function resolvePtyLaunch(options: DetachedPtyLaunchOptions, os: OsPlatfor
   const resolvedShell = resolveShellForPty(options.shell, !!options.projectId, os);
   const baseStartupCmd = options.startupCmd?.trim() || undefined;
   return {
+    binding,
+    environmentType: binding.workspace?.environmentType,
     shell: resolvedShell,
     baseStartupCmd,
     startupCmd: prepareStartupCommandForPty(
@@ -1429,7 +1443,7 @@ async function resolvePtyLaunch(options: DetachedPtyLaunchOptions, os: OsPlatfor
     startupHandledByLaunch: false,
     invokeArgs: {
       cwd: options.cwd ?? null,
-      envVars: buildPtyEnvVars(options.envVars ?? null, resolvedShell),
+      envVars: terminalWorkspaceEnvironment(binding.workspace ?? null, buildPtyEnvVars(options.envVars ?? null, resolvedShell)),
       shell: resolvedShell,
       hookEnvEnabled: await shouldEnableHookEnv(),
       terminalColors: getCurrentTerminalColors(),
@@ -1568,13 +1582,13 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     }));
   },
 
-  createSession: async (projectId, cwd, title, startupCmd, envVars, shell, paneId, worktreeId, sshHostId, cliSessionId, remoteHistoryConsumerId, remoteHistorySourceInstanceId) => {
+  createSession: async (projectId, cwd, title, startupCmd, envVars, shell, paneId, worktreeId, sshHostId, cliSessionId, remoteHistoryConsumerId, remoteHistorySourceInstanceId, workspace) => {
     const os = await getOsPlatform();
     const createdAtMs = Date.now();
     let launch: ResolvedPtyLaunch;
     let sessionId: string;
     try {
-      launch = await resolvePtyLaunch({ projectId, worktreeId, sshHostId, cwd, remotePath: sshHostId ? cwd : undefined, startupCmd, envVars, shell }, os);
+      launch = await resolvePtyLaunch({ projectId, worktreeId, workspace, sshHostId, cwd, remotePath: sshHostId ? cwd : undefined, startupCmd, envVars, shell }, os);
       recordCrashActivity("terminal.session_create", {
         projectId: projectId ?? null,
         worktreeId: worktreeId ?? null,
@@ -1600,10 +1614,9 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     const session: TerminalSession = {
       id: sessionId,
       createdAtMs,
-      projectId,
-      worktreeId,
+      ...launch.binding,
       title: title ?? "Terminal",
-      cwd,
+      cwd: launch.remotePath ?? launch.invokeArgs.cwd ?? undefined,
       shell: resolvedShell,
       envVars,
       startupCmd: launch.baseStartupCmd,
@@ -2172,6 +2185,12 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     const targetPane = owner ? findPaneLeafBySession(owner.paneTree, sessionId) : null;
     if (!targetPane || !owner?.paneTree) return null;
 
+    if (!options || (!options.projectId && !options.worktreeId && options.cwd === undefined)) {
+      const source = initialState.sessions.find(session => session.id === sessionId);
+      options = source ? { projectId: source.projectId, worktreeId: source.worktreeId,
+        workspace: source.workspace, cwd: source.cwd, shell: source.shell ?? undefined,
+        envVars: source.envVars, startupCmd: "", ...options } : options;
+    }
     const os = await getOsPlatform();
     let launch: ResolvedPtyLaunch;
     let splitSessionId: string;
@@ -2179,6 +2198,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
       launch = await resolvePtyLaunch({
         projectId: options?.projectId,
         worktreeId: options?.worktreeId,
+        workspace: options?.workspace,
         cwd: options?.cwd,
         startupCmd: options?.startupCmd,
         envVars: options?.envVars,
@@ -2211,10 +2231,9 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     const splitSession: TerminalSession = {
       id: splitSessionId,
       createdAtMs: Date.now(),
-      projectId: options?.projectId,
-      worktreeId: options?.worktreeId,
+      ...launch.binding,
       title: createSplitSessionTitle(options),
-      cwd: options?.cwd,
+      cwd: launch.remotePath ?? launch.invokeArgs.cwd ?? undefined,
       shell: resolvedShell,
       envVars: options?.envVars,
       startupCmd: launch.baseStartupCmd,
@@ -2627,6 +2646,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
               createdAtMs: daemonSession.createdAtMs ?? ps.createdAtMs,
               projectId: attachedMeta.projectId,
               worktreeId: attachedMeta.worktreeId,
+              workspace: attachedMeta.workspace,
               title: attachedMeta.title,
               cwd: attachedMeta.cwd,
               shell: attachedMeta.shell,
@@ -2707,6 +2727,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
         launch = await resolvePtyLaunch({
           projectId: ps.projectId,
           worktreeId: ps.worktreeId,
+          workspace: bindTerminalWorkspace(ps, [...projectMap.values()], useProjectStore.getState().worktrees).workspace,
           sshHostId: ps.sshHostId,
           remotePath: ps.remotePath,
           cliTool: conversation.cliTool ?? "",
@@ -2759,10 +2780,9 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
       const restoredSession: TerminalSession = {
         id: newSessionId,
         createdAtMs: Date.now(),
-        projectId: ps.projectId,
-        worktreeId: ps.worktreeId,
+        ...launch.binding,
         title: ps.title,
-        cwd: ps.cwd,
+        cwd: launch.remotePath ?? launch.invokeArgs.cwd ?? undefined,
         shell: resolvedShell,
         envVars: ps.envVars,
         startupCmd: launch.baseStartupCmd,
@@ -2922,6 +2942,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
       createdAtMs: daemonSession.createdAtMs ?? persisted?.createdAtMs,
       projectId: attachedMeta.projectId,
       worktreeId: attachedMeta.worktreeId,
+      workspace: attachedMeta.workspace,
       title: attachedMeta.title,
       cwd: attachedMeta.cwd,
       shell: attachedMeta.shell,

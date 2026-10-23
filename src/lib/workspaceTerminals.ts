@@ -15,6 +15,12 @@ export function resolveTerminalWorkspace(
   worktreeById = new Map(worktrees.map(worktree => [worktree.id, worktree])),
 ): { projectId: string; worktreeId?: string } | null {
   if ((session.kind ?? "pty") !== "pty") return null;
+  if (session.workspace !== undefined) {
+    const owner = session.workspace;
+    return owner && projectById.has(owner.projectId)
+      ? { projectId: owner.projectId, worktreeId: owner.worktreeId }
+      : null;
+  }
   let project = projectById.get(session.projectId ?? "");
   let worktree = worktreeById.get(session.worktreeId ?? "");
   if (worktree && project && worktree.project_id !== project.id) worktree = undefined;
