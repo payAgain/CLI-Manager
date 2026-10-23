@@ -64,6 +64,8 @@ import {
   type TerminalSidePanelTab,
 } from "./terminal/TerminalSidePanel";
 import { WorktreeFinishDialog } from "./worktree/WorktreeFinishDialog";
+import { WorktreeContinuationDialog } from "./worktree/WorktreeContinuationDialog";
+import { useWorktreeContinuationStore } from "../stores/worktreeContinuationStore";
 import { FileExplorerSidebar } from "./files/LazyFileExplorerSidebar";
 import { openWindowsTerminal } from "../lib/externalTerminal";
 import { normalizeDirectCodexStartupCommand, resolveProjectStartupCommand } from "../lib/projectStartupCommand";
@@ -1633,6 +1635,9 @@ function PaneTabBar({
                   })()}
                   <ContextMenuItem onSelect={onNewTab}>{t("terminal.toolbar.newTerminal")}</ContextMenuItem>
                   <ContextMenuItem onSelect={() => onDuplicateSession(session)}>{t("terminal.tab.duplicate")}</ContextMenuItem>
+                  <ContextMenuItem onSelect={() => window.setTimeout(() => useWorktreeContinuationStore.getState().open(session.id), 0)}>
+                    {t("worktree.continue.menu")}
+                  </ContextMenuItem>
                   {terminalBackgroundEnabled && terminalBackgroundImagePath && (
                     hiddenBackgroundSessionIds.has(session.id) ? (
                       <ContextMenuItem onSelect={() => onShowBackground(session.id)}>{t("terminal.tab.showBackground")}</ContextMenuItem>
@@ -4313,6 +4318,7 @@ export function TerminalTabs({
         worktree={finishTarget?.worktree ?? null}
         onClose={() => setFinishTarget(null)}
       />
+      <WorktreeContinuationDialog onContinued={() => { closeHistory(); setActiveWorkspaceTab("terminal"); }} />
       <ConfirmDialog
         open={!!discardTarget}
         title={t("worktree.discard.title", { name: discardTarget?.worktree.name ?? "" })}

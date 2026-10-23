@@ -91,22 +91,28 @@ function findNode(predicate) {
 const restoreBody = findNode(node => ts.isPropertyAssignment(node) && node.name.getText(terminalAst) === "restoreSessions").initializer.getText(terminalAst);
 const launchBody = findNode(node => ts.isFunctionDeclaration(node) && node.name?.text === "resolvePtyLaunch").getText(terminalAst);
 const mirrorBody = findNode(node => ts.isFunctionDeclaration(node) && node.name?.text === "buildWorkspanMirror").getText(terminalAst);
-const restoreCompiled = ts.transpileModule(`let restoreInProgress = false; ${launchBody}\n${mirrorBody}\nexports.restore = ${restoreBody}; exports.launch = resolvePtyLaunch;`, {
+const createBody = findNode(node => ts.isPropertyAssignment(node) && node.name.getText(terminalAst) === "createSession").initializer.getText(terminalAst);
+const metadataBody = findNode(node => ts.isFunctionDeclaration(node) && node.name?.text === "getProjectAgentTerminalMetadata").getText(terminalAst);
+const restoreCompiled = ts.transpileModule(`let restoreInProgress = false; ${launchBody}\n${mirrorBody}\n${metadataBody}\nexports.restore = ${restoreBody}; exports.launch = resolvePtyLaunch; exports.create = ${createBody};`, {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
 }).outputText;
 
 async function restoreHarness(saved, projects = [], daemon = [], integration = {}, settings = {}, worktrees = []) {
   const persistence = sessionStore(saved);
   await persistence.api.getState().load();
-  const state = {}, created = [], writes = [], timers = [], notices = [], errors = [];
+  const state = { sessions: [], workspans: [], sessionStatuses: {}, statusListeners: {} }, created = [], writes = [], timers = [], notices = [], errors = [];
+  state.closeSession = async id => { state.sessions = state.sessions.filter(session => session.id !== id); };
   const exports = {};
   let sequence = 0;
+  let writeError;
   const setState = update => Object.assign(state, typeof update === "function" ? update(state) : update);
   const projectState = { projects, worktrees };
   const sshState = { loaded: true, hosts: [{ id: "host", startup_script: "" }] };
   runInNewContext(restoreCompiled, {
     exports, Date, Map, Set, crypto: { randomUUID: () => `bridge-${++sequence}` },
     ...workspan, resolveTerminalConversationRestore,
+    ...load("src/stores/terminalPaneTree.ts"),
+    ...load("src/lib/agentTerminal.ts"),
     ...load("src/lib/terminalWorkspaceBinding.ts"),
     ...load("src/lib/agentLaunchPermissions.ts"),
     ...load("src/lib/cliTools.ts"),
@@ -121,7 +127,7 @@ async function restoreHarness(saved, projects = [], daemon = [], integration = {
     terminalProcessManager: {
       create: async args => { created.push(plain(args)); return `new-${++sequence}`; },
       subscribeStatus: async () => () => {},
-      write: async (id, text) => writes.push({ id, text }),
+      write: async (id, text) => { if (writeError) throw writeError; writes.push({ id, text }); },
       close: async () => {},
     },
     resolveShellForPty: value => value,
@@ -145,6 +151,8 @@ async function restoreHarness(saved, projects = [], daemon = [], integration = {
     buildTabStatusUpdate: () => ({}), releaseRemoteHistoryConsumer: () => {},
     setTimeout: callback => { timers.push(callback); },
     logError: (...args) => errors.push(args), logInfo: () => {},
+    recordCrashActivity: () => {}, summarizeStartupCmd: value => value,
+    formatTerminalCreateError: error => String(error),
     toast: Object.fromEntries(["info", "success", "warning"].map(kind => [kind, (...args) => notices.push({ kind, args })])),
     translateCurrent: key => key,
   });
@@ -152,8 +160,65 @@ async function restoreHarness(saved, projects = [], daemon = [], integration = {
   for (const timer of timers) timer();
   await settle();
   assert.deepEqual(errors, []);
-  return { state, persistence, created, writes, notices, resolveLaunch: exports.launch };
+  return { state, persistence, created, writes, notices, resolveLaunch: exports.launch, create: exports.create,
+    timers, failWrite: () => { writeError = new Error("write failed"); } };
 }
+
+test("explicit recovery snapshots flush to disk without freezing later session persistence", async () => {
+  const h = sessionStore();
+  await h.api.getState().saveSessions([running()], true);
+  assert.equal(h.disk.sessions[0].cliSessionId, CURRENT);
+  await h.api.getState().saveSessions([shell({ id: "next" })], true);
+  assert.equal(h.disk.sessions[0].id, "next");
+});
+
+test("new exact-resume terminals retain identity before Agent detection and await startup delivery when requested", async () => {
+  const p = project();
+  const h = await restoreHarness({}, [p]);
+  let completed = false;
+  const pending = h.create(p.id, p.path, "Continued", `codex resume ${CURRENT}`, {}, "zsh",
+    undefined, undefined, undefined, CURRENT, undefined, undefined, undefined, true).then(id => { completed = true; return id; });
+  for (let n = 0; n < 100 && !h.timers.length; n++) await settle();
+  assert.equal(completed, false);
+  assert.equal(h.state.sessions[0].pendingConversationResume.sessionId, CURRENT);
+  const beforeLaunch = applyAgentDetection(h.state.sessions[0], { agent: null, updatedAtMs: Date.now() });
+  assert.equal(persistTerminalSession(beforeLaunch).cliSessionId, CURRENT);
+  for (const timer of h.timers.splice(0)) timer();
+  await pending;
+  assert.ok(h.writes[0].text.includes(CURRENT));
+
+  h.failWrite();
+  const beforeFailure = h.state.sessions.map(session => session.id);
+  const failed = h.create(p.id, p.path, "Retry", `codex resume ${CURRENT}`, {}, "zsh",
+    undefined, undefined, undefined, CURRENT, undefined, undefined, undefined, true);
+  const rejected = assert.rejects(failed, /write failed/);
+  for (let n = 0; n < 100 && !h.timers.length; n++) await settle();
+  for (const timer of h.timers.splice(0)) timer();
+  await rejected;
+  assert.deepEqual(h.state.sessions.map(session => session.id), beforeFailure, "only the failed provisional terminal is removed");
+});
+
+test("late process observations and exit Hooks cannot erase a stopped Worktree recovery tab", () => {
+  const detectionBody = findNode(node => ts.isFunctionDeclaration(node) && node.name?.text === "receiveAgentDetection").getText(terminalAst);
+  const hookBody = findNode(node => ts.isPropertyAssignment(node) && node.name.getText(terminalAst) === "handleCliHookEvent").initializer.getText(terminalAst);
+  const saved = persistTerminalSession(running({ projectId: "project" }));
+  const state = { sessions: [saved], sessionStatuses: { [saved.id]: "exited" }, splits: {}, ptyOutputActivityAt: {} };
+  const exports = {};
+  runInNewContext(ts.transpileModule(`${detectionBody}\nexports.detect = receiveAgentDetection; exports.hook = ${hookBody};`, {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText, {
+    exports, Date,
+    useTerminalStore: { getState: () => state }, get: () => state,
+    useProjectStore: { getState: () => ({ projects: [project()], worktrees: [] }) },
+    resolvePrimaryTabId: id => id, resolveHookWslDistroName: () => null,
+    ...load("src/stores/terminalHookBinding.ts"),
+    findWorktreeByPath: () => undefined,
+  });
+  exports.detect(saved.id, { agent: null, updatedAtMs: Date.now() });
+  assert.equal(exports.hook({ tabId: saved.id, event: "SessionEnd", source: "codex", sessionId: CURRENT }), null);
+  assert.equal(state.sessions[0], saved);
+  assert.equal(state.sessions[0].cliSessionId, CURRENT);
+});
 
 test("project and Worktree blank-terminal actions suppress SSH Agent fallback and preserve their launch context", async () => {
   const sidebarSource = readFileSync(resolve(root, "src/components/sidebar/index.tsx"), "utf8");

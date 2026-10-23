@@ -19,7 +19,7 @@ interface SessionStore {
   loaded: boolean;
 
   load: () => Promise<void>;
-  saveSessions: (sessions: TerminalSession[]) => Promise<void>;
+  saveSessions: (sessions: TerminalSession[], flush?: boolean) => Promise<void>;
   freezeForExit: (sessions: TerminalSession[]) => Promise<void>;
   resumePersistence: () => void;
   saveSplits: (splits: PersistedSplit[]) => Promise<void>;
@@ -91,7 +91,7 @@ export const useSessionStore = create<SessionStore>(() => ({
     });
   }),
 
-  saveSessions: (sessions) => persistenceFrozen ? Promise.resolve() : saveSessionSnapshot(sessions),
+  saveSessions: (sessions, flush) => persistenceFrozen ? Promise.resolve() : saveSessionSnapshot(sessions, flush),
 
   freezeForExit: (sessions) => {
     // Capture before closing PTYs. Their exit/Hook events must not erase the

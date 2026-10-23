@@ -284,7 +284,7 @@ interface TerminalStore {
   /** 仅运行态：XTerm 输出监听就绪后才可执行 daemon attach。 */
   daemonAttachPendingSessionIds: Set<string>;
   subagentTranscripts: Record<string, SubagentTranscriptContent>;
-  createSession: (projectId?: string, cwd?: string, title?: string, startupCmd?: string, envVars?: Record<string, string>, shell?: string, paneId?: string, worktreeId?: string, sshHostId?: string, cliSessionId?: string, remoteHistoryConsumerId?: string, remoteHistorySourceInstanceId?: string, workspace?: TerminalWorkspaceBinding | null) => Promise<string>;
+  createSession: (projectId?: string, cwd?: string, title?: string, startupCmd?: string, envVars?: Record<string, string>, shell?: string, paneId?: string, worktreeId?: string, sshHostId?: string, cliSessionId?: string, remoteHistoryConsumerId?: string, remoteHistorySourceInstanceId?: string, workspace?: TerminalWorkspaceBinding | null, waitForStartup?: boolean) => Promise<string>;
   closeSession: (id: string) => Promise<void>;
   setActive: (id: string) => void;
   setWorkspanModeEnabled: (enabled: boolean) => void;
@@ -1582,7 +1582,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     }));
   },
 
-  createSession: async (projectId, cwd, title, startupCmd, envVars, shell, paneId, worktreeId, sshHostId, cliSessionId, remoteHistoryConsumerId, remoteHistorySourceInstanceId, workspace) => {
+  createSession: async (projectId, cwd, title, startupCmd, envVars, shell, paneId, worktreeId, sshHostId, cliSessionId, remoteHistoryConsumerId, remoteHistorySourceInstanceId, workspace, waitForStartup) => {
     const os = await getOsPlatform();
     const createdAtMs = Date.now();
     let launch: ResolvedPtyLaunch;
@@ -1611,6 +1611,7 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
     }
     const resolvedShell = launch.shell;
     const launchStartupCmd = launch.startupCmd;
+    const agentMetadata = getProjectAgentTerminalMetadata(projectId, launch.baseStartupCmd);
     const session: TerminalSession = {
       id: sessionId,
       createdAtMs,
@@ -1620,12 +1621,19 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
       shell: resolvedShell,
       envVars,
       startupCmd: launch.baseStartupCmd,
-      ...getProjectAgentTerminalMetadata(projectId, launch.baseStartupCmd),
+      ...agentMetadata,
       environmentType: launch.environmentType,
       sshHostId: launch.sshHostId,
       remotePath: launch.remotePath,
       connectionState: launch.environmentType === "ssh" ? "connecting" : undefined,
       cliSessionId: cliSessionId?.trim() || undefined,
+      ...(agentMetadata.cliTool && cliSessionId?.trim() ? {
+        pendingConversationResume: {
+          tool: agentMetadata.cliTool,
+          sessionId: cliSessionId.trim(),
+          expiresAtMs: Date.now() + 15_000,
+        },
+      } : {}),
       remoteHistoryConsumerId: remoteHistoryConsumerId?.trim() || undefined,
       remoteHistorySourceInstanceId: remoteHistorySourceInstanceId?.trim() || undefined,
     };
@@ -1643,6 +1651,9 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
       ) {
         releaseRemoteHistoryConsumer(session);
       }
+    }).catch(async error => {
+      if (waitForStartup) await terminalProcessManager.close(sessionId);
+      throw error;
     });
 
     const state = get();
@@ -1679,26 +1690,43 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
       statusListeners: { ...state.statusListeners, [sessionId]: unlisten },
     });
 
-    // 持久化到 sessionStore
-    await useSessionStore.getState().saveSessions(newSessions);
-    await useSessionStore.getState().saveActiveSessionId(sessionId);
-    await useSessionStore.getState().saveWorkspans(workspans, activeWorkspanId, newSessions);
+    try {
+      // 持久化到 sessionStore
+      await useSessionStore.getState().saveSessions(newSessions);
+      await useSessionStore.getState().saveActiveSessionId(sessionId);
+      await useSessionStore.getState().saveWorkspans(workspans, activeWorkspanId, newSessions);
 
-    if (launchStartupCmd && !launch.startupHandledByLaunch) {
-      setTimeout(() => {
-        terminalProcessManager.write(sessionId, formatStartupInputForPty(launchStartupCmd, normalizeShellKey(resolvedShell) ?? null)).catch((err) => {
-          toast.error("启动命令写入失败", { description: String(err) });
-          logError("Failed to write startup command", {
-            sessionId,
-            hasStartupCmd: true,
-            startupCmdSummary: summarizeStartupCmd(launchStartupCmd),
-            err,
+      if (launchStartupCmd && !launch.startupHandledByLaunch) {
+        const writeStartup = async () => {
+          await new Promise<void>(resolve => setTimeout(resolve, 500));
+          if (!get().sessions.some(item => item.id === sessionId)) throw new Error("terminal_closed_before_startup");
+          await terminalProcessManager.write(sessionId, formatStartupInputForPty(launchStartupCmd, normalizeShellKey(resolvedShell) ?? null));
+        };
+        if (waitForStartup) {
+          // Worktree continuation must observe write failure before discarding the recovery tab.
+          await writeStartup();
+        } else {
+          void writeStartup().catch((err) => {
+            toast.error("启动命令写入失败", { description: String(err) });
+            logError("Failed to write startup command", {
+              sessionId,
+              hasStartupCmd: true,
+              startupCmdSummary: summarizeStartupCmd(launchStartupCmd),
+              err,
+            });
           });
-        });
-      }, 500);
-    }
+        }
+      }
 
-    return sessionId;
+      return sessionId;
+    } catch (error) {
+      if (waitForStartup) {
+        // Clean up only the PTY created by this call, never another tab with the same conversation ID.
+        await terminalProcessManager.close(sessionId);
+        await get().closeSession(sessionId);
+      }
+      throw error;
+    }
   },
 
   closeSession: async (id) => {
@@ -1961,6 +1989,9 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
         reason: resolution.reason,
       });
     }
+    // A stopped terminal may be retained as a Worktree-continuation recovery tab.
+    // Late exit Hooks must not replace its saved conversation identity.
+    if (get().sessionStatuses[tabId] === "exited" || get().sessionStatuses[tabId] === "error") return null;
     if (payload.agentDetection) receiveAgentDetection(tabId, payload.agentDetection);
     const target = get().sessions.find((session) => session.id === tabId);
     if (target && !acceptsAgentHook(target, payload)) return null;
@@ -3795,6 +3826,7 @@ startPtyOrphanReconcileHeartbeat();
 // One subscription for every PTY, including hidden panes and Workspans.
 function receiveAgentDetection(sessionId: string, detection: AgentDetection): void {
   const state = useTerminalStore.getState();
+  if (state.sessionStatuses[sessionId] === "exited" || state.sessionStatuses[sessionId] === "error") return;
   const session = state.sessions.find((item) => item.id === sessionId);
   if (!session || (session.kind ?? "pty") !== "pty") return;
   const next = applyAgentDetection(session, detection);
