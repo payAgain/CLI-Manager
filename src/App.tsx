@@ -455,30 +455,30 @@ function App() {
     return startRuntimeDiagnostics();
   }, [debugMode]);
 
-  const handleToggleTerminalFullscreen = useCallback(() => {
+  const handleToggleTerminalFullscreen = useCallback(async () => {
     const nextFullscreen = !terminalFullscreen;
     if (!IN_TAURI) {
       setTerminalFullscreen(nextFullscreen);
-      return;
+      return true;
     }
 
-    void (async () => {
-      try {
-        const appWindow = getCurrentWindow();
-        if (nextFullscreen) {
-          const alreadyMaximized = await appWindow.isMaximized();
-          terminalFullscreenMaximizedRef.current = !alreadyMaximized;
-          if (!alreadyMaximized) await appWindow.toggleMaximize();
-        } else if (terminalFullscreenMaximizedRef.current) {
-          await appWindow.unmaximize();
-          terminalFullscreenMaximizedRef.current = false;
-        }
-        setTerminalFullscreen(nextFullscreen);
-      } catch (err) {
-        toast.error(nextFullscreen ? t("notifications.fullscreen.enterFailed") : t("notifications.fullscreen.exitFailed"), { description: String(err) });
-        logWarn("Failed to toggle terminal fullscreen", err);
+    try {
+      const appWindow = getCurrentWindow();
+      if (nextFullscreen) {
+        const alreadyMaximized = await appWindow.isMaximized();
+        terminalFullscreenMaximizedRef.current = !alreadyMaximized;
+        if (!alreadyMaximized) await appWindow.toggleMaximize();
+      } else if (terminalFullscreenMaximizedRef.current) {
+        await appWindow.unmaximize();
+        terminalFullscreenMaximizedRef.current = false;
       }
-    })();
+      setTerminalFullscreen(nextFullscreen);
+      return true;
+    } catch (err) {
+      toast.error(nextFullscreen ? t("notifications.fullscreen.enterFailed") : t("notifications.fullscreen.exitFailed"), { description: String(err) });
+      logWarn("Failed to toggle terminal fullscreen", err);
+      return false;
+    }
   }, [terminalFullscreen, t]);
 
   const handleToggleSidebarShortcut = useCallback(() => {
@@ -1420,7 +1420,7 @@ function App() {
         </div>
       )}
       <WorkspaceStatusBar terminalScope={projectScopedTerminalViewEnabled ? terminalScope : undefined} />
-      <CommandPalette />
+      <CommandPalette prepareCreate={async () => !terminalFullscreen || await handleToggleTerminalFullscreen()} />
       <ExternalSessionSyncDialog />
       <Suspense fallback={null}>
         {settingsEverOpened && (

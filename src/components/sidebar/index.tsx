@@ -69,6 +69,7 @@ import type { SettingsTab } from "../SettingsModal";
 import { useI18n } from "../../lib/i18n";
 import { getOsPlatform } from "../../lib/shell";
 import { SIDEBAR_TOGGLE_REQUEST_EVENT } from "../../lib/sidebarCommands";
+import { registerQuickJumpWorkspaceActions } from "../../lib/quickJumpNavigation";
 import { useProjectDirectoryDrop } from "../../hooks/useProjectDirectoryDrop";
 import { importProjectDirectories, projectDirectoryDropGroup } from "../../lib/projectDirectoryDrop";
 
@@ -1325,6 +1326,35 @@ export function Sidebar({
       if (opened) void maybePromptWorktreeDeps(project, worktree);
     });
   }, []);
+
+  // Share the existing launch flow with quick jump, including isolation/dependency
+  // dialogs and compact/external terminal policy. Register current closures on
+  // each commit so a palette result cannot launch with stale project/settings.
+  useLayoutEffect(() => registerQuickJumpWorkspaceActions({
+    selectWorkspace: (scope) => {
+      setShowFileExplorer(false);
+      setProjectFilter("all");
+      setSelectedGroupIds(new Set());
+      setSelectedWorktreeIds(new Set());
+      setSelectedProjectIds(scope.kind === "project" ? new Set([scope.projectId]) : new Set());
+      setSelectedId(scope.kind === "worktree" ? scope.worktreeId : scope.kind === "project" ? scope.projectId : null);
+      selectionAnchorRef.current = scope.kind === "project" || scope.kind === "worktree" ? scope.projectId : null;
+      worktreeSelectionAnchorRef.current = scope.kind === "worktree" ? scope.worktreeId : null;
+    },
+    createSession: async (project, worktree) => {
+      if (!worktree) {
+        await openProjects([project]);
+        return;
+      }
+      if (rejectMissingWorktree(worktree)) return;
+      if (compactMode || useExternalTerminal) {
+        await openProjectExternally([projectWithWorktreePath(project, worktree)]);
+        return;
+      }
+      const opened = await openWorktreeSession(project, worktree);
+      if (opened) void maybePromptWorktreeDeps(project, worktree);
+    },
+  }));
 
   const handleOpenProjectFiles = useCallback(async (project: Project) => {
     if (rejectUnsupportedCapability(project, "files")) return;
