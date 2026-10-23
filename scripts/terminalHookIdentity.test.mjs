@@ -39,7 +39,7 @@ function harness(sessions = [session("a"), session("b")]) {
   }
   const lib = name => load(resolve(root, `src/lib/${name}.ts`));
   const saved = sessions.map(lib("terminalConversationRestore").persistTerminalSession);
-  const state = createStore(() => ({ sessions, splits: {}, workspans: [], activeWorkspanId: "ws-a", tabStatuses: {}, tabNotifications: {}, tabStatusDetails: {}, statsPanelRefreshSeq: {} }));
+  const state = createStore(() => ({ sessions, sessionStatuses: Object.fromEntries(sessions.map(session => [session.id, "running"])), splits: {}, workspans: [], activeWorkspanId: "ws-a", tabStatuses: {}, tabNotifications: {}, tabStatusDetails: {}, statsPanelRefreshSeq: {} }));
   const writes = [], exports = {};
   let barrier = null;
   const queueSshSessionPersistence = async value => {
@@ -91,6 +91,32 @@ test("Hook refreshes stay with their split/Workspan session instead of the visib
   h.event("a", { event: "StopFailure" });
   assert.equal(h.state.getState().statsPanelRefreshSeq.a, 1);
   await tick(); assert.equal(h.writes.length, 0);
+});
+
+test("late Hooks and daemon detections leave exited/error recovery tabs untouched", async () => {
+  for (const environment of ["local", "wsl", "ssh"]) {
+    for (const status of ["exited", "error"]) {
+      const h = harness([session("a", environment, { remoteTranscriptRef: "saved-transcript", cliReasoningEffort: "high" })]);
+      h.state.setState({
+        sessionStatuses: { a: status },
+        tabStatuses: { a: { hook: "done", hookUpdatedAt: new Date(9000).toISOString() } },
+        tabNotifications: { a: "done" },
+        statsPanelRefreshSeq: { a: 3 },
+      });
+      const before = h.state.getState();
+      assert.equal(h.event("a", {
+        event: "SessionStart", environmentType: environment, sessionId: "late-cli",
+        remoteTranscriptRef: "late-transcript", reasoningEffort: "low",
+        agentDetection: { agent: null, updatedAtMs: 10_001 },
+      }), null);
+      h.detect("a", { agent: null, updatedAtMs: 10_002 });
+      await tick();
+      assert.equal(h.state.getState(), before, `${environment}/${status} must retain its identity and refresh state`);
+      assert.equal(h.saved[0].cliSessionId, "cli-a");
+      assert.equal(h.writes.length, 0);
+      assert.equal(h.isDetectionOlderThanHook("a", 1), false);
+    }
+  }
 });
 
 test("identity changes persist once while pending; SSH metadata self-heals and failures can retry", async () => {

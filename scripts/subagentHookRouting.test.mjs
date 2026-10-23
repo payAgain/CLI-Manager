@@ -52,9 +52,16 @@ test("Codex child turn callbacks bypass parent task and notification processing"
 });
 
 test("WSL callbacks bind their original pane without window focus or visibility", () => {
-  const {calls,handlers} = harness([{id:"wsl-pane",source:"codex",paths:["//wsl.localhost/Ubuntu/home/me/project"]}]);
-  routeSubagentHook(event({tabId:"external:codex:parent-thread",cwd:"/home/me/project",wslDistroName:"Ubuntu"}),handlers);
+  const {calls,handlers} = harness([{id:"wsl-pane",source:"codex",cliSessionId:"parent-thread",paths:["//wsl.localhost/Ubuntu/home/me/project"]}]);
+  assert.equal(routeSubagentHook(event({tabId:"external:codex:parent-thread",cwd:"/home/me/project",wslDistroName:"Ubuntu"}),handlers),true);
+  assert.equal(calls.length,1);
   assert.equal(calls[0][1].tabId,"wsl-pane");
+});
+
+test("external WSL callbacks cannot claim a pane from its directory alone", () => {
+  const {calls,handlers} = harness([{id:"wsl-pane",source:"codex",paths:["//wsl.localhost/Ubuntu/home/me/project"]}]);
+  assert.equal(routeSubagentHook(event({tabId:"external:codex:parent-thread",cwd:"/home/me/project",wslDistroName:"Ubuntu"}),handlers),true);
+  assert.equal(calls.length,0);
 });
 
 test("ambiguous same-project terminals and other windows never open an unrelated pane", () => {
