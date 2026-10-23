@@ -7,11 +7,65 @@
 
 pub(crate) mod agent_recognition;
 mod agent_tracker;
+#[cfg(any(target_os = "windows", test))]
+mod agent_refresh;
+#[cfg(any(target_os = "windows", test))]
+mod windows_process;
 pub mod client;
 pub mod discovery;
 pub mod protocol;
 pub mod server;
 mod ssh_agent_bridge;
+
+#[cfg(target_os = "windows")]
+static GOVERNANCE_JOB: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+#[cfg(target_os = "windows")]
+fn governed_process_ids() -> Option<Vec<sysinfo::Pid>> {
+    use std::sync::atomic::Ordering;
+    use windows_sys::Win32::Foundation::{GetLastError, ERROR_MORE_DATA, HANDLE};
+    use windows_sys::Win32::System::JobObjects::{
+        JobObjectBasicProcessIdList, QueryInformationJobObject, JOBOBJECT_BASIC_PROCESS_ID_LIST,
+    };
+    let job = GOVERNANCE_JOB.load(Ordering::Acquire) as HANDLE;
+    if job.is_null() {
+        return None;
+    }
+    let mut capacity = 64;
+    loop {
+        // usize storage preserves the flexible structure's pointer alignment.
+        let mut buffer = vec![0usize; capacity + 2];
+        let bytes = u32::try_from(buffer.len() * std::mem::size_of::<usize>()).ok()?;
+        let ok = unsafe {
+            QueryInformationJobObject(
+                job,
+                JobObjectBasicProcessIdList,
+                buffer.as_mut_ptr().cast(),
+                bytes,
+                std::ptr::null_mut(),
+            )
+        };
+        if ok != 0 {
+            let info = unsafe { &*buffer.as_ptr().cast::<JOBOBJECT_BASIC_PROCESS_ID_LIST>() };
+            let count = info.NumberOfProcessIdsInList as usize;
+            if count <= capacity && info.NumberOfAssignedProcesses == info.NumberOfProcessIdsInList
+            {
+                // The Win32 flexible array occupies the remaining aligned storage.
+                let ids = unsafe { std::slice::from_raw_parts(info.ProcessIdList.as_ptr(), count) };
+                return ids
+                    .iter()
+                    .map(|pid| u32::try_from(*pid).ok().map(sysinfo::Pid::from_u32))
+                    .collect();
+            }
+        } else if unsafe { GetLastError() } != ERROR_MORE_DATA {
+            return None;
+        }
+        capacity = capacity.checked_mul(2)?;
+        if capacity > 65_536 {
+            return None;
+        }
+    }
+}
 
 /// 进程治理兜底（契约★）：Windows 上把 daemon 自身挂进
 /// `KILL_ON_JOB_CLOSE` 的 Job Object——之后 daemon 创建的全部 PTY 子进程
@@ -49,6 +103,7 @@ pub fn setup_process_governance() {
             log::warn!("daemon job object assign failed, orphan protection disabled");
             return;
         }
+        GOVERNANCE_JOB.store(job as usize, std::sync::atomic::Ordering::Release);
         // 故意不 CloseHandle：Job 句柄与 daemon 进程同生共死，
         // 进程终止时句柄关闭触发 KILL_ON_JOB_CLOSE 清理全部子进程。
         log::debug!("daemon job object active (kill-on-close)");

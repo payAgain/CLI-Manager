@@ -736,6 +736,25 @@ struct SessionEntry {
     ssh_hook_binding: Option<SshHookBinding>,
 }
 
+fn update_agent_detection(
+    entry: &mut SessionEntry,
+    agent: Option<super::protocol::AgentIdentity>,
+) -> Option<DaemonFrame> {
+    let previous = entry.meta.agent_detection.as_ref().and_then(|d| d.agent.as_ref());
+    if entry.meta.agent_detection.is_some()
+        && previous.map(|a| (&a.run_id, &a.tool)) == agent.as_ref().map(|a| (&a.run_id, &a.tool))
+    {
+        return None;
+    }
+    let detection = AgentDetection { agent, updated_at_ms: now_ms() };
+    entry.meta.agent_detection = Some(detection.clone());
+    entry.meta.task_status = None;
+    entry.meta.task_updated_at_ms = None;
+    Some(DaemonFrame::AgentChanged {
+        session_id: entry.meta.session_id.clone(), detection,
+    })
+}
+
 struct SshHookBinding {
     host_id: String,
     client_instance_id: String,
@@ -762,6 +781,8 @@ pub struct DaemonHost {
     ssh_agent_bridges: SshAgentBridgeManager,
     spool_dir: PathBuf,
     agent_tracker: Mutex<super::agent_tracker::AgentTracker>,
+    #[cfg(target_os = "windows")]
+    agent_refresh_signal: super::agent_refresh::AgentRefreshSignal,
 }
 
 impl DaemonHost {
@@ -786,6 +807,8 @@ impl DaemonHost {
             ssh_agent_bridges: SshAgentBridgeManager::default(),
             spool_dir,
             agent_tracker: Mutex::new(super::agent_tracker::AgentTracker::default()),
+            #[cfg(target_os = "windows")]
+            agent_refresh_signal: super::agent_refresh::AgentRefreshSignal::default(),
         }
     }
 
@@ -992,8 +1015,14 @@ impl DaemonHost {
         let Ok(mut tracker) = self.agent_tracker.lock() else {
             return;
         };
+        #[cfg(target_os = "windows")]
+        let generation = self.agent_refresh_signal.begin();
         if !tracker.refresh() {
             return;
+        }
+        #[cfg(target_os = "windows")]
+        if let Some(generation) = generation {
+            self.agent_refresh_signal.complete(generation);
         }
         let sessions = self
             .sessions
@@ -1011,27 +1040,9 @@ impl DaemonHost {
             let Some(agent) = tracker.discover(&entry.meta, std::process::id(), now_ms()) else {
                 continue;
             };
-            let previous = entry
-                .meta
-                .agent_detection
-                .as_ref()
-                .and_then(|d| d.agent.as_ref());
-            if entry.meta.agent_detection.is_some()
-                && previous.map(|a| &a.run_id) == agent.as_ref().map(|a| &a.run_id)
-            {
-                continue;
+            if let Some(change) = update_agent_detection(&mut entry, agent) {
+                changes.push(change);
             }
-            let detection = AgentDetection {
-                agent,
-                updated_at_ms: now_ms(),
-            };
-            entry.meta.agent_detection = Some(detection.clone());
-            entry.meta.task_status = None;
-            entry.meta.task_updated_at_ms = None;
-            changes.push(DaemonFrame::AgentChanged {
-                session_id: entry.meta.session_id.clone(),
-                detection,
-            });
         }
         if let Ok(clients) = self.clients.lock() {
             for frame in changes {
@@ -1058,28 +1069,89 @@ impl DaemonHost {
         let Some(session) = self.get_session(session_id) else {
             return true;
         };
-        // Hook helpers wait for this response, so their ancestry remains observable.
-        self.refresh_agents();
-        let Ok(tracker) = self.agent_tracker.lock() else {
+        #[cfg(target_os = "windows")]
+        let job_ids = {
+            // Remote metadata remains authoritative even for legacy Hooks. Drop
+            // this guard before waiting: watchdog takes tracker then session.
+            {
+                let Ok(entry) = session.lock() else { return false; };
+                if matches!(entry.meta.environment_type.as_deref(), Some("ssh" | "wsl"))
+                    || entry.meta.shell.as_deref().is_some_and(|s| s.to_ascii_lowercase().contains("wsl"))
+                {
+                    return true;
+                }
+                if !entry.meta.alive { return false; }
+                // Preserve the pre-discovery legacy-session policy. Such a
+                // session has no local root identity to sample or authorize.
+                if entry.meta.root_pid.is_none() {
+                    return entry.meta.agent_detection.is_none()
+                        && payload.get("hookProcessId").is_none_or(|value| {
+                            value.as_u64().and_then(|pid| u32::try_from(pid).ok()).is_some_and(|pid| pid > 0)
+                        });
+                }
+            }
+            let Some(arrival) = self.agent_refresh_signal.arrival() else { return false; };
+            let ids = super::governed_process_ids();
+            if ids.is_none()
+                && !self.agent_refresh_signal.wait_after(arrival, Duration::from_millis(1500))
+            {
+                // Unavailable evidence must never become a confirmed Agent exit.
+                return false;
+            }
+            ids
+        };
+        let Ok(mut tracker) = self.agent_tracker.lock() else {
             return false;
         };
-        let Ok(entry) = session.lock() else {
+        let Ok(mut entry) = session.lock() else {
             return false;
         };
         if !entry.meta.alive {
             return false;
         }
-        let Some(detection) = entry.meta.agent_detection.as_ref() else {
+        // Metadata is authoritative about remote sessions even when an old
+        // remote Hook omitted environmentType/wslDistroName.
+        if matches!(entry.meta.environment_type.as_deref(), Some("ssh" | "wsl"))
+            || entry.meta.shell.as_deref().is_some_and(|s| s.to_ascii_lowercase().contains("wsl"))
+        {
             return true;
+        }
+        let helper = match payload.get("hookProcessId") {
+            Some(value) => match value.as_u64().and_then(|pid| u32::try_from(pid).ok()) {
+                Some(pid) if pid > 0 => Some(pid),
+                _ => return false,
+            },
+            None => None,
         };
-        let Some(agent) = detection.agent.clone() else {
+        // The waiting helper and every ancestor are reread from the OS. The
+        // background tracker supplies only candidate PIDs, never cached trust.
+        #[cfg(target_os = "windows")]
+        let observation = tracker.observe_windows_hook(&entry.meta, helper, job_ids.as_deref());
+        #[cfg(not(target_os = "windows"))]
+        let observation = tracker.observe_hook(&entry.meta, helper);
+        let Some(observation) = observation else {
+            return entry.meta.root_pid.is_none() && entry.meta.agent_detection.is_none();
+        };
+        let Some(discovered) = observation.discover(&entry.meta, std::process::id(), now_ms()) else {
             return false;
         };
+        let change = update_agent_detection(&mut entry, discovered);
+        let detection = entry.meta.agent_detection.clone().unwrap();
+        drop(entry);
+        drop(tracker);
+        if let Some(change) = change {
+            if let Ok(clients) = self.clients.lock() {
+                for client in clients.values() {
+                    let _ = client.writer.send_frame(&change);
+                }
+            }
+        }
+        let Some(agent) = detection.agent.as_ref() else { return false; };
         if payload.get("source").and_then(|v| v.as_str()) != Some(agent.tool.as_str()) {
             return false;
         }
-        if let Some(pid) = payload.get("hookProcessId").and_then(|v| v.as_u64()) {
-            if !tracker.belongs_to(pid as u32, agent.pid) {
+        if let Some(pid) = helper {
+            if !observation.belongs_to(pid, agent.pid) {
                 log::warn!(
                     "CLI Hook rejected: helper ancestry does not reach Agent; source={} event={} tab={} helper_pid={} agent_pid={}",
                     agent.tool,
@@ -3656,6 +3728,110 @@ mod tests {
         assert_eq!(host.get_session("parent").unwrap().lock().unwrap().meta.task_status.as_deref(), Some("attention"));
     }
 
+    #[test]
+    fn remote_hook_metadata_never_probes_local_pids() {
+        let host = DaemonHost::new();
+        for (id, environment, shell) in [("ssh", Some("ssh"), None),
+            ("wsl", Some("wsl"), None), ("legacy-wsl", None, Some("wsl.exe"))] {
+            let session = test_session(id, SessionBuffer::new(), 1);
+            {
+                let mut entry = session.lock().unwrap();
+                entry.meta.environment_type = environment.map(str::to_string);
+                entry.meta.shell = shell.map(str::to_string);
+                entry.meta.root_pid = Some(std::process::id());
+            }
+            host.sessions.lock().unwrap().insert(id.into(), session);
+            let mut hook = serde_json::json!({"tabId":id, "source":"codex", "hookProcessId":std::process::id()});
+            assert!(host.correlate_agent_hook(&mut hook));
+            assert!(hook.get("agentRunId").is_none());
+        }
+        assert_eq!(host.agent_tracker.lock().unwrap().scan_counts(), (0, 0));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn first_hook_discovers_live_helper_chain_without_a_background_scan() {
+        struct Cleanup(Arc<DaemonHost>);
+        impl Drop for Cleanup {
+            fn drop(&mut self) { let _ = self.0.pty.close_all(); }
+        }
+        let host = Arc::new(DaemonHost::new());
+        let _cleanup = Cleanup(host.clone());
+        let dir = tempfile::tempdir().unwrap();
+        // Two nested harmless shell executables model launcher/child Agents.
+        for name in ["codex", "claude"] {
+            let path = dir.path().join(name);
+            std::fs::copy("/bin/bash", &path).unwrap();
+            #[cfg(target_os = "macos")]
+            assert!(Command::new("/usr/bin/codesign").args(["--force", "--sign", "-"])
+                .arg(&path).output().unwrap().status.success());
+        }
+        let helper_file = dir.path().join("helper-pid");
+        let script = dir.path().join("helper.sh");
+        std::fs::write(&script, format!("sleep 30 &\necho $! > {}\nwait\n", helper_file.display())).unwrap();
+        host.reserve_session("first-hook", None, Some("bash".into())).unwrap();
+        let traits = host.pty.create("first-hook", None, None, Some("bash"),
+            Arc::new(DaemonPtyEventSink::new(host.clone(), "first-hook".into()))).unwrap();
+        let session = host.get_session("first-hook").unwrap();
+        {
+            let mut entry = session.lock().unwrap();
+            entry.meta.root_pid = Some(traits.root_pid);
+            entry.meta.root_started_at = traits.root_started_at;
+        }
+        host.pty.write("first-hook", &format!("{} -c '{} {}; wait'\r",
+            dir.path().join("codex").display(), dir.path().join("claude").display(), script.display())).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let helper = loop {
+            if let Ok(text) = std::fs::read_to_string(&helper_file) {
+                if let Ok(pid) = text.trim().parse::<u32>() { break pid; }
+            }
+            assert!(Instant::now() < deadline, "helper did not start");
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        let mut hook = serde_json::json!({"tabId":"first-hook", "source":"codex", "event":"Stop", "hookProcessId":helper});
+        assert!(host.correlate_agent_hook(&mut hook));
+        assert_eq!(hook["agentDetection"]["agent"]["tool"], "codex");
+        let agent_pid = hook["agentDetection"]["agent"]["pid"].as_u64().unwrap() as u32;
+        assert_ne!(agent_pid, helper);
+        let before = host.agent_tracker.lock().unwrap().scan_counts();
+        for _ in 0..20 { assert!(host.correlate_agent_hook(&mut hook)); }
+        let counts = host.agent_tracker.lock().unwrap().scan_counts();
+        assert_eq!(counts.0, 0);
+        assert_eq!(counts.1 - before.1, 20 * 5, "helper, nested Agent, outer Agent, shell and daemon only");
+        hook["source"] = serde_json::json!("claude");
+        assert!(!host.correlate_agent_hook(&mut hook), "nested Agent cannot own the pane");
+        hook["source"] = serde_json::json!("codex");
+        session.lock().unwrap().meta.root_started_at = Some(1);
+        assert!(!host.correlate_agent_hook(&mut hook), "reused root must not bind");
+        session.lock().unwrap().meta.root_started_at = traits.root_started_at;
+        hook["hookProcessId"] = serde_json::json!(u64::from(helper) + (1u64 << 32));
+        assert!(!host.correlate_agent_hook(&mut hook), "out-of-range PID must not truncate");
+        hook["hookProcessId"] = serde_json::json!(helper);
+        assert_eq!(unsafe { nix::libc::kill(helper as i32, nix::libc::SIGKILL) }, 0);
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while host.correlate_agent_hook(&mut hook) {
+            assert!(Instant::now() < deadline, "exited helper remained trusted");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        // A pipeline creates two independent foreground Agents in the same
+        // pane. Neither has been sampled by the background tracker: the Hook
+        // helper alone must not make its own branch appear unambiguous.
+        std::fs::remove_file(&helper_file).unwrap();
+        host.pty.write("first-hook", &format!("{} -c 'sleep 30; wait' | {} {}\r",
+            dir.path().join("codex").display(), dir.path().join("claude").display(), script.display())).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let sibling_helper = loop {
+            if let Ok(text) = std::fs::read_to_string(&helper_file) {
+                if let Ok(pid) = text.trim().parse::<u32>() { break pid; }
+            }
+            assert!(Instant::now() < deadline, "pipeline helper did not start");
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        let mut sibling_hook = serde_json::json!({"tabId":"first-hook", "source":"claude", "event":"Stop", "hookProcessId":sibling_helper});
+        assert!(!host.correlate_agent_hook(&mut sibling_hook), "unsampled independent foreground siblings remain ambiguous");
+        assert_eq!(host.agent_tracker.lock().unwrap().scan_counts().0, 0);
+    }
+
     #[cfg(unix)]
     #[test]
     fn foreground_agent_discovery_follows_real_ptys_without_ui_or_hooks() {
@@ -3746,6 +3922,12 @@ mod tests {
             host.get_session("one").unwrap().lock().unwrap().meta
         );
         assert_eq!(hook["agentRunId"], first_id);
+        let before = host.agent_tracker.lock().unwrap().scan_counts();
+        for _ in 0..50 { assert!(host.correlate_agent_hook(&mut hook)); }
+        let after = host.agent_tracker.lock().unwrap().scan_counts();
+        assert_eq!(after.0, before.0, "Hook traffic must not trigger full process scans");
+        assert!(after.1 > before.1, "each Hook must still revalidate live processes");
+        assert!(after.1 - before.1 <= 50 * 8, "only this pane's ancestry is read");
         host.update_task_status_from_hook(&hook);
         host.refresh_agents();
         assert_eq!(
