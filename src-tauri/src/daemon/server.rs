@@ -1006,16 +1006,41 @@ impl DaemonHost {
         {
             return true;
         }
-        let Some(session_id) = payload.get("tabId").and_then(|v| v.as_str()) else {
-            return true;
-        };
-        let Some(session) = self.get_session(session_id) else {
+        let Some(session_id) = payload.get("tabId").and_then(|v| v.as_str()).map(str::to_owned) else {
             return true;
         };
         // Hook helpers wait for this response, so their ancestry remains observable.
         self.refresh_agents();
         let Ok(tracker) = self.agent_tracker.lock() else {
             return false;
+        };
+        let session = if let Some(session) = self.get_session(&session_id) {
+            session
+        } else {
+            // Missing/inherited launch variables must not turn a shared cwd into
+            // PTY ownership. Recover only the unique live Agent ancestor.
+            let Some(pid) = payload.get("hookProcessId").and_then(|v| v.as_u64())
+                .and_then(|pid| u32::try_from(pid).ok()) else {
+                return true;
+            };
+            let source = payload.get("source").and_then(|v| v.as_str());
+            let sessions = self.sessions.lock().map(|sessions| {
+                sessions.values().cloned().collect::<Vec<_>>()
+            }).unwrap_or_default();
+            let owners = sessions.into_iter().filter_map(|session| {
+                let entry = session.lock().ok()?;
+                let agent = entry.meta.agent_detection.as_ref()?.agent.as_ref()?;
+                if !entry.meta.alive || entry.meta.environment_type.as_deref() == Some("ssh")
+                    || source != Some(agent.tool.as_str()) || !tracker.belongs_to(pid, agent.pid) {
+                    return None;
+                }
+                let id = entry.meta.session_id.clone();
+                drop(entry);
+                Some((id, session))
+            }).collect::<Vec<_>>();
+            let [(id, session)] = owners.as_slice() else { return true };
+            payload["tabId"] = serde_json::json!(id);
+            Arc::clone(session)
         };
         let Ok(entry) = session.lock() else {
             return false;
@@ -3295,6 +3320,19 @@ mod tests {
             .write("two", &format!("exec {}/codex\r", dir.display()))
             .unwrap();
         let replaced_shell = wait("two", Some("codex"));
+        let second_agent = replaced_shell.agent_detection.as_ref().unwrap().agent.as_ref().unwrap();
+        let mut external = serde_json::json!({
+            "tabId":"external:codex:outside", "sessionId":"outside", "source":"codex",
+            "event":"Stop", "cwd":dir, "hookProcessId":std::process::id(),
+        });
+        assert!(host.correlate_agent_hook(&mut external));
+        assert_eq!(external["tabId"], "external:codex:outside",
+            "unrelated same-directory Hook must remain outside every PTY");
+        assert!(external.get("agentRunId").is_none());
+        external["hookProcessId"] = serde_json::json!(second_agent.pid);
+        assert!(host.correlate_agent_hook(&mut external));
+        assert_eq!(external["tabId"], "two", "only the owning PTY can be recovered");
+        assert_eq!(external["agentRunId"], second_agent.run_id);
         assert_eq!(
             replaced_shell.root_pid,
             replaced_shell.agent_detection.unwrap().agent.map(|a| a.pid)
