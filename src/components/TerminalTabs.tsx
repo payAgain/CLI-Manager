@@ -2665,13 +2665,17 @@ export function TerminalTabs({
     [scopedSessionIds, sessions]
   );
   const allPanes = activeWorkspanLayout?.panes ?? [];
+  const activeWorkspanPaneId = activeWorkspanLayout?.workspan.activePaneId ?? null;
   const activeFullscreenPaneId = useMemo(() => {
-    if (!fullscreenPaneId) return null;
+    // Session activation can originate outside this component (quick jump,
+    // Sidebar, keyboard shortcuts, or an existing editor). Never keep the
+    // newly active pane hidden behind a different pane's fullscreen view.
+    if (!fullscreenPaneId || fullscreenPaneId !== activeWorkspanPaneId) return null;
     const pane = allPanes.find((item) => item.id === fullscreenPaneId);
     if (!pane) return null;
     if (scopedSessionIds && !pane.sessionIds.some((sessionId) => scopedSessionIds.has(sessionId))) return null;
     return fullscreenPaneId;
-  }, [allPanes, fullscreenPaneId, scopedSessionIds]);
+  }, [activeWorkspanPaneId, allPanes, fullscreenPaneId, scopedSessionIds]);
   const preferredScopedSessionId = useMemo(() => {
     if (!scopedSessionIds) return null;
     if (activeSessionId && scopedSessionIds.has(activeSessionId)) return activeSessionId;
