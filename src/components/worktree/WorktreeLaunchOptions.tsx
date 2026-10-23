@@ -12,7 +12,7 @@ export function WorktreeLaunchOptions({ project, value, onChange }: {
   const modes: WorktreeLaunchMode[] = resolveProjectStartupCommand(project) ? ["agent", "shell", "none"] : ["shell", "none"];
   return <fieldset className="mt-4 space-y-2">
     <legend className="mb-2 text-xs text-text-muted">{t("worktree.launch.title")}</legend>
-    {modes.map(mode => <label key={mode} className="flex cursor-pointer items-start gap-2.5 rounded-md px-2 py-1.5 hover:bg-background-tertiary">
+    {modes.map(mode => <label key={mode} className="flex cursor-pointer items-start gap-2.5 rounded-md px-2 py-1.5 hover:bg-bg-tertiary">
       <input type="radio" name="worktree-launch" value={mode} checked={value === mode}
         onChange={() => onChange(mode)} className="mt-1 accent-[var(--color-accent)]" />
       <span className="min-w-0 text-sm">

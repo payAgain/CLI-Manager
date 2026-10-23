@@ -27,6 +27,8 @@ test("a new Worktree starts a fresh conversation without an old session or direc
   assert.equal(worktreeStartupCommand({ ...project, startup_cmd: 'codex resume old-id -C /old --worktree' }, "agent"), "codex");
   assert.equal(freshWorkspaceAgentArgs('claude -r old-id -c --fork-session -w old-tree --model opus', "claude"), "claude --model opus");
   assert.equal(freshWorkspaceAgentArgs('pi --session old-id --model model', "pi"), "pi --model model");
+  assert.equal(freshWorkspaceAgentArgs('codex -C"/old dir" --model fast', "codex"), "codex --model fast");
+  assert.equal(freshWorkspaceAgentArgs('claude -rold-id -wold-tree --model opus', "claude"), "claude --model opus");
 });
 
 test("blank, create-only and configured commands are distinct outcomes", () => {

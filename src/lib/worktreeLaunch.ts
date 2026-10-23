@@ -12,6 +12,7 @@ export function freshWorkspaceAgentArgs(args: string, tool: string): string {
   const kept: string[] = [];
   for (let i = 0; i < tokens.length; i++) {
     const raw = tokens[i].raw;
+    if ((tool === "codex" && /^-C.+/.test(raw)) || (tool === "claude" && /^-[rw].+/.test(raw))) continue;
     const name = raw.split("=", 1)[0];
     const valueOption = name === "--session-id"
       || (tool === "claude" && name === "-r")

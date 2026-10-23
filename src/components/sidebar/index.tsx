@@ -1075,6 +1075,7 @@ export function Sidebar({
       created = await createWorktreeForProject(project, taskName);
       const command = worktreeStartupCommand(project, mode);
       if (command !== null) await openWorktreeSession(project, created, targetPaneId, command);
+      else closeHistory();
       setSelectedId(created.id);
       if (projectScopedTerminalViewEnabled || command === null) {
         useTerminalStore.getState().setTerminalScope({ kind: "worktree", projectId: project.id, worktreeId: created.id });
