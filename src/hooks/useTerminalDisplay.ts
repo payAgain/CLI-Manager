@@ -10,6 +10,7 @@ import { markTerminalSnapshotDirty } from "../lib/sessionSnapshotPersistence";
 import { resetTerminalMouseProtocol, writeTerminalReplay } from "../lib/terminalReplayWriter";
 import { isValidTerminalSize, TerminalResizeDebouncer } from "../terminal/browser/TerminalResizeDebouncer";
 import { TerminalResizeRenderBarrier } from "../terminal/browser/TerminalResizeRenderBarrier";
+import { TerminalWriteScheduler } from "../terminal/browser/TerminalWriteScheduler";
 import {
   terminalProcessManager,
   type TerminalOutputDelivery,
@@ -26,55 +27,14 @@ import { useTerminalStore } from "../stores/terminalStore";
 const HIDDEN_WEBGL_DISPOSE_DELAY_MS = 30_000;
 const LOW_MEMORY_WEBGL_DISPOSE_DELAY_MS = 10_000;
 const PTY_LIVE_WRITE_BATCH_BYTES = 64 * 1024;
-const PTY_VISIBLE_WRITE_BURST = 3;
-
-interface ScheduledTerminalWrite {
-  token: symbol;
-  isVisible: () => boolean;
-  flush: () => void;
-}
-
-const scheduledTerminalWrites = new Map<symbol, ScheduledTerminalWrite>();
-let terminalWriteSchedulerRafId: number | null = null;
-let visibleWriteBurst = 0;
-
-const scheduleGlobalTerminalWrite = () => {
-  if (terminalWriteSchedulerRafId !== null || scheduledTerminalWrites.size === 0) return;
-  terminalWriteSchedulerRafId = requestAnimationFrame(() => {
-    terminalWriteSchedulerRafId = null;
-    const entries = [...scheduledTerminalWrites.values()];
-    const visible = entries.find((entry) => entry.isVisible());
-    const hidden = entries.find((entry) => !entry.isVisible());
-    const selected = visible && (!hidden || visibleWriteBurst < PTY_VISIBLE_WRITE_BURST)
-      ? visible
-      : hidden ?? visible;
-    if (!selected) return;
-    visibleWriteBurst = selected.isVisible() ? visibleWriteBurst + 1 : 0;
-    scheduledTerminalWrites.delete(selected.token);
-    selected.flush();
-    if (scheduledTerminalWrites.size === 0) {
-      visibleWriteBurst = 0;
-      return;
-    }
-    scheduleGlobalTerminalWrite();
-  });
-};
-
-const requestGlobalTerminalWrite = (entry: ScheduledTerminalWrite) => {
-  scheduledTerminalWrites.set(entry.token, entry);
-  scheduleGlobalTerminalWrite();
-};
-
-const cancelGlobalTerminalWrite = (token: symbol) => {
-  scheduledTerminalWrites.delete(token);
-  if (scheduledTerminalWrites.size === 0) {
-    if (terminalWriteSchedulerRafId !== null) {
-      cancelAnimationFrame(terminalWriteSchedulerRafId);
-      terminalWriteSchedulerRafId = null;
-    }
-    visibleWriteBurst = 0;
-  }
-};
+const terminalWriteScheduler = new TerminalWriteScheduler({
+  requestFrame: (callback) => requestAnimationFrame(callback),
+  cancelFrame: (id) => cancelAnimationFrame(id),
+  setTimer: (callback, delay) => window.setTimeout(callback, delay),
+  clearTimer: (id) => window.clearTimeout(id),
+  now: () => performance.now(),
+  isDocumentHidden: () => document.visibilityState === "hidden",
+});
 
 type NormalizeTerminalOutput = (text: string, recordHistory?: boolean) => string;
 type TransformTerminalOutput = (text: string) => string;
@@ -346,7 +306,7 @@ export function useTerminalDisplay({
       ) {
         return;
       }
-      requestGlobalTerminalWrite({
+      terminalWriteScheduler.request({
         token: ptyWriteScheduleTokenRef.current,
         isVisible: () => isVisibleRef.current,
         flush: flushPendingWrites,
@@ -508,7 +468,7 @@ export function useTerminalDisplay({
       cancelled = true;
       bufferedLivePayloads.length = 0;
       forwardPtyResizeRef.current = true;
-      cancelGlobalTerminalWrite(ptyWriteScheduleTokenRef.current);
+      terminalWriteScheduler.cancel(ptyWriteScheduleTokenRef.current);
       ptyPendingChunksRef.current = [];
       ptyWriteInProgressRef.current = false;
       ptyUnlistenRef.current?.();
@@ -607,7 +567,7 @@ export function useTerminalDisplay({
 
   const resetOutputState = () => {
     cancelPendingViewportRestore();
-    cancelGlobalTerminalWrite(ptyWriteScheduleTokenRef.current);
+    terminalWriteScheduler.cancel(ptyWriteScheduleTokenRef.current);
     ptyPendingChunksRef.current = [];
     ptyWriteInProgressRef.current = false;
     forwardPtyResizeRef.current = true;
