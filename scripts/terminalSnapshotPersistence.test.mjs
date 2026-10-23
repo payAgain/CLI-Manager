@@ -10,6 +10,10 @@ const body = ast.statements.filter(node => !ts.isImportDeclaration(node)).map(no
 const compiled = ts.transpileModule(`${body}\nexports.tick = flushDirtySnapshots;`, {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
 }).outputText;
+const gateApi = {};
+new Function("exports", ts.transpileModule(readFileSync(new URL("../src/lib/terminalMutationGate.ts", import.meta.url), "utf8"), {
+  compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+}).outputText)(gateApi);
 const deferred = () => {
   let resolve, reject;
   const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
@@ -19,19 +23,31 @@ const settle = async () => { for (let i = 0; i < 12; i++) await Promise.resolve(
 
 function harness(save = async () => {}) {
   const exports = {}, timers = new Set(), updates = [], errors = [], saves = [];
+  let now = 0;
   const state = {
     sessions: [],
     updateSessionTerminalSnapshot(id, text) { updates.push({ id, text }); },
   };
   runInNewContext(compiled, {
-    exports, AbortController,
+    exports, AbortController, setTimeout, clearTimeout, queueMicrotask, Date: { now: () => now },
     useTerminalStore: { getState: () => state },
     useSessionStore: { getState: () => ({ saveSessions: async rows => { saves.push(rows); await save(rows); } }) },
     logError: (...args) => errors.push(args),
     setInterval: callback => { timers.add(callback); return callback; },
     clearInterval: timer => timers.delete(timer),
   });
-  return { ...exports, timers, updates, errors, saves };
+  return {
+    ...exports, timers, updates, errors, saves,
+    advance: ms => { now += ms; },
+    registerTerminalSnapshotSource(id, serialize, checkpoint) {
+      return exports.registerTerminalSnapshotSource(id, async (signal, full) => {
+        const capture = await serialize(signal, full);
+        return typeof capture === "string"
+          ? { snapshot: capture, checkpoint: full && checkpoint ? () => checkpoint(capture) : undefined }
+          : capture;
+      });
+    },
+  };
 }
 
 test("idle sources do not serialize and unregister stops the timer", async () => {
@@ -47,10 +63,13 @@ test("idle sources do not serialize and unregister stops the timer", async () =>
   assert.equal(h.terminalSnapshotDiagnostics().sources, 0);
 });
 
-test("full checkpoint and the existing 2000-line persisted tail remain unchanged", async () => {
+test("full checkpoint and independently replayable persisted tail stay separate", async () => {
   const h = harness(), checkpoints = [];
   const full = Array.from({ length: 5001 }, (_, i) => `line-${i}`).join("\n");
-  h.registerTerminalSnapshotSource("a", () => full, async text => { checkpoints.push(text); });
+  const tail = full.split("\n").slice(-2000).join("\n");
+  h.registerTerminalSnapshotSource("a", () => ({
+    snapshot: tail, checkpoint: async () => { checkpoints.push(full); },
+  }));
   h.markTerminalSnapshotDirty("a");
   await h.tick();
   assert.deepEqual(checkpoints, [full]);
@@ -184,8 +203,10 @@ test("persistence failures mark saved sources dirty and retry without requiring 
 test("disposed xterm write barriers cancel, release the flight, and ignore late callbacks", async () => {
   const h = harness();
   let callback, serialized = 0;
-  const stop = h.registerTerminalSnapshotSource("a", signal => h.serializeTerminalAfterWrite(
-    { write: (_text, done) => { callback = done; } },
+  const gate = gateApi.installTerminalMutationGate({
+    write: (_text, done) => { callback = done; }, resize() {}, reset() {}, clear() {},
+  });
+  const stop = h.registerTerminalSnapshotSource("a", signal => gate.capture(
     () => { serialized++; return "old"; }, signal,
   ));
   const flight = h.flushTerminalSnapshotsNow();
@@ -202,20 +223,144 @@ test("disposed xterm write barriers cancel, release the flight, and ignore late 
   assert.equal(h.updates[0].text, "next");
 });
 
-test("write barrier catches serializer exceptions instead of hanging the flush", async () => {
-  const h = harness(), signal = new AbortController().signal;
-  let done;
-  const pending = h.serializeTerminalAfterWrite({ write: (_text, callback) => { done = callback; } },
-    () => { throw new Error("serialize error"); }, signal);
-  const rejected = assert.rejects(pending, /serialize error/);
-  done();
-  await rejected;
+test("routine saves scan tails while full checkpoints follow a separate cadence, including quiet buffers", async () => {
+  const h = harness(), requests = [], checkpoints = [];
+  h.registerTerminalSnapshotSource("local", (_signal, full) => {
+    requests.push(full);
+    return { snapshot: "tail", checkpoint: full ? async () => { checkpoints.push("complete"); } : undefined };
+  });
+  h.markTerminalSnapshotDirty("local");
+  await h.tick();
+  for (let tick = 1; tick <= 5; tick++) {
+    h.advance(10_000);
+    h.markTerminalSnapshotDirty("local");
+    await h.tick();
+  }
+  assert.deepEqual(requests, [true, false, false, false, false, false]);
+  h.advance(10_000);
+  await h.tick();
+  assert.equal(requests.at(-1), true, "a persisted tail must not hide an overdue full checkpoint");
+  assert.equal(checkpoints.length, 2);
+  await h.flushTerminalSnapshotsNow();
+  assert.equal(requests.at(-1), true);
+  assert.equal(checkpoints.length, 3, "exit captures even an otherwise clean/hidden terminal");
 });
 
-test("snapshot diagnostics and cancellable serializer are connected to production callers", () => {
-  const controller = readFileSync(new URL("../src/components/XTermTerminal.tsx", import.meta.url), "utf8");
-  const diagnostics = readFileSync(new URL("../src/lib/runtimeDiagnostics.ts", import.meta.url), "utf8");
-  assert.match(controller, /serializeAfterWriteBarrier = \(signal: AbortSignal\) => serializeTerminalAfterWrite/);
-  assert.match(controller, /registerTerminalSnapshotSource\(\s*sessionId,\s*serializeAfterWriteBarrier/);
-  assert.match(diagnostics, /snapshots: terminalSnapshotDiagnostics\(\)/);
+test("byte threshold triggers a full checkpoint without waiting for the periodic timer", async () => {
+  const h = harness(), requests = [];
+  let resolveCheckpoint;
+  const uploaded = new Promise(resolve => { resolveCheckpoint = resolve; });
+  const stop = h.registerTerminalSnapshotSource("ssh", (_signal, full) => {
+    requests.push(full);
+    return { snapshot: "tail", checkpoint: full ? async () => resolveCheckpoint() : undefined };
+  });
+  h.markTerminalSnapshotDirty("ssh", 4 * 1024 * 1024);
+  await uploaded;
+  await settle();
+  assert.deepEqual(requests, [true]);
+  assert.equal(h.saves.length, 1);
+  stop();
+});
+
+test("bytes crossing the threshold during upload trigger a second complete capture", async () => {
+  const h = harness(), first = deferred(), second = deferred();
+  let captures = 0;
+  const stop = h.registerTerminalSnapshotSource("wsl", () => ({
+    snapshot: `capture-${++captures}`,
+    checkpoint: async () => { if (captures === 1) await first.promise; else second.resolve(); },
+  }));
+  h.markTerminalSnapshotDirty("wsl", 4 * 1024 * 1024);
+  await new Promise(resolve => setTimeout(resolve, 0));
+  h.markTerminalSnapshotDirty("wsl", 4 * 1024 * 1024);
+  first.resolve();
+  await second.promise;
+  await settle();
+  assert.equal(captures, 2);
+  stop();
+});
+
+test("output committed while persistence is pending stays dirty after that save", async () => {
+  const saved = deferred(), h = harness(() => saved.promise);
+  h.registerTerminalSnapshotSource("pane", () => "picture");
+  h.markTerminalSnapshotDirty("pane");
+  const tick = h.tick();
+  await settle();
+  h.markTerminalSnapshotDirty("pane");
+  saved.resolve();
+  await tick;
+  assert.equal(h.terminalSnapshotDiagnostics().dirtySources, 1);
+  await h.tick();
+  assert.equal(h.terminalSnapshotDiagnostics().dirtySources, 0);
+});
+
+test("failed early checkpoints back off to the normal retry rather than spinning timers", async () => {
+  const h = harness();
+  let attempts = 0;
+  const stop = h.registerTerminalSnapshotSource("offline", () => ({
+    snapshot: "saved tail",
+    checkpoint: async () => { attempts++; throw new Error("offline"); },
+  }));
+  h.markTerminalSnapshotDirty("offline", 4 * 1024 * 1024);
+  await new Promise(resolve => setTimeout(resolve, 10));
+  assert.equal(attempts, 1);
+  assert.equal(h.terminalSnapshotDiagnostics().dirtySources, 1);
+  await h.tick();
+  assert.equal(attempts, 2);
+  stop();
+});
+
+test("multi-terminal saves give rendering/input a task between complete captures", async () => {
+  const h = harness(), order = [];
+  h.registerTerminalSnapshotSource("one", () => { order.push("one"); return "one"; });
+  h.registerTerminalSnapshotSource("two", () => { order.push("two"); return "two"; });
+  setTimeout(() => order.push("input"), 0);
+  await h.flushTerminalSnapshotsNow();
+  assert.deepEqual(order, ["one", "input", "two"]);
+});
+
+test("a reset invalidating a completed capture skips upload and local publication, then retries", async () => {
+  const h = harness();
+  let valid = false, uploaded = 0;
+  h.registerTerminalSnapshotSource("reset", () => ({
+    snapshot: valid ? "current" : "stale",
+    isCurrent: () => valid,
+    checkpoint: async () => { uploaded++; },
+  }));
+  h.markTerminalSnapshotDirty("reset");
+  await h.tick();
+  assert.equal(uploaded, 0);
+  assert.deepEqual(h.updates, []);
+  assert.equal(h.terminalSnapshotDiagnostics().dirtySources, 1);
+  valid = true;
+  await h.tick();
+  assert.equal(uploaded, 1);
+  assert.equal(h.updates.at(-1).text, "current");
+  assert.equal(h.terminalSnapshotDiagnostics().dirtySources, 0);
+});
+
+test("a stream changed while uploading cannot publish its stale snapshot or consume the retry", async () => {
+  const h = harness(), upload = deferred();
+  let generation = 1, captures = 0;
+  h.registerTerminalSnapshotSource("reset", () => {
+    const capturedGeneration = generation;
+    const first = captures++ === 0;
+    return {
+      snapshot: `picture-${capturedGeneration}`,
+      isCurrent: () => capturedGeneration === generation,
+      checkpoint: first ? () => upload.promise : async () => {},
+    };
+  });
+  h.markTerminalSnapshotDirty("reset");
+  const flight = h.tick();
+  await settle();
+  generation++;
+  h.markTerminalSnapshotDirty("reset");
+  upload.resolve();
+  await flight;
+  assert.deepEqual(h.updates, []);
+  assert.equal(h.terminalSnapshotDiagnostics().dirtySources, 1);
+  await h.tick();
+  assert.equal(captures, 2);
+  assert.equal(h.updates.at(-1).text, "picture-2");
+  assert.equal(h.terminalSnapshotDiagnostics().dirtySources, 0);
 });

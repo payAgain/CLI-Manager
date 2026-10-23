@@ -1,8 +1,7 @@
 import type { Terminal } from "@xterm/xterm";
+import { mutateTerminalWhenReady } from "./terminalMutationGate";
 import {
-  hasCodexTuiViewport,
-  hasKnownAiTuiViewport,
-  hasTuiComposerPromptViewport,
+  inspectTerminalTuiViewport,
   normalizeTerminalTuiComposerBackground,
 } from "./terminalTuiDisplay";
 import {
@@ -33,23 +32,33 @@ export function createTerminalTuiColorSyncController(
 ): TerminalTuiColorSyncController {
   let frameId: number | null = null;
   let tuiSessionDetected = false;
+  let normalizationPending = false;
+  let generation = 0;
 
-  const normalize = (terminal: Terminal) => {
+  const normalizeNow = (terminal: Terminal) => {
+    // A synchronous parse/theme update supersedes a queued scroll update.
+    // Do not scan again on the render caused by our own cell normalization.
+    if (frameId !== null) {
+      window.cancelAnimationFrame(frameId);
+      frameId = null;
+    }
     const options = getOptions();
     // Hidden terminals still parse every PTY frame, but their TUI color scan only
     // affects rendered cells. Defer that expensive work until the tab is visible.
     if (!options.isVisible) return;
     const context = options.getContext();
+    const viewport = inspectTerminalTuiViewport(terminal);
+    const codexContext = isCodexTerminalContext(context);
+    const claudeContext = isClaudeTerminalContext(context);
     const hasContextualTuiPrompt = (
-      (isCodexTerminalContext(context) || isClaudeTerminalContext(context))
-      && hasTuiComposerPromptViewport(terminal)
+      (codexContext || claudeContext) && viewport.composerPrompt
     );
-    if (hasKnownAiTuiViewport(terminal) || hasContextualTuiPrompt) tuiSessionDetected = true;
+    if (viewport.known || hasContextualTuiPrompt) tuiSessionDetected = true;
 
     const isTuiCodexSession = tuiSessionDetected && (
-      hasCodexTuiViewport(terminal) || isCodexTerminalContext(context)
+      viewport.codex || codexContext
     );
-    const isTuiClaudeSession = tuiSessionDetected && isClaudeTerminalContext(context);
+    const isTuiClaudeSession = tuiSessionDetected && claudeContext;
     normalizeTerminalTuiComposerBackground(terminal, {
       shouldNormalize: options.isTransparent || ((isTuiCodexSession || isTuiClaudeSession) && options.isLightTheme),
       isTransparent: options.isTransparent,
@@ -60,6 +69,18 @@ export function createTerminalTuiColorSyncController(
       terminalTextColor: options.terminalTextColor,
       tuiUserColor: options.tuiUserColor,
       tuiAssistantColor: options.tuiAssistantColor,
+      hasKnownTuiSignature: viewport.known,
+    });
+  };
+
+  const normalize = (terminal: Terminal) => {
+    if (normalizationPending) return;
+    normalizationPending = true;
+    const currentGeneration = generation;
+    mutateTerminalWhenReady(terminal, () => {
+      if (generation !== currentGeneration) return;
+      normalizationPending = false;
+      normalizeNow(terminal);
     });
   };
 
@@ -73,6 +94,8 @@ export function createTerminalTuiColorSyncController(
 
   const reset = () => {
     tuiSessionDetected = false;
+    normalizationPending = false;
+    generation++;
   };
 
   const dispose = () => {

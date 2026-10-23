@@ -14,6 +14,7 @@ const tempDir = mkdtempSync(join(tmpdir(), "cli-manager-terminal-replay-"));
 process.on("exit", () => rmSync(tempDir, { recursive: true, force: true }));
 
 globalThis.window = globalThis;
+globalThis.document = { visibilityState: "visible" };
 let nextRafId = 1;
 const rafCallbacks = new Map();
 globalThis.requestAnimationFrame = (callback) => {
@@ -64,7 +65,10 @@ export function resetVisibility() {
 `);
 writeFileSync(join(tempDir, "themes.mjs"), "export function isLightTerminalTheme() { return false; }\n");
 writeFileSync(join(tempDir, "logger.mjs"), "export function logError() {} export function logWarn() {}\n");
-writeFileSync(join(tempDir, "snapshot.mjs"), "export function markTerminalSnapshotDirty() {}\n");
+writeFileSync(join(tempDir, "snapshot.mjs"), `
+export const dirtyMarks = [];
+export function markTerminalSnapshotDirty(sessionId, bytes = 0) { dirtyMarks.push({ sessionId, bytes }); }
+`);
 writeFileSync(join(tempDir, "resize.mjs"), `
 export function shouldDebounceTerminalResize() { return false; }
 export function isValidTerminalSize(cols, rows) {
@@ -133,20 +137,31 @@ const transpiled = ts.transpileModule(source, {
   .replace('from "../lib/terminalThemes"', 'from "./themes.mjs"')
   .replace('from "../lib/logger"', 'from "./logger.mjs"')
   .replace('from "../lib/sessionSnapshotPersistence"', 'from "./snapshot.mjs"')
+  .replace('from "../lib/terminalMutationGate"', 'from "./terminalMutationGate.mjs"')
   .replace('from "../lib/terminalReplayWriter"', `from ${JSON.stringify(pathToFileURL(join(tempDir, "terminalReplayWriter.mjs")).href)}`)
   .replace('from "../terminal/browser/TerminalResizeDebouncer"', 'from "./resize.mjs"')
   .replace('from "../terminal/browser/TerminalResizeRenderBarrier"', 'from "./resizeBarrier.mjs"')
+  .replace('from "../terminal/browser/TerminalWriteScheduler"', 'from "./TerminalWriteScheduler.mjs"')
   .replace('from "../terminal/core/TerminalProcessManager"', 'from "./manager.mjs"')
   .replace('from "../stores/settingsStore"', 'from "./settings.mjs"')
   .replace('from "../stores/terminalStore"', 'from "./terminalStore.mjs"');
 const modulePath = join(tempDir, "useTerminalDisplay.mjs");
+writeFileSync(join(tempDir, "TerminalWriteScheduler.mjs"), ts.transpileModule(
+  readFileSync(new URL("../src/terminal/browser/TerminalWriteScheduler.ts", import.meta.url), "utf8"),
+  { compilerOptions: { module: ts.ModuleKind.ES2022, target: ts.ScriptTarget.ES2022 } },
+).outputText);
 writeFileSync(join(tempDir, "terminalReplayWriter.mjs"), ts.transpileModule(
   readFileSync(new URL("../src/lib/terminalReplayWriter.ts", import.meta.url), "utf8"),
+  { compilerOptions: { module: ts.ModuleKind.ES2022, target: ts.ScriptTarget.ES2022 } },
+).outputText);
+writeFileSync(join(tempDir, "terminalMutationGate.mjs"), ts.transpileModule(
+  readFileSync(new URL("../src/lib/terminalMutationGate.ts", import.meta.url), "utf8"),
   { compilerOptions: { module: ts.ModuleKind.ES2022, target: ts.ScriptTarget.ES2022 } },
 ).outputText);
 writeFileSync(modulePath, transpiled, "utf8");
 
 const { useTerminalDisplay } = await import(pathToFileURL(modulePath).href);
+const snapshotStub = await import(pathToFileURL(join(tempDir, "snapshot.mjs")).href);
 const managerStub = await import(pathToFileURL(join(tempDir, "manager.mjs")).href);
 const resizeStub = await import(pathToFileURL(join(tempDir, "resize.mjs")).href);
 const visibilityStub = await import(pathToFileURL(join(tempDir, "visibility.mjs")).href);
@@ -266,7 +281,6 @@ function createDisplay(
     isTransparentRef: { current: false },
     normalizeOutputRef: { current: (text) => text },
     transformOutputRef: { current: (text) => text },
-    afterTerminalWriteRef: { current: null },
     onPtyOutputListenError: (error) => { throw error; },
   });
   const detachViewport = display.attachViewport(terminal);
@@ -927,7 +941,7 @@ test("continuous live output yields between bounded xterm writes", async () => {
   detachViewport();
 });
 
-test("multiple terminals start only one xterm write per animation frame", async () => {
+test("multiple terminals start output together while each terminal waits for its own parser", async () => {
   managerStub.resetManager();
   const first = createDisplay(undefined, { sessionId: "session-1" });
   const second = createDisplay(undefined, { sessionId: "session-2" });
@@ -942,14 +956,18 @@ test("multiple terminals start only one xterm write per animation frame", async 
   const writeCount = [...first.events, ...second.events]
     .filter((event) => event.startsWith("write:"))
     .length;
-  assert.equal(writeCount, 1);
-  const pending = first.terminal.writeCallbacks.length > 0 ? first : second;
-  const waiting = pending === first ? second : first;
-  await pending.terminal.finishNextWrite();
+  assert.equal(writeCount, 2);
+  assert.equal(first.terminal.writeCallbacks.length, 1);
+  assert.equal(second.terminal.writeCallbacks.length, 1);
+  managerStub.emitOutput(delivery(frame(3, "more-first", 120, 30), []), "session-1");
   flushNextAnimationFrame();
-  assert.equal(waiting.terminal.writeCallbacks.length, 1);
-
-  await waiting.terminal.finishNextWrite();
+  assert.equal(first.terminal.writeCallbacks.length, 1);
+  assert.equal(first.events.filter((event) => event.startsWith("write:")).length, 1);
+  await first.terminal.finishNextWrite();
+  flushNextAnimationFrame();
+  assert.equal(first.events.filter((event) => event.startsWith("write:")).length, 2);
+  await first.terminal.finishNextWrite();
+  await second.terminal.finishNextWrite();
   firstOutput.dispose();
   secondOutput.dispose();
   first.detachViewport();
@@ -974,11 +992,6 @@ test("hidden terminal is not starved by continuous visible output", async () => 
   }
   managerStub.emitOutput(delivery(frame(1, "background", 120, 30), hiddenCommits), "hidden");
 
-  for (let index = 0; index < 3; index += 1) {
-    flushNextAnimationFrame();
-    assert.equal(hidden.events.length, 0);
-    await visible.terminal.finishNextWrite();
-  }
   flushNextAnimationFrame();
   assert.deepEqual(
     hidden.events.filter((event) => event.startsWith("write:")),
@@ -986,9 +999,132 @@ test("hidden terminal is not starved by continuous visible output", async () => 
   );
   await hidden.terminal.finishNextWrite();
   assert.deepEqual(hiddenCommits, [{ sequence: 1, charCount: 10 }]);
+  for (let index = 0; index < 4; index += 1) {
+    await visible.terminal.finishNextWrite();
+    flushNextAnimationFrame();
+  }
+  assert.equal(visibleCommits.length, 4);
 
   visibleOutput.dispose();
   hiddenOutput.dispose();
   visible.detachViewport();
   hidden.detachViewport();
+});
+
+
+test("snapshot dirtiness follows parsed output and ACKs, never the external pending queue", async () => {
+  managerStub.resetManager();
+  snapshotStub.dirtyMarks.length = 0;
+  const h = createDisplay(undefined, { sessionId: "snapshot-boundary", isVisible: false });
+  const output = h.display.attachPtyOutput();
+  await output.ready;
+  const commits = [];
+  managerStub.emitOutput(delivery(frame(1, "a".repeat(40 * 1024), 120, 30), commits), "snapshot-boundary");
+  managerStub.emitOutput(delivery(frame(2, "b".repeat(40 * 1024), 120, 30), commits), "snapshot-boundary");
+  assert.deepEqual(snapshotStub.dirtyMarks, [], "receiving a queued frame must not mark a picture ready");
+  flushNextAnimationFrame();
+  assert.deepEqual(snapshotStub.dirtyMarks, [], "a submitted but unparsed write is still not in the picture");
+  await h.terminal.finishNextWrite();
+  assert.equal(commits.length, 1);
+  assert.deepEqual(snapshotStub.dirtyMarks, [{ sessionId: "snapshot-boundary", bytes: 40 * 1024 }]);
+  snapshotStub.dirtyMarks.length = 0; // model a periodic snapshot of the first parsed write
+  flushNextAnimationFrame();
+  await h.terminal.finishNextWrite();
+  assert.equal(commits.length, 2);
+  assert.deepEqual(snapshotStub.dirtyMarks, [{ sessionId: "snapshot-boundary", bytes: 40 * 1024 }],
+    "the later parsed write needs another save even if its receive event preceded the prior save");
+  output.dispose();
+  h.detachViewport();
+});
+
+
+test("a quiet daemon replay and resize-only replay still schedule persistence", async () => {
+  for (const text of ["restored without new live output", ""]) {
+    managerStub.resetManager();
+    snapshotStub.dirtyMarks.length = 0;
+    const h = createDisplay(undefined, { sessionId: "quiet-replay", isVisible: false });
+    const output = h.display.attachPtyOutput({ waitForReplay: true });
+    await output.ready;
+    const replay = output.completeReplay([frame(7, text, 120, 30, "replay")]);
+    if (text) await h.terminal.finishNextWrite();
+    await replay;
+    assert.ok(snapshotStub.dirtyMarks.some(mark => mark.sessionId === "quiet-replay"));
+    assert.equal(snapshotStub.dirtyMarks.reduce((sum, mark) => sum + mark.bytes, 0), 0,
+      "historical replay should not count again toward the new-output byte threshold");
+    output.dispose();
+    h.detachViewport();
+  }
+});
+
+test("resizing an otherwise idle display makes its new geometry eligible for persistence", () => {
+  snapshotStub.dirtyMarks.length = 0;
+  const h = createDisplay(undefined, { sessionId: "idle-resize" });
+  h.terminal.resize(100, 35);
+  assert.deepEqual(snapshotStub.dirtyMarks, [{ sessionId: "idle-resize", bytes: 0 }]);
+  h.detachViewport();
+});
+
+test("production reset and resize-only replay defer their ACK and mouse changes until capture releases", { timeout: 4000 }, async t => {
+  managerStub.resetManager();
+  const { installTerminalMutationGate } = await import(pathToFileURL(join(tempDir, "terminalMutationGate.mjs")).href);
+  const { trackTerminalMouseProtocol } = await import(pathToFileURL(join(tempDir, "terminalReplayWriter.mjs")).href);
+  const h = createDisplay(undefined, {
+    isVisible: false,
+    terminalFactory: () => new RealTerminal({ cols: 80, rows: 24, allowProposedApi: true }),
+  });
+  const protocol = trackTerminalMouseProtocol(h.terminal);
+  const gate = installTerminalMutationGate(h.terminal);
+  const output = h.display.attachPtyOutput();
+  t.after(() => { output.dispose(); gate.dispose(); protocol.dispose(); h.detachViewport(); h.terminal.dispose(); });
+  await output.ready;
+  await new Promise(resolve => h.terminal.write("old screen\x1b[?1006h", resolve));
+  let release, entered;
+  const started = new Promise(resolve => { entered = resolve; });
+  const held = gate.capture(async () => { entered(); await new Promise(resolve => { release = resolve; }); }, new AbortController().signal);
+  await started;
+  const commits = [];
+  managerStub.emitOutput(delivery({ ...frame(0, "", 90, 25), kind: "reset" }, commits));
+  managerStub.emitOutput(delivery(frame(1, "", 100, 30, true), commits));
+  flushAnimationFrames();
+  assert.equal(h.terminal.cols, 80);
+  assert.equal(h.terminal.buffer.active.getLine(0).translateToString(true), "old screen");
+  assert.equal(protocol.snapshotSuffix(), "\x1b[?1006h");
+  assert.deepEqual(commits, []);
+  release(); await held;
+  for (let i = 0; i < 12; i++) await Promise.resolve();
+  flushAnimationFrames();
+  for (let i = 0; i < 12; i++) await Promise.resolve();
+  assert.equal(h.terminal.cols, 100);
+  assert.equal(h.terminal.rows, 30);
+  assert.equal(h.terminal.buffer.active.getLine(0).translateToString(true), "");
+  assert.equal(protocol.snapshotSuffix(), "\x1b[?1006l");
+  assert.deepEqual(commits.map(entry => entry.sequence), [0, 1]);
+});
+
+test("production initial resize-only replay cannot acknowledge a grid still held by a snapshot", { timeout: 4000 }, async t => {
+  managerStub.resetManager();
+  const { installTerminalMutationGate } = await import(pathToFileURL(join(tempDir, "terminalMutationGate.mjs")).href);
+  const h = createDisplay(undefined, {
+    isVisible: false,
+    terminalFactory: () => new RealTerminal({ cols: 80, rows: 24, allowProposedApi: true }),
+  });
+  const gate = installTerminalMutationGate(h.terminal);
+  const output = h.display.attachPtyOutput({ waitForReplay: true });
+  t.after(() => { output.dispose(); gate.dispose(); h.detachViewport(); h.terminal.dispose(); });
+  await output.ready;
+  let release, entered;
+  const started = new Promise(resolve => { entered = resolve; });
+  const held = gate.capture(async () => { entered(); await new Promise(resolve => { release = resolve; }); }, new AbortController().signal);
+  await started;
+  // An earlier queued fit must not make the replay skip its recorded grid just
+  // because it currently equals the still-frozen terminal's dimensions.
+  h.terminal.resize(110, 31);
+  const replay = output.completeReplay([frame(2, "", 80, 24, true)]);
+  await Promise.resolve();
+  assert.equal(h.terminal.cols, 80);
+  assert.deepEqual(managerStub.replayAcknowledgments, []);
+  release(); await held; await replay;
+  assert.equal(h.terminal.cols, 80);
+  assert.equal(h.terminal.rows, 24);
+  assert.equal(managerStub.replayAcknowledgments.at(-1).sequence, 2);
 });

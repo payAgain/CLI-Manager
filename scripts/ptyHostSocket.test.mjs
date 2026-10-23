@@ -60,6 +60,10 @@ class FakeWebSocket {
   }
 
   send(raw) {
+    if (raw instanceof ArrayBuffer) {
+      FakeWebSocket.sentFrames.push(raw);
+      return;
+    }
     const frame = JSON.parse(raw);
     FakeWebSocket.sentFrames.push(frame);
     if (frame.type === "auth") {
@@ -342,4 +346,85 @@ test("missing heartbeat pong forces disconnect and reconnect scheduling", { conc
   assert.ok(FakeWebSocket.attachRequests >= 2);
   await socket.close("session-heartbeat");
   socket.socket?.close();
+});
+
+for (const outcome of ["accepted", "rejected", "timeout", "disconnect", "close"]) {
+  test(`duplicate checkpoints share ${outcome} without polling`, { concurrency: false }, async () => {
+    FakeWebSocket.mode = "normal";
+    FakeWebSocket.sentFrames.length = 0;
+    const socket = new PtyHostSocket();
+    await socket.connect();
+    const originalSetInterval = globalThis.setInterval;
+    let pollingTimers = 0;
+    globalThis.setInterval = (...args) => {
+      pollingTimers += 1;
+      return originalSetInterval(...args);
+    };
+    try {
+      const calls = [
+        socket.checkpoint("checkpoint-session", 9, 80, 24, "snapshot"),
+        socket.checkpoint("checkpoint-session", 9, 80, 24, "snapshot"),
+      ];
+      // Attach rejection handlers before delivering any failure response.
+      const settled = Promise.allSettled(calls);
+      await Promise.resolve();
+      assert.equal(FakeWebSocket.sentFrames.filter((frame) => frame instanceof ArrayBuffer).length, 1);
+      assert.equal(socket.diagnosticsSnapshot().pendingCheckpoints, 1);
+      if (outcome === "accepted" || outcome === "rejected") {
+        socket.socket.onmessage({ data: JSON.stringify({
+          type: `checkpoint_${outcome}`,
+          session_id: "checkpoint-session",
+          sequence: 9,
+          message: "checkpoint refused",
+        }) });
+      } else if (outcome === "disconnect") {
+        socket.socket.close();
+      } else if (outcome === "close") {
+        await socket.close("checkpoint-session");
+      }
+      const results = await settled;
+      assert.deepEqual(results.map((result) => result.status),
+        outcome === "accepted" ? ["fulfilled", "fulfilled"] : ["rejected", "rejected"]);
+      if (outcome !== "accepted") assert.equal(results[0].reason, results[1].reason);
+      assert.equal(pollingTimers, 0);
+      assert.equal(socket.diagnosticsSnapshot().pendingCheckpoints, 0);
+    } finally {
+      globalThis.setInterval = originalSetInterval;
+      socket.socket?.close();
+    }
+  });
+}
+
+test("checkpoint rechecks capture validity after awaiting reconnect before encoding or sending", { concurrency: false }, async () => {
+  const socket = new PtyHostSocket();
+  let releaseConnect;
+  socket.connect = () => new Promise(resolve => { releaseConnect = resolve; });
+  let current = true;
+  let checked = 0;
+  let encoded = false;
+  const picture = { toString() { encoded = true; return "obsolete picture"; } };
+  const beforeFrames = FakeWebSocket.sentFrames.length;
+  const rejected = assert.rejects(socket.checkpoint("reset-during-connect", 7, 80, 24, picture, () => {
+    checked++; return current;
+  }), /no longer current/);
+  current = false;
+  releaseConnect();
+  await rejected;
+  assert.equal(checked, 1);
+  assert.equal(encoded, false);
+  assert.equal(FakeWebSocket.sentFrames.length, beforeFrames);
+  assert.equal(socket.diagnosticsSnapshot().pendingCheckpoints, 0);
+});
+
+test("a current checkpoint still uploads and shares its normal acceptance", { concurrency: false }, async () => {
+  FakeWebSocket.mode = "normal";
+  FakeWebSocket.sentFrames.length = 0;
+  const socket = new PtyHostSocket();
+  await socket.connect();
+  const sent = socket.checkpoint("current-capture", 3, 100, 30, "current picture", () => true);
+  await Promise.resolve();
+  assert.equal(FakeWebSocket.sentFrames.filter(frame => frame instanceof ArrayBuffer).length, 1);
+  socket.socket.onmessage({ data: JSON.stringify({ type: "checkpoint_accepted", session_id: "current-capture", sequence: 3 }) });
+  await sent;
+  socket.socket.close();
 });

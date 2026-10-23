@@ -6,6 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use crate::ssh_launch::SshLaunchPlan;
 
@@ -293,7 +294,25 @@ pub struct ReplayEntry {
     pub cols: u16,
     pub rows: u16,
     pub sequence: u64,
-    pub data_base64: String,
+    #[serde(rename = "dataBase64", with = "base64_bytes")]
+    pub data: Arc<[u8]>,
+}
+
+// The compatibility wire format remains Base64; internal fan-out and binary
+// WebSocket output share the original bytes without an encode/decode round trip.
+mod base64_bytes {
+    use base64::{engine::general_purpose::STANDARD, Engine};
+    use serde::{Deserialize, Deserializer, Serializer};
+    use std::sync::Arc;
+
+    pub fn serialize<S: Serializer>(data: &Arc<[u8]>, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&STANDARD.encode(data))
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Arc<[u8]>, D::Error> {
+        let encoded = String::deserialize(deserializer)?;
+        STANDARD.decode(encoded).map(Arc::from).map_err(serde::de::Error::custom)
+    }
 }
 
 /// daemon → 客户端帧：请求应答与主动推送共用一条流。
@@ -365,7 +384,8 @@ pub enum DaemonFrame {
         sequence: u64,
         cols: u16,
         rows: u16,
-        data_base64: String,
+        #[serde(rename = "data_base64", with = "base64_bytes")]
+        data: Arc<[u8]>,
     },
     /// 主动推送：会话进程退出。
     Exit {
@@ -667,10 +687,20 @@ mod tests {
             sequence: 1,
             cols: 80,
             rows: 24,
-            data_base64: "aGk=".into(),
+            data: Arc::from(&b"hi"[..]),
         };
-        let decoded = decode_daemon_frame(encode_frame(&frame).trim_end()).unwrap();
+        let encoded = encode_frame(&frame);
+        let wire: serde_json::Value = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(wire["data_base64"], "aGk=");
+        assert!(wire.get("data").is_none());
+        let decoded = decode_daemon_frame(encoded.trim_end()).unwrap();
         assert_eq!(decoded, frame);
+        let replay = ReplayEntry { cols: 80, rows: 24, sequence: 9, data: Arc::from([0, 255, 128]) };
+        let wire = serde_json::to_value(&replay).unwrap();
+        assert_eq!(wire["dataBase64"], "AP+A");
+        assert!(wire.get("data").is_none());
+        assert_eq!(serde_json::from_value::<ReplayEntry>(wire).unwrap(), replay);
+        assert!(serde_json::from_str::<ReplayEntry>(r#"{"cols":80,"rows":24,"sequence":9,"dataBase64":"not base64!"}"#).is_err());
     }
 
     #[test]

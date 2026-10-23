@@ -8,8 +8,10 @@ import { isLightTerminalTheme } from "../lib/terminalThemes";
 import { logError, logWarn } from "../lib/logger";
 import { markTerminalSnapshotDirty } from "../lib/sessionSnapshotPersistence";
 import { resetTerminalMouseProtocol, writeTerminalReplay } from "../lib/terminalReplayWriter";
+import { mutateTerminalWhenReady } from "../lib/terminalMutationGate";
 import { isValidTerminalSize, TerminalResizeDebouncer } from "../terminal/browser/TerminalResizeDebouncer";
 import { TerminalResizeRenderBarrier } from "../terminal/browser/TerminalResizeRenderBarrier";
+import { TerminalWriteScheduler } from "../terminal/browser/TerminalWriteScheduler";
 import {
   terminalProcessManager,
   type TerminalOutputDelivery,
@@ -26,59 +28,17 @@ import { useTerminalStore } from "../stores/terminalStore";
 const HIDDEN_WEBGL_DISPOSE_DELAY_MS = 30_000;
 const LOW_MEMORY_WEBGL_DISPOSE_DELAY_MS = 10_000;
 const PTY_LIVE_WRITE_BATCH_BYTES = 64 * 1024;
-const PTY_VISIBLE_WRITE_BURST = 3;
-
-interface ScheduledTerminalWrite {
-  token: symbol;
-  isVisible: () => boolean;
-  flush: () => void;
-}
-
-const scheduledTerminalWrites = new Map<symbol, ScheduledTerminalWrite>();
-let terminalWriteSchedulerRafId: number | null = null;
-let visibleWriteBurst = 0;
-
-const scheduleGlobalTerminalWrite = () => {
-  if (terminalWriteSchedulerRafId !== null || scheduledTerminalWrites.size === 0) return;
-  terminalWriteSchedulerRafId = requestAnimationFrame(() => {
-    terminalWriteSchedulerRafId = null;
-    const entries = [...scheduledTerminalWrites.values()];
-    const visible = entries.find((entry) => entry.isVisible());
-    const hidden = entries.find((entry) => !entry.isVisible());
-    const selected = visible && (!hidden || visibleWriteBurst < PTY_VISIBLE_WRITE_BURST)
-      ? visible
-      : hidden ?? visible;
-    if (!selected) return;
-    visibleWriteBurst = selected.isVisible() ? visibleWriteBurst + 1 : 0;
-    scheduledTerminalWrites.delete(selected.token);
-    selected.flush();
-    if (scheduledTerminalWrites.size === 0) {
-      visibleWriteBurst = 0;
-      return;
-    }
-    scheduleGlobalTerminalWrite();
-  });
-};
-
-const requestGlobalTerminalWrite = (entry: ScheduledTerminalWrite) => {
-  scheduledTerminalWrites.set(entry.token, entry);
-  scheduleGlobalTerminalWrite();
-};
-
-const cancelGlobalTerminalWrite = (token: symbol) => {
-  scheduledTerminalWrites.delete(token);
-  if (scheduledTerminalWrites.size === 0) {
-    if (terminalWriteSchedulerRafId !== null) {
-      cancelAnimationFrame(terminalWriteSchedulerRafId);
-      terminalWriteSchedulerRafId = null;
-    }
-    visibleWriteBurst = 0;
-  }
-};
+const terminalWriteScheduler = new TerminalWriteScheduler({
+  requestFrame: (callback) => requestAnimationFrame(callback),
+  cancelFrame: (id) => cancelAnimationFrame(id),
+  setTimer: (callback, delay) => window.setTimeout(callback, delay),
+  clearTimer: (id) => window.clearTimeout(id),
+  now: () => performance.now(),
+  isDocumentHidden: () => document.visibilityState === "hidden",
+});
 
 type NormalizeTerminalOutput = (text: string, recordHistory?: boolean) => string;
 type TransformTerminalOutput = (text: string) => string;
-type AfterTerminalWrite = (terminal: Terminal) => void;
 
 export interface TerminalOutputDiagnostics {
   onFrame(frame: TerminalBinaryFrame, rawText: string, normalizedText: string): void;
@@ -122,7 +82,6 @@ interface UseTerminalDisplayOptions {
   isTransparentRef: RefObject<boolean>;
   normalizeOutputRef: RefObject<NormalizeTerminalOutput>;
   transformOutputRef: RefObject<TransformTerminalOutput>;
-  afterTerminalWriteRef: RefObject<AfterTerminalWrite | null>;
   outputDiagnosticsRef?: RefObject<TerminalOutputDiagnostics | null>;
   onPtyOutputListenError: (err: unknown) => void;
   onViewportRefreshNeeded?: () => void;
@@ -164,7 +123,6 @@ export function useTerminalDisplay({
   isTransparentRef,
   normalizeOutputRef,
   transformOutputRef,
-  afterTerminalWriteRef,
   outputDiagnosticsRef,
   onPtyOutputListenError,
   onViewportRefreshNeeded,
@@ -293,17 +251,13 @@ export function useTerminalDisplay({
     webglAddonRef.current?.clearTextureAtlas();
   };
 
-  const handleTerminalWriteCommitted = (terminal: Terminal) => {
-    afterTerminalWriteRef.current?.(terminal);
-  };
-
   const enqueueActiveWrite = (text: string, onCommitted?: () => void) => {
     if (!text) return;
     const terminal = terminalRef.current;
     if (!terminal) return;
     terminal.write(transformOutputRef.current(text), () => {
       if (terminalRef.current !== terminal) return;
-      handleTerminalWriteCommitted(terminal);
+      markTerminalSnapshotDirty(sessionId);
       onCommitted?.();
     });
   };
@@ -346,7 +300,7 @@ export function useTerminalDisplay({
       ) {
         return;
       }
-      requestGlobalTerminalWrite({
+      terminalWriteScheduler.request({
         token: ptyWriteScheduleTokenRef.current,
         isVisible: () => isVisibleRef.current,
         flush: flushPendingWrites,
@@ -381,30 +335,43 @@ export function useTerminalDisplay({
       } else {
         forwardPtyResizeRef.current = false;
         lastPtySizeRef.current = null;
-        if (
-          first.cols > 0
-          && first.rows > 0
-          && (terminal.cols !== first.cols || terminal.rows !== first.rows)
-        ) {
-          terminal.resize(first.cols, first.rows);
-        }
+        mutateTerminalWhenReady(terminal, () => {
+          if (
+            first.cols > 0
+            && first.rows > 0
+            && (terminal.cols !== first.cols || terminal.rows !== first.rows)
+          ) terminal.resize(first.cols, first.rows);
+        });
       }
       const combined = pending.map((chunk) => chunk.text).join("");
       const commitPending = () => {
         pending.forEach((chunk) => chunk.commit?.(chunk.charCount));
+        // A queued frame is not yet in the xterm buffer. Mark only committed
+        // output so a write barrier cannot clear dirty state for future writes.
+        markTerminalSnapshotDirty(sessionId, pending.reduce((sum, chunk) => sum + chunk.byteLength, 0));
         if (first.replay && first.replayBatchEnd) finishReplayBatch();
       };
       if (first.reset) {
         outputDiagnosticsRef?.current?.reset();
+        ptyWriteInProgressRef.current = true;
         terminal.reset();
-        resetTerminalMouseProtocol(terminal);
-        commitPending();
-        schedulePendingWrite();
+        mutateTerminalWhenReady(terminal, () => {
+          ptyWriteInProgressRef.current = false;
+          if (cancelled || terminalRef.current !== terminal) return;
+          resetTerminalMouseProtocol(terminal);
+          commitPending();
+          schedulePendingWrite();
+        });
         return;
       }
       if (!combined) {
-        commitPending();
-        schedulePendingWrite();
+        ptyWriteInProgressRef.current = true;
+        mutateTerminalWhenReady(terminal, () => {
+          ptyWriteInProgressRef.current = false;
+          if (cancelled || terminalRef.current !== terminal) return;
+          commitPending();
+          schedulePendingWrite();
+        });
         return;
       }
       ptyWriteInProgressRef.current = true;
@@ -413,7 +380,6 @@ export function useTerminalDisplay({
         ptyWriteInProgressRef.current = false;
         if (cancelled || terminalRef.current !== terminal) return;
         outputDiagnosticsRef?.current?.onWriteCommitted(terminal, transformed);
-        handleTerminalWriteCommitted(terminal);
         commitPending();
         schedulePendingWrite();
       };
@@ -429,11 +395,13 @@ export function useTerminalDisplay({
       const text = normalizeOutputRef.current(rawText, payload.kind === "output");
       outputDiagnosticsRef?.current?.onFrame(payload, rawText, text);
       if (!text && payload.kind !== "replay" && payload.kind !== "reset") {
-        delivery.commit(rawText.length);
+        const terminal = terminalRef.current;
+        if (terminal) mutateTerminalWhenReady(terminal, () => {
+          if (!cancelled && terminalRef.current === terminal) delivery.commit(rawText.length);
+        });
         return;
       }
       if (markSnapshotDirty) {
-        markTerminalSnapshotDirty(sessionId);
         useTerminalStore.getState().recordPtyOutputActivity(sessionId);
       }
       ptyPendingChunksRef.current.push({
@@ -474,14 +442,21 @@ export function useTerminalDisplay({
       try {
         for (const entry of replay) {
           if (cancelled || terminalRef.current !== terminal) return false;
-          if (entry.cols > 0 && entry.rows > 0 && (terminal.cols !== entry.cols || terminal.rows !== entry.rows)) {
-            terminal.resize(entry.cols, entry.rows);
-          }
+          mutateTerminalWhenReady(terminal, () => {
+            if (entry.cols > 0 && entry.rows > 0 && (terminal.cols !== entry.cols || terminal.rows !== entry.rows)) {
+              terminal.resize(entry.cols, entry.rows);
+            }
+          });
           const rawText = textDecoder.decode(entry.data, { stream: true });
           const text = normalizeOutputRef.current(rawText);
           outputDiagnosticsRef?.current?.onFrame(entry, rawText, text);
           if (!text) {
-            terminalProcessManager.acknowledgeOutput(sessionId, entry.sequence, 0);
+            await new Promise<void>(resolve => mutateTerminalWhenReady(terminal, () => {
+              if (!cancelled && terminalRef.current === terminal) {
+                terminalProcessManager.acknowledgeOutput(sessionId, entry.sequence, 0);
+              }
+              resolve();
+            }));
             continue;
           }
           await new Promise<void>((resolve) => {
@@ -489,7 +464,6 @@ export function useTerminalDisplay({
             writeTerminalReplay(terminal, transformed, () => {
               if (terminalRef.current === terminal) {
                 outputDiagnosticsRef?.current?.onWriteCommitted(terminal, transformed);
-                handleTerminalWriteCommitted(terminal);
                 terminalProcessManager.acknowledgeOutput(sessionId, entry.sequence, 0);
               }
               resolve();
@@ -500,6 +474,7 @@ export function useTerminalDisplay({
         forwardPtyResizeRef.current = true;
       }
       fitWhenStable(true);
+      if (replay.length > 0) markTerminalSnapshotDirty(sessionId);
       waitingForReplay = false;
       bufferedLivePayloads.splice(0).forEach((delivery) => queuePayload(delivery, true));
       return true;
@@ -508,7 +483,7 @@ export function useTerminalDisplay({
       cancelled = true;
       bufferedLivePayloads.length = 0;
       forwardPtyResizeRef.current = true;
-      cancelGlobalTerminalWrite(ptyWriteScheduleTokenRef.current);
+      terminalWriteScheduler.cancel(ptyWriteScheduleTokenRef.current);
       ptyPendingChunksRef.current = [];
       ptyWriteInProgressRef.current = false;
       ptyUnlistenRef.current?.();
@@ -541,7 +516,10 @@ export function useTerminalDisplay({
     const container = containerRef.current;
     if (!container) return () => {};
     lastPtySizeRef.current = null;
-    const resizeDisposable = terminal.onResize(() => syncPtySize(terminal));
+    const resizeDisposable = terminal.onResize(() => {
+      if (forwardPtyResizeRef.current) markTerminalSnapshotDirty(sessionId);
+      syncPtySize(terminal);
+    });
     const wheelListenerOptions = { passive: false, capture: true } as const;
     const onWheel = (event: WheelEvent) => {
       if (!event.ctrlKey) return;
@@ -607,7 +585,7 @@ export function useTerminalDisplay({
 
   const resetOutputState = () => {
     cancelPendingViewportRestore();
-    cancelGlobalTerminalWrite(ptyWriteScheduleTokenRef.current);
+    terminalWriteScheduler.cancel(ptyWriteScheduleTokenRef.current);
     ptyPendingChunksRef.current = [];
     ptyWriteInProgressRef.current = false;
     forwardPtyResizeRef.current = true;
@@ -615,7 +593,8 @@ export function useTerminalDisplay({
     outputDiagnosticsRef?.current?.reset();
   };
 
-  const resizeTerminal = (terminal: Terminal, cols: number, rows: number) => {
+  const resizeTerminal = (terminal: Terminal, cols: number, rows: number) => mutateTerminalWhenReady(terminal, () => {
+    if (terminalRef.current !== terminal) return;
     const container = containerRef.current;
     if (!isVisibleRef.current || !container || container.offsetWidth <= 0 || container.offsetHeight <= 0) return;
     if (terminal.cols === cols && terminal.rows === rows) return;
@@ -658,7 +637,7 @@ export function useTerminalDisplay({
     } else if (viewportMarker) {
       scheduleViewportRestore({ kind: "marker", marker: viewportMarker, terminal });
     }
-  };
+  });
 
   const getResizeDebouncer = () => {
     let debouncer = resizeDebouncerRef.current;

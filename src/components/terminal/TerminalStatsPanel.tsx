@@ -1,3 +1,5 @@
+import { useAppWindowVisible } from "../../hooks/useAppWindowVisible";
+import { useCheckoutBranch } from "../../hooks/useProjectBranch";
 import { runtimeAgentTool } from "../../lib/terminalAgent";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
@@ -201,57 +203,6 @@ function buildLatestChangeDiffText(fileChange: HistoryFileChangeSummary): string
     .join("\n");
 }
 
-/**
- * A6+A7: 统一定时器调度 - 实时查询项目当前 git 分支
- * 初始值为会话静态分支，避免首屏闪烁；轮询由外部统一调度
- */
-function useCurrentGitBranch(
-  projectPath: string | null,
-  enabled: boolean,
-  initialBranch: string | null,
-  pollTrigger: number
-): string | null {
-  const [branch, setBranch] = useState<string | null>(initialBranch);
-  const lastPathRef = useRef<string | null>(null);
-
-  useEffect(() => {
-    if (!enabled || !projectPath) {
-      setBranch(initialBranch);
-      lastPathRef.current = null;
-      return;
-    }
-
-    // 路径变化时立即重置为初始分支，避免显示上一个项目的分支
-    if (lastPathRef.current !== projectPath) {
-      lastPathRef.current = projectPath;
-      setBranch(initialBranch);
-    }
-
-    let cancelled = false;
-
-    const fetchBranch = async () => {
-      try {
-        const result = await invoke<string | null>("get_current_git_branch", { path: projectPath });
-        if (!cancelled) {
-          setBranch(result);
-        }
-      } catch (error) {
-        if (!cancelled) {
-          setBranch(initialBranch);
-        }
-      }
-    };
-
-    void fetchBranch();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [projectPath, enabled, initialBranch, pollTrigger]);
-
-  return branch;
-}
-
 function SessionInfoCard({ session, statsSession, projectName, projectPath, currentBranch, shell, sessionId, worktree, onSaveToSidebar, canSaveToSidebar, canOpenFolder = true }: {
   session: HistorySessionDetail;
   statsSession: HistorySessionDetail | null;
@@ -403,8 +354,8 @@ export function TerminalStatsPanel({ activeSessionId, open, visible = true, embe
   const { canSave, saveSession, saveSessionDialog } = useSaveSessionToSidebar();
   const terminalStatsCardVisibility = useSettingsStore((state) => state.terminalStatsCardVisibility);
   const terminalStatsCardOrder = useSettingsStore((state) => state.terminalStatsCardOrder);
-  const terminalSessions = useTerminalStore((state) => state.sessions);
-  const statsPanelRefreshSeq = useTerminalStore((state) => state.statsPanelRefreshSeq);
+  const terminalSession = useTerminalStore((state) => state.sessions.find((session) => session.id === activeSessionId) ?? null);
+  const statsPanelRefreshSeq = useTerminalStore((state) => activeSessionId ? state.statsPanelRefreshSeq[activeSessionId] ?? 0 : 0);
   const projects = useProjectStore((state) => state.projects);
   const worktrees = useWorktreeStore((state) => state.worktrees);
 
@@ -417,15 +368,13 @@ export function TerminalStatsPanel({ activeSessionId, open, visible = true, embe
   const [diffFileChange, setDiffFileChange] = useState<HistoryFileChangeSummary | null>(null);
   const latestRef = useRef<HistorySessionDetail | null>(null);
   const lastPathRef = useRef<string | null>(null);
-  const sessionLoadInFlightRef = useRef(new Set<string>());
-  const remoteHistoryContextRef = useRef<SshAgentHistoryContext | null>(null);
-  const wasPanelActiveRef = useRef(false);
+  const sessionLoadInFlightRef = useRef(new Map<string, {
+    promise: Promise<{ result: HistorySessionDetail | "unchanged" | null; context: SshAgentHistoryContext | null }>;
+    refreshSeq: number;
+    statsSeq: number;
+  }>());
+  const remoteHistoryContextRef = useRef<{ scopeKey: string; context: SshAgentHistoryContext } | null>(null);
   const freshDetailRef = useRef(false);
-
-  const terminalSession = useMemo(
-    () => terminalSessions.find((session) => session.id === activeSessionId) ?? null,
-    [terminalSessions, activeSessionId]
-  );
 
   const project = useMemo(
     () => projects.find((item) => item.id === terminalSession?.projectId) ?? null,
@@ -470,19 +419,8 @@ export function TerminalStatsPanel({ activeSessionId, open, visible = true, embe
   // 已识别 CLI 来源但 Hook 尚未绑定 sessionId 时，不查询项目最近会话。
   const waitingForBoundSessionId = Boolean(sourceFilter) && !boundCliSessionId;
   const waitingForRemoteSessionId = isSshProject && !terminalSession?.cliSessionId?.trim();
-  const panelActive = open && visible;
-
-  // 首次打开侧栏时再触发一次刷新，避开面板激活与历史源初始化同帧完成导致的空态停留。
-  useEffect(() => {
-    if (!panelActive) {
-      wasPanelActiveRef.current = false;
-      return;
-    }
-    if (wasPanelActiveRef.current) return;
-    wasPanelActiveRef.current = true;
-    latestRef.current = null;
-    setRefreshSeq((prev) => prev + 1);
-  }, [panelActive]);
+  const windowVisibility = useAppWindowVisible(open && visible);
+  const panelActive = open && visible && windowVisibility.visible;
 
   // A6: 统一定时器调度 - 稳定后 5s；等待用量时 2s，尽快追上落盘的 CLI 会话。
   useEffect(() => {
@@ -505,7 +443,7 @@ export function TerminalStatsPanel({ activeSessionId, open, visible = true, embe
     }
     // 切换 Tab（项目路径、CLI 来源、Tab ID 或 cliSessionId 变化）时按作用域换数据：
     // 命中内存缓存则先秒显缓存，无缓存才清空；随后后台刷新校正。
-    const scopeKey = `${activeSessionId}|${lookupProjectPath}|${sourceFilter ?? ""}|${terminalSession?.cliSessionId ?? ""}|${terminalSession?.remoteTranscriptRef ?? ""}`;
+    const scopeKey = JSON.stringify([activeSessionId, project?.id, project?.environment_type, project?.ssh_host_id, lookupProjectPath, sourceFilter, terminalSession?.cliSessionId, terminalSession?.remoteTranscriptRef]);
     if (lastPathRef.current !== scopeKey) {
       lastPathRef.current = scopeKey;
       const cached = sessionDetailCache.get(scopeKey) ?? null;
@@ -513,66 +451,57 @@ export function TerminalStatsPanel({ activeSessionId, open, visible = true, embe
       setLatestSession(cached);
       setUpdatedAt(cached ? Date.now() : null);
     }
-    const loadSession = async (initial: boolean) => {
-      if (sessionLoadInFlightRef.current.has(scopeKey)) return;
-      sessionLoadInFlightRef.current.add(scopeKey);
+    let cancelled = false;
+    let request = sessionLoadInFlightRef.current.get(scopeKey);
+    if (!request) {
       const freshDetail = !isSshProject && freshDetailRef.current;
       freshDetailRef.current = false;
       const current = latestRef.current;
-      const prev = current
-        ? { filePath: current.file_path, updatedAt: current.updated_at }
-        : undefined;
-      let result: HistorySessionDetail | "unchanged" | null;
-      try {
-        if (isSshProject && project) {
-          if (remoteHistoryContextRef.current?.launch.projectId !== project.id) {
-            remoteHistoryContextRef.current = await buildSshAgentHistoryContext(project);
+      const prev = current ? { filePath: current.file_path, updatedAt: current.updated_at } : undefined;
+      const promise = (async () => {
+        if (!await windowVisibility.check() || lastPathRef.current !== scopeKey) return { result: "unchanged" as const, context: null };
+        try {
+          if (isSshProject && project) {
+            const existing = remoteHistoryContextRef.current;
+            const context = existing?.scopeKey === scopeKey
+              ? existing.context : await buildSshAgentHistoryContext(project);
+            const remote = await fetchRemoteLatestProjectSessionDetail(
+              context, prev, terminalSession?.cliSessionId, terminalSession?.remoteTranscriptRef,
+            );
+            return { result: remote.result, context: remote.context };
           }
-          const remote = await fetchRemoteLatestProjectSessionDetail(
-            remoteHistoryContextRef.current,
-            prev,
-            terminalSession?.cliSessionId,
-            terminalSession?.remoteTranscriptRef,
+          const result = await fetchLatestProjectSessionDetail(
+            lookupProjectPath, prev, sourceFilter, terminalSession?.cliSessionId,
+            { forceCatalogRefresh: waitingForUsage || freshDetail, freshDetail },
           );
-          remoteHistoryContextRef.current = remote.context;
-          result = remote.result;
-        } else {
-          remoteHistoryContextRef.current = null;
-          result = await fetchLatestProjectSessionDetail(
-            lookupProjectPath,
-            prev,
-            sourceFilter,
-            terminalSession?.cliSessionId,
-            {
-              forceCatalogRefresh: waitingForUsage || freshDetail,
-              freshDetail,
-            }
-          );
+          return { result, context: null };
+        } catch {
+          return { result: prev ? "unchanged" as const : null, context: null };
         }
-      } catch {
-        result = prev ? "unchanged" : null;
-      }
-      sessionLoadInFlightRef.current.delete(scopeKey);
-      if (lastPathRef.current !== scopeKey) return;
-      if (result !== "unchanged") {
-        // 查找 miss 时不要清掉已有可用数据，避免侧栏 Token 卡片「闪一下归零再回来」。
-        if (result === null && latestRef.current) {
-          return;
-        }
+      })();
+      request = { promise, refreshSeq, statsSeq: statsPanelRefreshSeq };
+      sessionLoadInFlightRef.current.set(scopeKey, request);
+      void promise.finally(() => { sessionLoadInFlightRef.current.delete(scopeKey); });
+    }
+    const currentRequest = request;
+    void currentRequest.promise.then(({ result, context }) => {
+      if (cancelled || lastPathRef.current !== scopeKey) return;
+      if (context) remoteHistoryContextRef.current = { scopeKey, context };
+      if (result !== "unchanged" && !(result === null && latestRef.current)) {
         latestRef.current = result;
         setLatestSession(result);
         setUpdatedAt(Date.now());
         if (result) sessionDetailCache.set(scopeKey, result);
       }
-      if (initial) {
-        if (updatedAt === null) setUpdatedAt(Date.now());
+      // A Hook/manual refresh during an outstanding read needs one fresh read after it.
+      if (currentRequest.statsSeq !== statsPanelRefreshSeq || currentRequest.refreshSeq !== refreshSeq) {
+        setRefreshSeq((value) => value + 1);
       }
-    };
-
-    void loadSession(true);
+    });
+    return () => { cancelled = true; };
     // activeSessionId 入依赖：切换 Tab 时立即重新核对当前绑定会话（unchanged 时开销仅一次列表查询）
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeSessionId, displayProjectPath, isSshProject, lookupProjectPath, panelActive, pollTrigger, project, project?.path, refreshSeq, sourceFilter, statsPanelRefreshSeq, terminalSession?.cliSessionId, terminalSession?.cwd, terminalSession?.projectId, terminalSession?.remoteTranscriptRef, waitingForBoundSessionId, waitingForRemoteSessionId, waitingForUsage]);
+  }, [activeSessionId, displayProjectPath, isSshProject, lookupProjectPath, panelActive, pollTrigger, project, project?.path, refreshSeq, sourceFilter, statsPanelRefreshSeq, terminalSession?.cliSessionId, terminalSession?.cwd, terminalSession?.projectId, terminalSession?.remoteTranscriptRef, waitingForBoundSessionId, waitingForRemoteSessionId, windowVisibility.check]);
 
   // 空闲时数据轮询返回 unchanged 不会触发重渲染，需独立 tick 让头部相对时间文案随时间走字
   useEffect(() => {
@@ -601,12 +530,10 @@ export function TerminalStatsPanel({ activeSessionId, open, visible = true, embe
 
   // A7: 实时查询当前项目的 git 分支，初始值为会话静态分支，避免首屏闪烁
   // A6: 通过 pollTrigger 与会话数据轮询共用 5s 节拍
-  const currentBranch = useCurrentGitBranch(
-    lookupProjectPath,
-    panelActive && !isSshProject,
-    latestSession?.branch ?? null,
-    pollTrigger
-  );
+  const currentBranch = useCheckoutBranch(
+    panelActive && !isSshProject ? lookupProjectPath : null,
+    project?.environment_type ?? terminalSession?.environmentType,
+  ) ?? latestSession?.branch ?? null;
 
   // 未绑定 hook 会话时，会话级卡片照常渲染但数据置空（保留图形骨架）
   const boundSession = tokensBound ? latestSession : null;
