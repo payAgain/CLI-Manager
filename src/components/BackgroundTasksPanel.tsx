@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Copy, RefreshCw, Server, Terminal, Trash2, X } from "lucide-react";
+import { Copy, RefreshCw, Server, Terminal, TerminalSquare, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import { useI18n, type TranslationKey } from "../lib/i18n";
 import { copyTextToClipboard } from "../lib/systemClipboard";
@@ -149,11 +149,13 @@ export function BackgroundTasksPanel({ tasks, onRefresh, onRestored, refreshSeq 
 
   return <>
     <div id="background-tasks-panel">
-      <TaskSection title={t("terminal.backgroundTasks.title")} count={entries.length} actions={hasFinishedOperation && (
-        <button type="button" className="task-action task-action--text ui-focus-ring" onClick={clearFinished}>{t("backgroundOperations.clearFinished")}</button>
-      )}>
-        {!entries.length && <p className="task-list-empty" title={t("terminal.backgroundTasks.emptyDescription")}>{t("terminal.backgroundTasks.empty")}</p>}
-        {entries.map(entry => {
+      {(["terminals", "operations"] as const).map(group => {
+        const groupEntries = entries.filter(entry => group === "terminals" ? entry.kind === "terminal" : entry.kind !== "terminal");
+        return <TaskSection key={group} icon={group === "terminals" ? <TerminalSquare size={15} /> : <RefreshCw size={15} />}
+          title={t(group === "terminals" ? "terminal.backgroundTasks.title" : "backgroundOperations.sectionTitle")} count={groupEntries.length}
+          actions={group === "operations" && hasFinishedOperation && <button type="button" className="task-action task-action--text ui-focus-ring" onClick={clearFinished}>{t("backgroundOperations.clearFinished")}</button>}>
+        {!groupEntries.length && <p className="task-list-empty">{t(group === "terminals" ? "terminal.backgroundTasks.emptyDescription" : "terminal.agentTasks.operationsEmpty")}</p>}
+        {groupEntries.map(entry => {
           const statusLabel = entry.kind === "terminal"
             ? t(entry.status === "done" ? "terminal.backgroundTasks.completed" : `terminal.backgroundTasks.${entry.status}` as TranslationKey)
             : t(`backgroundOperations.status.${entry.kind === "operation" ? entry.operation.status : entry.job.status}` as TranslationKey);
@@ -194,7 +196,8 @@ export function BackgroundTasksPanel({ tasks, onRefresh, onRestored, refreshSeq 
             {error && <p className="task-row__error-hint">{t(error.hint)}</p>}
           </TaskListItem>;
         })}
-      </TaskSection>
+      </TaskSection>;
+      })}
     </div>
     <ConfirmDialog open={discardIntent !== null}
       title={t(discardIsFinished ? "terminal.backgroundTasks.confirmDeleteTitle" : "terminal.backgroundTasks.confirmDiscardTitle")}

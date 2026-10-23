@@ -4,7 +4,7 @@ import { createPortal } from "react-dom";
 import { useShallow } from "zustand/shallow";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
-import { Layers, type LucideIcon } from "lucide-react";
+import { ClipboardList, type LucideIcon } from "lucide-react";
 import {
   DndContext,
   DragOverlay,
@@ -3969,7 +3969,7 @@ export function TerminalTabs({
         <button className="ui-focus-ring ui-icon-action ui-action-tasks" onClick={handleToggleTasksPanel}
           data-active={tasksPanelActive} data-has-tasks={hasBackgroundTasks}
           aria-pressed={tasksPanelActive} aria-label={t("terminal.tasks.title")}>
-          <Layers size={14} strokeWidth={1.8} />
+          <ClipboardList size={15} strokeWidth={1.8} />
           {terminalToolbarVisibility.showText && <span>{t("terminal.tasks.title")}</span>}
         </button>
       ),

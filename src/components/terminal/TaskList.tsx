@@ -3,8 +3,9 @@ import { ArrowLeft, ChevronDown } from "lucide-react";
 import type { TaskDisplayStatus } from "../../lib/taskPresentation";
 import { taskProgress } from "../../lib/taskPresentation";
 
-export function TaskSection({ title, count, scope, actions, children, busy, onBack, backLabel }: {
+export function TaskSection({ title, icon, count, scope, actions, children, busy, onBack, backLabel }: {
   title: string;
+  icon?: ReactNode;
   count?: number;
   scope?: string;
   actions?: ReactNode;
@@ -13,16 +14,18 @@ export function TaskSection({ title, count, scope, actions, children, busy, onBa
   onBack?: () => void;
   backLabel?: string;
 }) {
-  const [expanded, setExpanded] = useState(true);
+  const [userExpanded, setExpanded] = useState<boolean | null>(null);
+  const expanded = userExpanded ?? (count === undefined || count > 0);
   const bodyId = useId();
-  return <section className="task-section" aria-label={title}>
+  return <section className="task-section" aria-label={title} data-empty={count === 0 || undefined}>
     <header className="task-section__header">
       {onBack && <button type="button" className="task-action ui-focus-ring" onClick={onBack} aria-label={backLabel} title={backLabel}>
         <ArrowLeft size={13} aria-hidden="true" />
       </button>}
       <h3 className="task-section__heading">
-        <button type="button" className="task-section__toggle ui-focus-ring" aria-label={count === undefined ? title : `${title} · ${busy ? "…" : count}`} aria-expanded={expanded} aria-controls={bodyId} onClick={() => setExpanded(value => !value)}>
-          <ChevronDown size={12} aria-hidden="true" />
+        <button type="button" className="task-section__toggle ui-focus-ring" aria-label={count === undefined ? title : `${title} · ${busy ? "…" : count}`} aria-expanded={expanded} aria-controls={bodyId} onClick={() => setExpanded(!expanded)}>
+          <ChevronDown size={12} className="task-section__chevron" aria-hidden="true" />
+          {icon && <span className="task-section__icon" aria-hidden="true">{icon}</span>}
           <span className="task-section__title">{title}</span>
           {count !== undefined && <span className="task-section__count">{busy ? "…" : count}</span>}
         </button>

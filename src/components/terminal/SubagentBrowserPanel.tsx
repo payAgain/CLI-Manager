@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Bot, Copy } from "lucide-react";
+import { GitFork, Copy } from "lucide-react";
 import { toast } from "sonner";
 import { useI18n } from "../../lib/i18n";
 import { getHistoryPathArgs } from "../../lib/historyPathArgs";
@@ -37,7 +37,7 @@ function SubagentRecordRow({ record, childSession, selected, onOpen }: {
       toast.error(t("subagentTranscript.copyIdFailed"));
     }
   };
-  return <TaskListItem title={label.title} icon={<Bot size={14} />} selected={selected} onOpen={() => onOpen(record)}
+  return <TaskListItem title={label.title} icon={<GitFork size={16} strokeWidth={1.8} />} selected={selected} onOpen={() => onOpen(record)}
     metadata={<span className="task-row__id" title={record.agentId}>{label.shortId}</span>}
     status={<TaskStatus status={displayStatus === "completed" ? "done" : displayStatus} label={displayStatus ? t(`subagentTranscript.status.${displayStatus}`) : ""} />}
     actions={<button type="button" className="task-action ui-focus-ring" onClick={() => void copyId()}
@@ -131,8 +131,7 @@ export function SubagentBrowserPanel({ session, project, refreshSeq = 0 }: { ses
     finally { if (request === generation.current) setLoading(false); }
   };
 
-  return <TaskSection title={selectedTitle || t("terminal.subagents.title")} count={selected || error ? undefined : records.length} busy={loading}
-    scope={session ? t("subagentTranscript.reader.parent", { title: session.title }) : undefined}
+  return <TaskSection icon={<GitFork size={15} />} title={selectedTitle || t("terminal.subagents.title")} count={selected || error ? undefined : records.length} busy={loading}
     onBack={selected ? () => { generation.current += 1; setSelected(null); setMessages([]); setLoading(false); } : undefined}
     backLabel={t("terminal.subagents.back")}>
     <div>

@@ -1,3 +1,4 @@
+pub mod agent_tasks;
 pub mod app_data;
 pub mod background;
 pub mod cli_tools;
