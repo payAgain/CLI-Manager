@@ -1,4 +1,5 @@
 import type { TerminalSession } from "./types";
+import { resolveTerminalRuntimeEnvironment, terminalRuntimeWslDistro } from "./terminalRuntimeEnvironment";
 
 export interface InboxTarget {
   source: string;
@@ -39,16 +40,9 @@ export function inboxTargetKey(target: InboxTarget): string {
   return JSON.stringify([target.source, target.environment, target.hostId, target.wslDistro, target.tabId, target.cliSessionId, target.agentRunId]);
 }
 
-function sessionWslDistro(session: TerminalSession): string | null {
-  const cwd = session.cwd?.replace(/\\/g, "/");
-  const unc = cwd?.match(/^\/\/(?:wsl\$|wsl\.localhost)\/([^/]+)/i)?.[1];
-  const shell = session.shell?.match(/(?:^|\s)(?:-d|--distribution)(?:\s+|=)(?:"([^"]+)"|'([^']+)'|([^\s]+))/i);
-  return unc ?? session.envVars?.WSL_DISTRO_NAME ?? shell?.[1] ?? shell?.[2] ?? shell?.[3] ?? null;
-}
-
 function sameEnvironment(target: InboxTarget, session: TerminalSession): boolean {
-  const distro = sessionWslDistro(session);
-  const environment = session.environmentType ?? (distro || /(?:^|[\\/\s])wsl(?:\.exe)?(?:\s|$)/i.test(session.shell ?? "") ? "wsl" : "local");
+  const distro = terminalRuntimeWslDistro(session);
+  const environment = resolveTerminalRuntimeEnvironment(session);
   if (environment !== target.environment) return false;
   if (environment === "ssh") return Boolean(target.hostId) && session.sshHostId === target.hostId;
   // An exact terminal/CLI identity can safely resolve a distro-less restored

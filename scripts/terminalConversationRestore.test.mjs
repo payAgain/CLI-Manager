@@ -93,7 +93,9 @@ const launchBody = findNode(node => ts.isFunctionDeclaration(node) && node.name?
 const mirrorBody = findNode(node => ts.isFunctionDeclaration(node) && node.name?.text === "buildWorkspanMirror").getText(terminalAst);
 const createBody = findNode(node => ts.isPropertyAssignment(node) && node.name.getText(terminalAst) === "createSession").initializer.getText(terminalAst);
 const metadataBody = findNode(node => ts.isFunctionDeclaration(node) && node.name?.text === "getProjectAgentTerminalMetadata").getText(terminalAst);
-const restoreCompiled = ts.transpileModule(`let restoreInProgress = false; ${launchBody}\n${mirrorBody}\n${metadataBody}\nexports.restore = ${restoreBody}; exports.launch = resolvePtyLaunch; exports.create = ${createBody};`, {
+const attachBody = ["basenameFromPath", "isGenericDaemonSessionTitle", "resolveAttachedDaemonSession"]
+  .map(name => findNode(node => ts.isFunctionDeclaration(node) && node.name?.text === name).getText(terminalAst)).join("\n");
+const restoreCompiled = ts.transpileModule(`let restoreInProgress = false; ${launchBody}\n${mirrorBody}\n${metadataBody}\n${attachBody}\nexports.restore = ${restoreBody}; exports.launch = resolvePtyLaunch; exports.create = ${createBody}; exports.attach = resolveAttachedDaemonSession;`, {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
 }).outputText;
 
@@ -114,6 +116,7 @@ async function restoreHarness(saved, projects = [], daemon = [], integration = {
     ...load("src/stores/terminalPaneTree.ts"),
     ...load("src/lib/agentTerminal.ts"),
     ...load("src/lib/terminalWorkspaceBinding.ts"),
+    ...load("src/lib/terminalRuntimeEnvironment.ts"),
     ...load("src/lib/agentLaunchPermissions.ts"),
     ...load("src/lib/cliTools.ts"),
     useSessionStore: persistence.api,
@@ -146,7 +149,6 @@ async function restoreHarness(saved, projects = [], daemon = [], integration = {
     formatStartupInputForPty: text => `${text}\r`,
     isCliManagerSyncArtifactText: () => false,
     getRestoredAgentTerminalMetadata: (s, projectId) => load("src/lib/agentTerminal.ts").resolveAgentTerminalMetadata(s, projects.find(p => p.id === projectId)),
-    resolveAttachedDaemonSession: s => s,
     resolveDaemonAttachTaskStatus: () => "none", resolveDaemonAttachUpdatedAt: () => null,
     buildTabStatusUpdate: () => ({}), releaseRemoteHistoryConsumer: () => {},
     setTimeout: callback => { timers.push(callback); },
@@ -160,9 +162,38 @@ async function restoreHarness(saved, projects = [], daemon = [], integration = {
   for (const timer of timers) timer();
   await settle();
   assert.deepEqual(errors, []);
-  return { state, persistence, created, writes, notices, resolveLaunch: exports.launch, create: exports.create,
+  return { state, persistence, created, writes, notices, resolveLaunch: exports.launch, create: exports.create, attach: exports.attach,
     timers, failWrite: () => { writeError = new Error("write failed"); } };
 }
+
+test("WSL runtime remains separate from local workspace ownership on launch, restore and daemon attach", async () => {
+  const p = project({ path: "C:/repo", shell: "wsl" });
+  const tree = { id: "wt", project_id: p.id, path: "C:/trees/feature", status: "active" };
+  const h = await restoreHarness({}, [p], [], {}, {}, [tree]);
+  for (const launchContext of [
+    { shell: "wsl" },
+    { shell: "wsl.exe -d Ubuntu" },
+    { shell: "pwsh", startupCmd: "wsl.exe -d Ubuntu -- codex" },
+  ]) {
+    const launch = await h.resolveLaunch({ projectId: p.id, worktreeId: tree.id, cwd: tree.path, ...launchContext }, "windows");
+    assert.equal(launch.environmentType, "wsl");
+    assert.equal(launch.binding.workspace.environmentType, "local");
+    assert.equal(launch.binding.workspace.worktreeId, tree.id);
+  }
+  const saved = persistTerminalSession(running({ projectId: p.id, worktreeId: tree.id, cwd: tree.path,
+    shell: "wsl", environmentType: "local" }));
+  const cold = await restoreHarness({ sessions: [saved] }, [p], [], {}, {}, [tree]);
+  assert.equal(cold.state.sessions[0].environmentType, "wsl");
+  assert.equal(cold.state.sessions[0].workspace.environmentType, "local");
+  const attached = await restoreHarness({ sessions: [saved] }, [p], [{ sessionId: saved.id, alive: true, cwd: tree.path, shell: "wsl" }], {}, {}, [tree]);
+  assert.equal(attached.created.length, 0);
+  assert.equal(attached.state.sessions[0].environmentType, "wsl");
+  assert.equal(attached.state.sessions[0].workspace.environmentType, "local");
+  const background = h.attach(undefined, { alive: true, cwd: tree.path, shell: "wsl" });
+  assert.equal(background.environmentType, "wsl");
+  assert.equal(background.workspace.worktreeId, tree.id);
+  assert.equal(background.workspace.environmentType, "local");
+});
 
 test("explicit recovery snapshots flush to disk without freezing later session persistence", async () => {
   const h = sessionStore();

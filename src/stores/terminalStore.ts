@@ -29,6 +29,7 @@ import { isDirectCodexStartupCommand, normalizeDirectCodexStartupCommand, resolv
 import { getTerminalTheme } from "../lib/terminalThemes";
 import { prepareTerminalScrollback } from "../lib/terminalScrollback";
 import { bindTerminalWorkspace, terminalWorkspaceEnvironment } from "../lib/terminalWorkspaceBinding";
+import { resolveTerminalRuntimeEnvironment } from "../lib/terminalRuntimeEnvironment";
 import { resolveTerminalConversationRestore } from "../lib/terminalConversationRestore";
 import { normalizeHexColor } from "../lib/terminalColor";
 import { useSettingsStore } from "./settingsStore";
@@ -405,7 +406,12 @@ function resolveAttachedDaemonSession(
     title: isGenericDaemonSessionTitle(persisted?.title) ? fallbackTitle : persisted!.title,
     cwd,
     shell: persisted?.shell ?? attach.shell,
-    environmentType: binding.workspace?.environmentType ?? persisted?.environmentType ?? (attach.environmentType === "ssh" ? "ssh" : undefined),
+    environmentType: resolveTerminalRuntimeEnvironment({
+      ...persisted, cwd, shell: persisted?.shell ?? attach.shell,
+      environmentType: attach.environmentType === "ssh" || attach.environmentType === "wsl"
+        ? attach.environmentType : persisted?.environmentType,
+      sshHostId: persisted?.sshHostId ?? attach.sshHostId ?? undefined,
+    }, binding.workspace?.environmentType),
     sshHostId: persisted?.sshHostId ?? attach.sshHostId ?? undefined,
     remotePath: persisted?.remotePath ?? attach.remotePath ?? undefined,
     connectionState: (persisted?.environmentType === "ssh" || attach.environmentType === "ssh")
@@ -1433,7 +1439,9 @@ async function resolvePtyLaunch(options: DetachedPtyLaunchOptions, os: OsPlatfor
   const baseStartupCmd = options.startupCmd?.trim() || undefined;
   return {
     binding,
-    environmentType: binding.workspace?.environmentType,
+    environmentType: resolveTerminalRuntimeEnvironment({
+      shell: resolvedShell, cwd: options.cwd ?? undefined, startupCmd: baseStartupCmd, envVars: options.envVars ?? undefined,
+    }, binding.workspace?.environmentType),
     shell: resolvedShell,
     baseStartupCmd,
     startupCmd: prepareStartupCommandForPty(

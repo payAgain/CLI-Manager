@@ -8,7 +8,10 @@ const compile = path => ts.transpileModule(readFileSync(new URL(path, import.met
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
 }).outputText;
 const policy = {};
-runInNewContext(compile("../src/lib/notificationInbox.ts"), { exports: policy });
+const runtime = {};
+runInNewContext(compile("../src/lib/terminalRuntimeEnvironment.ts"), { exports: runtime });
+runInNewContext(compile("../src/lib/notificationInbox.ts"), { exports: policy,
+  require: name => { assert.equal(name, "./terminalRuntimeEnvironment"); return runtime; } });
 const target = (extra = {}) => ({ tabId: "old-pty", cliSessionId: "cli-1", agentRunId: "run-1", source: "codex", environment: "local", hostId: null, wslDistro: null, ...extra });
 const session = (extra = {}) => ({ id: "old-pty", title: "Agent", cliSessionId: "cli-1", runtimeAgent: { tool: "codex", runId: "run-1" }, ...extra });
 const item = (sequence, extra = {}) => ({ ...target(), sequence, eventId: `event-${sequence}`, event: "Stop", receivedAt: sequence, readAt: null, ...extra });
@@ -31,6 +34,27 @@ test("same-path SSH hosts, WSL distributions and agent vendors stay isolated", (
   const ubuntu = session({ environmentType: "wsl", cwd: "\\\\wsl.localhost\\Ubuntu\\work" });
   assert.equal(policy.resolveNotificationTarget(wsl, [ubuntu]), ubuntu);
   assert.equal(policy.resolveNotificationTarget(target(), [session({ runtimeAgent: { tool: "claude", runId: "run-1" } })]), null);
+});
+
+test("legacy local workspace metadata does not hide a terminal's WSL runtime", () => {
+  const wsl = target({ environment: "wsl", wslDistro: "Ubuntu" });
+  for (const evidence of [
+    { shell: "wsl" },
+    { shell: "wsl.exe -d Ubuntu" },
+    { shell: '"C:\\Windows\\System32\\wsl.exe" --distribution=Ubuntu' },
+    { shell: "pwsh", startupCmd: "wsl.exe -d Ubuntu -- codex" },
+    { cwd: "\\\\wsl.localhost\\Ubuntu\\repo" },
+    { envVars: { WSL_DISTRO_NAME: "Ubuntu" } },
+  ]) {
+    const active = session({ environmentType: "local", ...evidence });
+    assert.equal(policy.resolveNotificationTarget(wsl, [active]), active, JSON.stringify(evidence));
+    assert.equal(policy.resolveNotificationTarget(target(), [active]), null, "a WSL runtime cannot consume local notifications");
+  }
+  const remote = session({ environmentType: "ssh", sshHostId: "host", shell: "wsl", cwd: "\\\\wsl.localhost\\Ubuntu\\repo" });
+  assert.equal(policy.resolveNotificationTarget(wsl, [remote]), null, "SSH identity wins over local WSL evidence");
+  assert.equal(policy.resolveNotificationTarget(wsl, [session({ environmentType: "local", shell: "wsl.exe -d Debian" })]), null);
+  const local = session({ environmentType: "local", shell: "pwsh -d project" });
+  assert.equal(policy.resolveNotificationTarget(target(), [local]), local, "another shell's -d option is not WSL evidence");
 });
 
 test("a visible file editor or transcript cannot consume a terminal notification", () => {

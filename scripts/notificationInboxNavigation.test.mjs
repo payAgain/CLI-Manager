@@ -2,7 +2,16 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import ts from "typescript";
-import { resolveNotificationTarget } from "../src/lib/notificationInbox.ts";
+
+const runtime = {}, policy = {};
+const compile = path => ts.transpileModule(readFileSync(new URL(path, import.meta.url), "utf8"), {
+  compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+}).outputText;
+new Function("exports", compile("../src/lib/terminalRuntimeEnvironment.ts"))(runtime);
+new Function("exports", "require", compile("../src/lib/notificationInbox.ts"))(policy, name => {
+  assert.equal(name, "./terminalRuntimeEnvironment"); return runtime;
+});
+const { resolveNotificationTarget } = policy;
 
 const source = readFileSync(new URL("../src/lib/notificationInboxNavigation.ts", import.meta.url), "utf8");
 const compiled = ts.transpileModule(source, {
