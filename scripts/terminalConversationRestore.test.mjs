@@ -108,6 +108,7 @@ async function restoreHarness(saved, projects = [], daemon = [], integration = {
     exports, Date, Map, Set, crypto: { randomUUID: () => `bridge-${++sequence}` },
     ...workspan, resolveTerminalConversationRestore,
     ...load("src/lib/agentLaunchPermissions.ts"),
+    ...load("src/lib/cliTools.ts"),
     useSessionStore: persistence.api,
     useTerminalStore: { getState: () => state, setState }, set: setState, get: () => state,
     useProjectStore: { getState: () => projectState },
