@@ -27,8 +27,24 @@ export interface TerminalMemorySnapshot {
   totalBytes: number;
 }
 
+export interface TerminalMemoryHistoryPoint {
+  sampledAt: number;
+  totalBytes: number;
+  frameworkBytes: number;
+  terminals: Record<string, number | null>;
+}
+
+export function appendTerminalMemoryHistory(history: TerminalMemoryHistoryPoint[], snapshot: TerminalMemorySnapshot): TerminalMemoryHistoryPoint[] {
+  const point: TerminalMemoryHistoryPoint = {
+    sampledAt: snapshot.sampledAt, totalBytes: snapshot.totalBytes, frameworkBytes: snapshot.framework.totalBytes,
+    terminals: Object.fromEntries(snapshot.terminals.map(terminal => [terminal.sessionId, terminal.totalBytes])),
+  };
+  return [...history.filter(entry => entry.sampledAt !== point.sampledAt), point].slice(-24);
+}
+
 export function useTerminalMemory() {
   const [snapshot, setSnapshot] = useState<TerminalMemorySnapshot | null>(null);
+  const [history, setHistory] = useState<TerminalMemoryHistoryPoint[]>([]);
   const [error, setError] = useState(false);
   const refreshRef = useRef<() => void>(() => {});
   useEffect(() => {
@@ -44,7 +60,7 @@ export function useTerminalMemory() {
           if (!visible || minimized || disposed) return;
         }
         const next = await invoke<TerminalMemorySnapshot>("terminal_memory_get_snapshot");
-        if (!disposed) { setSnapshot(next); setError(false); }
+        if (!disposed) { setSnapshot(next); setHistory(previous => appendTerminalMemoryHistory(previous, next)); setError(false); }
       } catch {
         if (!disposed) setError(true);
       } finally { inFlight = false; }
@@ -64,5 +80,5 @@ export function useTerminalMemory() {
     };
   }, []);
   const refresh = useCallback(() => refreshRef.current(), []);
-  return { snapshot, error, refresh };
+  return { snapshot, history, error, refresh };
 }

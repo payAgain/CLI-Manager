@@ -9,6 +9,7 @@ interface ResourceDetailPopoverProps {
   title: string;
   icon: ReactNode;
   value?: ReactNode;
+  summary?: ReactNode;
   scope: string;
   time: string;
   refreshLabel: string;
@@ -20,7 +21,7 @@ interface ResourceDetailPopoverProps {
 
 /** All resource entries share one frame; only the detail body scrolls. */
 export function ResourceDetailPopover({
-  resource, title, icon, value, scope, time, refreshLabel, onRefresh, refreshing = false, side = "top", children,
+  resource, title, icon, value, summary, scope, time, refreshLabel, onRefresh, refreshing = false, side = "top", children,
 }: ResourceDetailPopoverProps) {
   const { t } = useI18n();
   return (
@@ -29,7 +30,6 @@ export function ResourceDetailPopover({
       <header className="ui-resource-detail-header">
         <span className="ui-resource-detail-icon" aria-hidden="true">{icon}</span>
         <h2>{title}</h2>
-        {value && <span className="ui-resource-detail-value">{value}</span>}
         <button type="button" className="ui-resource-detail-action ui-focus-ring" onClick={onRefresh}
           disabled={refreshing} aria-label={refreshLabel} title={refreshLabel}>
           <RefreshCw size={12} className={refreshing ? "animate-spin" : undefined} />
@@ -37,6 +37,7 @@ export function ResourceDetailPopover({
         <PopoverClose asChild><button type="button" className="ui-resource-detail-action ui-focus-ring"
           aria-label={t("common.close")} title={t("common.close")}><X size={13} /></button></PopoverClose>
       </header>
+      {(summary || value) && <div className="ui-resource-detail-summary">{summary ?? <><span className="ui-resource-detail-value">{value}</span><span className="ui-resource-detail-summary-scope">{scope}</span></>}</div>}
       <div className="ui-resource-detail-body ui-thin-scroll">{children}</div>
       <footer className="ui-resource-detail-footer">
         <span title={scope}>{scope}</span>

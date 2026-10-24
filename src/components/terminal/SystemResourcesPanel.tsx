@@ -48,8 +48,6 @@ const PANEL_ACCENT = TERM_PANEL.green;
 const PANEL_SOFT_FG = `color-mix(in srgb, ${TERM_PANEL.fg} 74%, ${TERM_PANEL.dim})`;
 const NETWORK_UPLOAD_COLOR = `color-mix(in srgb, ${TERM_PANEL.green} 84%, ${TERM_PANEL.fg})`;
 const NETWORK_DOWNLOAD_COLOR = `color-mix(in srgb, ${TERM_PANEL.blue} 82%, ${TERM_PANEL.cyan})`;
-const DISK_READ_COLOR = `color-mix(in srgb, ${TERM_PANEL.green} 84%, ${TERM_PANEL.fg})`;
-const DISK_WRITE_COLOR = `color-mix(in srgb, ${TERM_PANEL.blue} 82%, ${TERM_PANEL.cyan})`;
 const MODULE_TITLE_COLOR = TERM_PANEL.fg;
 const SYSTEM_RESOURCES_RUNTIME_CACHE_KEY = "system-resources-panel";
 
@@ -177,7 +175,6 @@ function InlineEmpty({ text }: { text: string }) {
 interface TrendSeries {
   points: number[];
   color: string;
-  mode?: "full" | "up" | "down";
   max?: number;
 }
 
@@ -202,126 +199,30 @@ function getDiskTotals(snapshot: SystemResourceSnapshot): DiskTotals {
   );
 }
 
-function TrendChart({
-  series,
-  height = 58,
-  max,
-  split = false,
-  areaOpacity = 0.16,
-  fadeStartOpacity = 0.4,
-  fadeEndOpacity = 0.02,
-}: {
-  series: TrendSeries[];
-  height?: number;
-  max?: number;
-  split?: boolean;
-  areaOpacity?: number;
-  fadeStartOpacity?: number;
-  fadeEndOpacity?: number;
+function TrendChart({ series, height = 58, max }: {
+  series: TrendSeries[]; height?: number; max?: number;
 }) {
-  const gradientId = useId();
-  const allPoints = series.flatMap((line) => line.points);
+  const allPoints = series.flatMap(line => line.points).filter(Number.isFinite);
   const scaleMax = Math.max(1, max ?? Math.max(1, ...allPoints));
-  const safeSeries = series.map((line) => ({
-    ...line,
-    points: line.points.length >= 2 ? line.points : [line.points[0] ?? 0, line.points[0] ?? 0],
-  }));
-  const splitGapPx = 20;
-  const splitBaselineOffset = (splitGapPx / 2 / Math.max(1, height - 2)) * 100;
-  const splitUpBaseY = 50 - splitBaselineOffset;
-  const splitDownBaseY = 50 + splitBaselineOffset;
-  const splitAmplitude = 42 - splitBaselineOffset;
-  const guideLines = split
-    ? [
-        { y: 8, dashed: false, strong: false },
-        { y: 25, dashed: true, strong: false },
-        { y: 50, dashed: false, strong: true },
-        { y: 75, dashed: true, strong: false },
-        { y: 92, dashed: false, strong: false },
-      ]
-    : [
-        { y: 25, dashed: false, strong: false },
-        { y: 50, dashed: false, strong: false },
-        { y: 75, dashed: false, strong: false },
-      ];
-
-  const toCoords = (points: number[], mode: TrendSeries["mode"] = "full", seriesMax?: number) => points.map((point, index) => {
-    const x = points.length === 1 ? 0 : (index / (points.length - 1)) * 100;
-    const normalized = clampRatio(point / Math.max(1, seriesMax ?? scaleMax));
-    const y = mode === "up"
-      ? splitUpBaseY - normalized * splitAmplitude
-      : mode === "down"
-        ? splitDownBaseY + normalized * splitAmplitude
-        : 90 - normalized * 72;
-    return [x, y] as const;
-  });
-
-  const linePath = (coords: ReadonlyArray<readonly [number, number]>) => {
-    if (coords.length < 2) {
-      const [x = 0, y = 50] = coords[0] ?? [];
-      return `M${x.toFixed(2)},${y.toFixed(2)}`;
-    }
-
-    const parts = [`M${coords[0][0].toFixed(2)},${coords[0][1].toFixed(2)}`];
-    for (let index = 0; index < coords.length - 1; index += 1) {
-      const [p0x, p0y] = coords[index - 1] ?? coords[index];
-      const [p1x, p1y] = coords[index];
-      const [p2x, p2y] = coords[index + 1];
-      const [p3x, p3y] = coords[index + 2] ?? coords[index + 1];
-      const c1x = p1x + (p2x - p0x) / 6;
-      const c1y = p1y + (p2y - p0y) / 6;
-      const c2x = p2x - (p3x - p1x) / 6;
-      const c2y = p2y - (p3y - p1y) / 6;
-      parts.push(`C${c1x.toFixed(2)},${c1y.toFixed(2)} ${c2x.toFixed(2)},${c2y.toFixed(2)} ${p2x.toFixed(2)},${p2y.toFixed(2)}`);
-    }
-    return parts.join(" ");
-  };
-
-  const areaPath = (coords: ReadonlyArray<readonly [number, number]>, mode: TrendSeries["mode"] = "full") => {
-    const baseY = mode === "up" ? splitUpBaseY : mode === "down" ? splitDownBaseY : 96;
-    const first = coords[0];
-    const last = coords[coords.length - 1];
-    return `${linePath(coords)} L${last[0].toFixed(2)},${baseY} L${first[0].toFixed(2)},${baseY} Z`;
-  };
-
   return (
-    <div className="ui-resource-trend relative overflow-hidden" style={{ height, borderColor: TERM_PANEL.border, backgroundColor: TERM_PANEL.cardInner }}>
+    <div className="ui-resource-trend" style={{ height }} aria-hidden="true">
       <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="h-full w-full">
-        <defs>
-          <linearGradient id={`${gradientId}-fade`} x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="white" stopOpacity={fadeStartOpacity} />
-            <stop offset="52%" stopColor="white" stopOpacity={Math.max(fadeEndOpacity, fadeStartOpacity * 0.42)} />
-            <stop offset="100%" stopColor="white" stopOpacity={fadeEndOpacity} />
-          </linearGradient>
-          <mask id={`${gradientId}-mask`}>
-            <rect width="100" height="100" fill={`url(#${gradientId}-fade)`} />
-          </mask>
-        </defs>
-        {guideLines.map((guide) => (
-          <line
-            key={guide.y}
-            x1="0"
-            y1={guide.y}
-            x2="100"
-            y2={guide.y}
-            stroke={guide.strong ? TERM_PANEL.dim : TERM_PANEL.border}
-            strokeWidth={guide.strong ? "1" : "0.7"}
-            vectorEffect="non-scaling-stroke"
-            opacity={guide.strong ? "0.8" : "0.55"}
-            strokeDasharray={guide.dashed ? "2 4" : undefined}
-          />
-        ))}
-        {safeSeries.map((line, index) => {
-          const coords = toCoords(line.points, line.mode, line.max);
-          return (
-            <g key={`${line.color}-${index}`}>
-              <path d={areaPath(coords, line.mode)} fill={line.color} mask={`url(#${gradientId}-mask)`} opacity={areaOpacity} />
-              <path d={linePath(coords)} fill="none" stroke={line.color} strokeWidth="1.8" vectorEffect="non-scaling-stroke" strokeLinecap="round" strokeLinejoin="round" />
-            </g>
-          );
+        {[10, 50, 90].map(y => <line key={y} x1="0" y1={y} x2="100" y2={y}
+          stroke={TERM_PANEL.border} strokeWidth=".6" vectorEffect="non-scaling-stroke" opacity=".45" />)}
+        {series.map((line, index) => {
+          let connected = false;
+          const path = line.points.map((point, pointIndex) => {
+            if (!Number.isFinite(point)) { connected = false; return ""; }
+            const x = line.points.length === 1 ? 100 : pointIndex / (line.points.length - 1) * 100;
+            const y = 90 - clampRatio(point / Math.max(1, line.max ?? scaleMax)) * 80;
+            const command = connected ? "L" : "M";
+            connected = true;
+            return `${command}${x.toFixed(2)},${y.toFixed(2)}`;
+          }).join(" ");
+          return <path key={index} d={path} fill="none" stroke={line.color} strokeWidth="1.5"
+            vectorEffect="non-scaling-stroke" strokeLinecap="round" strokeLinejoin="round" />;
         })}
       </svg>
-      <div className="pointer-events-none absolute inset-x-0 bottom-0 h-6" style={{ background: `linear-gradient(to top, ${TERM_PANEL.card}, transparent)` }} />
     </div>
   );
 }
@@ -372,7 +273,7 @@ function CpuCard({ snapshot, history }: { snapshot: SystemResourceSnapshot; hist
     >
       <TrendChart
         series={[{ points, color: PANEL_ACCENT }]}
-        height={72}
+        height={64}
         max={100}
       />
 
@@ -400,7 +301,7 @@ function CpuCard({ snapshot, history }: { snapshot: SystemResourceSnapshot; hist
           style={{ gridTemplateColumns: "repeat(auto-fit, minmax(96px, 1fr))" }}
         >
           {snapshot.cpuCores.map((core) => {
-            const activeSegments = Math.max(1, Math.round(clampRatio(core.usagePercent / 100) * segmentCount));
+            const activeSegments = Math.round(clampRatio(core.usagePercent / 100) * segmentCount);
             return (
               <div
                 key={core.index}
@@ -466,10 +367,10 @@ function NetworkCard({ snapshot, history }: { snapshot: SystemResourceSnapshot; 
   return (
     <ResourceCard icon={<Network size={15} />} title={t("systemResources.network")}>
       <dl className="ui-resource-metrics ui-resource-metrics--pair">
-        <div><dt><Upload size={11} />{t("systemResources.upload")}</dt><dd style={{ color: NETWORK_UPLOAD_COLOR }}>{formatRate(snapshot.network.uploadBytesPerSec)}</dd><small>{t("systemResources.todayTotal")} · {formatBytes(snapshot.network.todayUploadedBytes)}</small></div>
-        <div><dt><Download size={11} />{t("systemResources.download")}</dt><dd style={{ color: NETWORK_DOWNLOAD_COLOR }}>{formatRate(snapshot.network.downloadBytesPerSec)}</dd><small>{t("systemResources.todayTotal")} · {formatBytes(snapshot.network.todayDownloadedBytes)}</small></div>
+        <div><dt><Upload size={11} style={{ color: NETWORK_UPLOAD_COLOR }} />{t("systemResources.upload")}</dt><dd>{formatRate(snapshot.network.uploadBytesPerSec)}</dd><small>{t("systemResources.todayTotal")} · {formatBytes(snapshot.network.todayUploadedBytes)}</small></div>
+        <div><dt><Download size={11} style={{ color: NETWORK_DOWNLOAD_COLOR }} />{t("systemResources.download")}</dt><dd>{formatRate(snapshot.network.downloadBytesPerSec)}</dd><small>{t("systemResources.todayTotal")} · {formatBytes(snapshot.network.todayDownloadedBytes)}</small></div>
       </dl>
-      <TrendChart height={72} series={[
+      <TrendChart height={64} series={[
         { points: samples.map(item => item.network.uploadBytesPerSec), color: NETWORK_UPLOAD_COLOR },
         { points: samples.map(item => item.network.downloadBytesPerSec), color: NETWORK_DOWNLOAD_COLOR },
       ]} />
@@ -492,8 +393,8 @@ function DiskCard({ snapshot }: { snapshot: SystemResourceSnapshot; history: Sys
         </div>
         <dl className="ui-resource-metrics">
           <div><dt>{t("systemResources.available")}</dt><dd>{formatDiskBytes(totals.availableBytes)}</dd></div>
-          <div><dt>{t("systemResources.readPerSecond")}</dt><dd style={{ color: DISK_READ_COLOR }}>{formatRate(totals.readBytesPerSec)}</dd></div>
-          <div><dt>{t("systemResources.writePerSecond")}</dt><dd style={{ color: DISK_WRITE_COLOR }}>{formatRate(totals.writeBytesPerSec)}</dd></div>
+          <div><dt>{t("systemResources.readPerSecond")}</dt><dd>{formatRate(totals.readBytesPerSec)}</dd></div>
+          <div><dt>{t("systemResources.writePerSecond")}</dt><dd>{formatRate(totals.writeBytesPerSec)}</dd></div>
         </dl>
         <div className="ui-resource-volumes">
           {snapshot.disks.map(disk => <div key={disk.mountPoint + disk.name}><span title={disk.name}>{disk.mountPoint || disk.name}<small>{disk.fileSystem}</small></span><strong>{formatDiskBytes(disk.usedBytes)} / {formatDiskBytes(disk.totalBytes)}</strong></div>)}
@@ -513,7 +414,7 @@ function GpuCard({ snapshot, history }: { snapshot: SystemResourceSnapshot; hist
     <ResourceCard icon={<Gauge size={15} />} title={t("systemResources.gpu")}
       right={snapshot.gpu ? <strong style={{ color: usageTextColor(usage) }}>{formatPercent(usage)}</strong> : null}>
       {!snapshot.gpu ? <InlineEmpty text={t("systemResources.gpuUnavailable")} /> : <>
-        <TrendChart series={[{ points, color: TERM_PANEL.magenta }]} height={72} max={100} />
+        <TrendChart series={[{ points, color: TERM_PANEL.magenta }]} height={64} max={100} />
         <dl className="ui-resource-metrics ui-resource-metrics--pair">
           <div><dt>{t("systemResources.average")}</dt><dd>{formatPercent(average)}</dd></div>
           <div><dt>{t("systemResources.peak")}</dt><dd>{formatPercent(Math.max(usage, ...points))}</dd></div>
@@ -526,42 +427,22 @@ function GpuCard({ snapshot, history }: { snapshot: SystemResourceSnapshot; hist
 function ProcessCard({ snapshot }: { snapshot: SystemResourceSnapshot }) {
   const { t } = useI18n();
   const rows = snapshot.topProcesses.slice(0, 5);
-
   return (
-    <ResourceCard icon={<ListOrdered size={15} />} title={t("systemResources.topProcesses")} accent={MODULE_TITLE_COLOR}>
-      {rows.length === 0 ? (
-        <InlineEmpty text={t("systemResources.noProcesses")} />
-      ) : (
-        <div className="ui-resource-processes" style={{ borderColor: TERM_PANEL.border }}>
-          <div className="grid grid-cols-[42px_42px_minmax(0,1fr)_44px] gap-2 border-b px-2 py-1.5 text-[10px] font-semibold" style={{ color: TERM_PANEL.dim, borderColor: TERM_PANEL.border, backgroundColor: TERM_PANEL.cardInner }}>
-            <span>CPU</span>
-            <span>{t("systemResources.memoryShort")}</span>
-            <span>{t("systemResources.software")}</span>
-            <span className="text-right">PID</span>
-          </div>
-          {rows.map((process) => {
+    <ResourceCard icon={<ListOrdered size={15} />} title={t("systemResources.topProcesses")}>
+      {rows.length === 0 ? <InlineEmpty text={t("systemResources.noProcesses")} /> : (
+        <div className="ui-resource-processes">
+          <div className="ui-resource-process-columns"><span>{t("resources.nameColumn")}</span><span>{t("resources.cpuColumn")}</span><span>{t("resources.rssColumn")}</span></div>
+          {rows.map(process => {
             const command = process.command || process.name;
             const displayName = process.displayName?.trim() || command;
-            const title = displayName === command ? displayName : `${displayName}\n${command}`;
-            return (
-              <div
-                key={`${process.pid}-${process.name}`}
-                className="grid grid-cols-[42px_42px_minmax(0,1fr)_44px] gap-2 border-b px-2 py-1.5 text-[11px] last:border-b-0"
-                style={{ borderColor: panelColorTint(TERM_PANEL.border, 78), backgroundColor: TERM_PANEL.card }}
-              >
-                <span className="tabular-nums" style={{ color: TERM_PANEL.fg }}>{formatPercent(process.cpuUsagePercent)}</span>
-                <span className="tabular-nums" style={{ color: TERM_PANEL.fg }}>{formatPercent(process.memoryUsagePercent)}</span>
-                <span className="flex min-w-0 items-center gap-1.5" title={title} style={{ color: TERM_PANEL.fg }}>
-                  {process.iconDataUrl ? (
-                    <img src={process.iconDataUrl} alt="" width={16} height={16} className="shrink-0 rounded-[2px]" draggable={false} />
-                  ) : (
-                    <AppWindow size={14} className="shrink-0" aria-hidden="true" style={{ color: TERM_PANEL.dim }} />
-                  )}
-                  <span className="truncate">{displayName}</span>
-                </span>
-                <span className="truncate text-right tabular-nums" title={process.pid} style={{ color: TERM_PANEL.dim }}>{process.pid}</span>
-              </div>
-            );
+            return <div key={`${process.pid}-${process.name}`} className="ui-resource-process-row">
+              <span className="ui-resource-process-name" title={`${displayName}\n${command}\nPID ${process.pid}`}>
+                {process.iconDataUrl ? <img src={process.iconDataUrl} alt="" width={14} height={14} draggable={false} /> : <AppWindow size={14} aria-hidden="true" />}
+                <span><span>{displayName}</span><small>PID {process.pid}</small></span>
+              </span>
+              <span className="ui-resource-process-number">{formatPercent(process.cpuUsagePercent)}</span>
+              <span className="ui-resource-process-number" title={`${t("systemResources.memoryShort")} · ${formatPercent(process.memoryUsagePercent)}`}>{formatBytes(process.memoryBytes)}</span>
+            </div>;
           })}
         </div>
       )}
