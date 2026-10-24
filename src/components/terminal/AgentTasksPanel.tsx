@@ -2,7 +2,7 @@ import { Bot, ChevronRight, FileText, ListChecks, TerminalSquare } from "lucide-
 import { useAgentTasks } from "../../hooks/useAgentTasks";
 import { resolveHistorySourceIconKey } from "../../lib/cliTools";
 import { useI18n } from "../../lib/i18n";
-import type { AgentBackgroundTaskRecord, AgentTaskStatus } from "../../lib/agentTasks";
+import { agentTaskWarningKey, type AgentBackgroundTaskRecord, type AgentTaskStatus } from "../../lib/agentTasks";
 import type { Project, TerminalSession } from "../../lib/types";
 import { CliToolIcon } from "../CliToolIcon";
 import { MarkdownContent } from "../ui/MarkdownContent";
@@ -18,6 +18,7 @@ export function AgentTasksPanel({ session, project, refreshSeq }: { session: Ter
   const active = background.filter(task => task.status !== "done" && task.status !== "failed");
   const finished = background.filter(task => task.status === "done" || task.status === "failed");
   const failed = finished.filter(task => task.status === "failed").length;
+  const readNotices = [...new Set(snapshot?.warnings.map(agentTaskWarningKey) ?? [])];
   const backgroundRow = (task: AgentBackgroundTaskRecord) => {
     const command = task.title;
     const title = task.description.trim() || command;
@@ -68,6 +69,6 @@ export function AgentTasksPanel({ session, project, refreshSeq }: { session: Ter
       </details>}
     </TaskSection>
     {error && <details className="agent-task-diagnostics"><summary>{t("terminal.agentTasks.diagnostics")}</summary><pre>{error}</pre></details>}
-    {!!snapshot?.warnings.length && <details className="agent-task-diagnostics"><summary>{t("terminal.agentTasks.partial")}</summary><pre>{snapshot.warnings.join("\n")}</pre></details>}
+    {readNotices.length > 0 && <details className="agent-task-diagnostics"><summary>{t("terminal.agentTasks.partial")}</summary><ul className="agent-task-read-notices">{readNotices.map(key => <li key={key}>{t(key)}</li>)}</ul></details>}
   </div>;
 }

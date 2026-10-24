@@ -10,7 +10,8 @@ use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime};
 
 const READ_BUDGET: u64 = 2 * 1024 * 1024;
-const MAX_LINE: usize = 512 * 1024;
+#[path = "agent_task_json.rs"]
+mod task_json;
 const MAX_ITEMS: usize = 128;
 const TEXT_LIMIT: usize = 16 * 1024;
 const MAX_DISCOVERY: usize = 20_000;
@@ -142,7 +143,7 @@ struct Parser {
     live_background: HashSet<String>,
     calls: HashMap<String, Call>,
     warnings: Vec<String>,
-    uncertain: bool,
+    identity_rejected: bool,
     codex_identity: bool,
     claude_identity: bool,
     plan_mode: bool,
@@ -152,11 +153,37 @@ impl Parser {
     fn warn(&mut self, code: &str) {
         warning(&mut self.warnings, code);
     }
+    /// A missing record makes old state uncertain, not every future state.
+    /// Pending calls are unusable after a gap. Later matched successful tools
+    /// may establish new state for their own rows; untouched rows stay unknown.
+    fn invalidate(&mut self) {
+        for task in self.tasks.values_mut() {
+            task.status = TaskStatus::Unknown;
+        }
+        for plan in self.plans.values_mut() {
+            plan.status = TaskStatus::Unknown;
+        }
+        for task in self.background.values_mut() {
+            task.status = TaskStatus::Unknown;
+        }
+        self.calls.clear();
+        self.live_background.clear();
+        self.plan_mode = false;
+        // Confirmed Bash task->call associations remain identity evidence for
+        // explicit later notifications; they are not pending invocations.
+    }
+    fn invalid_record(&mut self, source: &str, code: &str) {
+        self.invalidate();
+        if source == "codex" {
+            self.codex_identity = false;
+        }
+        self.warn(code);
+    }
     fn task(&mut self, task: AgentTask) {
         if self.tasks.contains_key(&task.id) || self.tasks.len() < MAX_ITEMS {
             self.tasks.insert(task.id.clone(), task);
         } else {
-            self.uncertain = true;
+            self.invalidate();
             self.warn("task_limit_reached");
         }
     }
@@ -167,11 +194,34 @@ impl Parser {
             self.warn("plan_limit_reached");
         }
     }
+    #[cfg(test)]
     fn line(&mut self, source: &str, session: &str, root: &Path, line: &[u8]) {
-        let Ok(v) = serde_json::from_slice::<Value>(line) else {
-            self.uncertain = true;
-            self.warn("transcript_invalid_json");
-            return;
+        let mut projection = task_json::Projector::default();
+        for byte in line {
+            projection.push(*byte);
+        }
+        self.projected_line(source, session, root, projection.finish());
+    }
+    fn projected_line(
+        &mut self,
+        source: &str,
+        session: &str,
+        root: &Path,
+        record: Result<Value, task_json::Error>,
+    ) {
+        let v = match record {
+            Ok(v) => v,
+            Err(error) => {
+                self.invalid_record(
+                    source,
+                    if error == task_json::Error::Limit {
+                        "transcript_projection_limit_reached"
+                    } else {
+                        "transcript_invalid_json"
+                    },
+                );
+                return;
+            }
         };
         if source == "codex" {
             self.codex_line(session, &v);
@@ -184,7 +234,7 @@ impl Parser {
             return;
         }
         if self.calls.len() >= 32 && !self.calls.contains_key(id) {
-            self.uncertain = true;
+            self.invalidate();
             self.warn("pending_tool_limit_reached");
             return;
         }
@@ -296,10 +346,10 @@ impl Parser {
                             }
                         }
                         // TodoWrite can be large; a pending invocation is bounded independently.
-                        if Value::Object(input.clone()).to_string().len() <= 64 * 1024 {
+                        if Value::Object(input.clone()).to_string().len() <= 256 * 1024 {
                             self.remember(&text(block, "id"), &name, &Value::Object(input));
                         } else {
-                            self.uncertain = true;
+                            self.invalidate();
                             self.warn("tool_input_limit_reached");
                         }
                     }
@@ -349,7 +399,7 @@ impl Parser {
                     });
                 }
                 if todos.len() > MAX_ITEMS {
-                    self.uncertain = true;
+                    self.invalidate();
                     self.warn("task_limit_reached");
                 }
             }
@@ -622,9 +672,10 @@ impl Parser {
                 || cli_manager_history_core::subagent::codex_subagent_metadata(v).is_some()
             {
                 self.codex_identity = false;
-                self.uncertain = true;
+                self.identity_rejected = true;
+                self.invalidate();
                 self.warn("transcript_session_mismatch");
-            } else if !self.uncertain {
+            } else if !self.identity_rejected {
                 self.codex_identity = true;
             }
             return;
@@ -640,11 +691,17 @@ impl Parser {
                 if !matches!(name, "update_plan" | "exec_command" | "write_stdin") {
                     return;
                 }
-                let args = text(p, "arguments");
-                if let Ok(input) = serde_json::from_str::<Value>(&args) {
-                    self.remember(&text(p, "call_id"), name, &input);
+                // The projection parses the complete escaped JSON string as
+                // structure before cropping display fields. Never parse text().
+                if let Some(input) = p.get("arguments").filter(|v| v.is_object()) {
+                    if input.to_string().len() <= 256 * 1024 {
+                        self.remember(&text(p, "call_id"), name, input);
+                    } else {
+                        self.invalidate();
+                        self.warn("tool_input_limit_reached");
+                    }
                 } else {
-                    self.uncertain = true;
+                    self.invalidate();
                     self.warn("tool_arguments_invalid");
                 }
             }
@@ -688,14 +745,16 @@ impl Parser {
                         });
                     }
                     if steps.len() > MAX_ITEMS {
-                        self.uncertain = true;
+                        self.invalidate();
                         self.warn("task_limit_reached");
                     }
                     self.plan(AgentPlan {
                         id: "codex:plan".into(),
                         title: "Plan".into(),
                         content: bounded(content.trim()),
-                        status: if all_done {
+                        status: if steps.len() > MAX_ITEMS {
+                            TaskStatus::Unknown
+                        } else if all_done {
                             TaskStatus::Done
                         } else if running {
                             TaskStatus::Running
@@ -767,7 +826,7 @@ impl Parser {
             warnings: self.warnings.clone(),
             supported: true,
         };
-        if self.uncertain || !complete {
+        if self.identity_rejected || !complete {
             for task in &mut snapshot.tasks {
                 task.status = TaskStatus::Unknown;
             }
@@ -856,7 +915,8 @@ struct Entry {
     created: Option<SystemTime>,
     anchor: Vec<u8>,
     parser: Parser,
-    skipping_line: bool,
+    line: task_json::Projector,
+    changed_during_read: bool,
     replaying: bool,
     used: Instant,
 }
@@ -870,7 +930,8 @@ impl Entry {
             created: None,
             anchor: Vec::new(),
             parser: Parser::default(),
-            skipping_line: false,
+            line: task_json::Projector::default(),
+            changed_during_read: false,
             replaying: true,
             used: Instant::now(),
         }
@@ -904,28 +965,20 @@ impl Entry {
             .take(READ_BUDGET.min(len.saturating_sub(self.offset)))
             .read_to_end(&mut bytes)
             .map_err(|_| "transcript_read_failed")?;
-        let mut consumed = 0;
-        for (index, byte) in bytes.iter().enumerate() {
-            if *byte != b'\n' {
-                continue;
+        for byte in &bytes {
+            if *byte == b'\n' {
+                let line = std::mem::take(&mut self.line);
+                if !line.is_empty() {
+                    self.parser
+                        .projected_line(source, session, root, line.finish());
+                }
+            } else {
+                self.line.push(*byte);
             }
-            let line = &bytes[consumed..index];
-            if self.skipping_line || line.len() > MAX_LINE {
-                self.parser.uncertain = true;
-                self.parser.warn("transcript_line_limit_reached");
-            } else if !line.is_empty() {
-                self.parser.line(source, session, root, line);
-            }
-            self.skipping_line = false;
-            consumed = index + 1;
         }
-        if bytes.len() - consumed > MAX_LINE {
-            consumed = bytes.len();
-            self.skipping_line = true;
-            self.parser.uncertain = true;
-            self.parser.warn("transcript_line_limit_reached");
-        }
-        self.offset += consumed as u64;
+        // Offset tracks bytes consumed, including a partial line. The bounded
+        // projector holds its state, so polling never rereads a multi-MiB tail.
+        self.offset += bytes.len() as u64;
         self.anchor = vec![0; self.offset.min(256) as usize];
         file.seek(SeekFrom::Start(self.offset - self.anchor.len() as u64))
             .map_err(|_| "transcript_seek_failed")?;
@@ -938,10 +991,8 @@ impl Entry {
         let stable = file
             .metadata()
             .is_ok_and(|current| current.len() == len && current.modified().ok() == modified);
-        if !stable {
-            self.parser.warn("transcript_changed_during_read");
-        }
-        let complete = self.offset == len && !self.skipping_line && stable;
+        self.changed_during_read = !stable;
+        let complete = self.offset == len && self.line.is_empty() && stable;
         if self.replaying {
             self.parser.live_background.clear();
             if complete {
@@ -1335,12 +1386,17 @@ fn get_snapshot(
         return Err("transcript_path_outside_root".into());
     }
     let complete = entry.refresh(source, session, &root)?;
-    if (source == "codex" && !entry.parser.codex_identity)
-        || (source == "claude" && !entry.parser.claude_identity)
+    if entry.parser.identity_rejected
+        || complete
+            && ((source == "codex" && !entry.parser.codex_identity)
+                || (source == "claude" && !entry.parser.claude_identity))
     {
         return Err("transcript_session_mismatch".into());
     }
     let mut snapshot = entry.parser.snapshot(complete);
+    if entry.changed_during_read {
+        warning(&mut snapshot.warnings, "transcript_changed_during_read");
+    }
     if source == "claude" {
         let warnings_before = snapshot.warnings.len();
         file_tasks(&root, session, &mut snapshot);
@@ -2049,7 +2105,7 @@ mod tests {
         fs::write(&path, format!("{line}\n{{\"partial\"")).unwrap();
         let mut entry = Entry::new(path.clone());
         assert!(!entry.refresh("claude", "parent", root.path()).unwrap());
-        assert_eq!(entry.offset, line.len() as u64 + 1);
+        assert_eq!(entry.offset, fs::metadata(&path).unwrap().len());
         entry.parser.task(AgentTask {
             id: "1".into(),
             title: "done".into(),
@@ -2067,10 +2123,10 @@ mod tests {
         assert!(entry.parser.claude_identity);
     }
     #[test]
-    fn oversized_lines_are_skipped_and_poison_status_certainty() {
+    fn malformed_large_lines_are_skipped_and_downgrade_status_certainty() {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("parent.jsonl");
-        let mut data = vec![b'x'; MAX_LINE + 10];
+        let mut data = vec![b'x'; 512 * 1024 + 10];
         data.push(b'\n');
         data.extend_from_slice(
             json!({"sessionId":"parent","message":{"role":"assistant","content":[]}})
@@ -2081,13 +2137,13 @@ mod tests {
         fs::write(&path, data).unwrap();
         let mut entry = Entry::new(path);
         assert!(entry.refresh("claude", "parent", root.path()).unwrap());
-        assert!(entry.parser.uncertain);
+        assert!(!entry.parser.identity_rejected);
         assert!(entry.parser.claude_identity);
         assert!(entry
             .parser
             .warnings
             .iter()
-            .any(|s| s == "transcript_line_limit_reached"));
+            .any(|s| s == "transcript_invalid_json"));
     }
     #[test]
     fn discovery_is_exact_and_task_files_are_scoped_to_parent() {
@@ -2190,6 +2246,403 @@ mod tests {
         let offset = entry.offset;
         assert!(entry.refresh("claude", "parent", root.path()).unwrap());
         assert_eq!(entry.offset, offset);
+    }
+
+    #[test]
+    fn large_claude_image_and_text_do_not_hide_adjacent_task_tools() {
+        let root = tempfile::tempdir().unwrap();
+        let mut p = Parser::default();
+        feed(
+            &mut p,
+            "claude",
+            root.path(),
+            json!({
+                "sessionId":"parent", "message":{"role":"assistant", "content":[
+                    {"type":"image", "source":{"data":"a".repeat(3 * 1024 * 1024)}},
+                    {"type":"text", "text":"ordinary text".repeat(100_000)},
+                    {"type":"tool_use", "id":"todo", "name":"TodoWrite", "input":{"todos":[{"content":"keep","status":"completed"}]}},
+                    {"type":"tool_use", "id":"bg", "name":"Bash", "input":{"command":"build"}},
+                    {"type":"tool_use", "id":"plan", "name":"ExitPlanMode", "input":{"plan":"selected plan"}}
+                ]}
+            }),
+        );
+        feed(
+            &mut p,
+            "claude",
+            root.path(),
+            json!({
+                "sessionId":"parent", "toolUseResult":{"backgroundTaskId":"job"},
+                "message":{"role":"user", "content":[
+                    {"type":"image", "source":{"data":"b".repeat(600_000)}},
+                    {"type":"tool_result", "tool_use_id":"todo", "content":"ok"},
+                    {"type":"tool_result", "tool_use_id":"bg", "content":"ok"},
+                    {"type":"tool_result", "tool_use_id":"plan", "content":"ok"}
+                ]}
+            }),
+        );
+        assert!(matches!(p.snapshot(true).tasks[0].status, TaskStatus::Done));
+        assert_eq!(p.plans["claude:plan"].content, "selected plan");
+        assert!(matches!(p.background["job"].status, TaskStatus::Running));
+        feed(
+            &mut p,
+            "claude",
+            root.path(),
+            json!({"sessionId":"parent","message":{"role":"user","content":format!("{}<task-notification><task-id>job</task-id><tool-use-id>bg</tool-use-id><status>completed</status></task-notification>", "x".repeat(600_000))}}),
+        );
+        assert!(matches!(p.background["job"].status, TaskStatus::Done));
+        assert!(p.warnings.is_empty());
+    }
+    #[test]
+    fn big_codex_arguments_are_parsed_before_cropping_display_fields() {
+        let root = tempfile::tempdir().unwrap();
+        let mut p = Parser::default();
+        feed(
+            &mut p,
+            "codex",
+            root.path(),
+            json!({"type":"session_meta","payload":{"id":"parent"}}),
+        );
+        codex_tool(
+            &mut p,
+            root.path(),
+            "long-plan",
+            "update_plan",
+            json!({"explanation":"解释😀".repeat(200_000),"plan":[{"step":"work","status":"completed"}]}),
+            "Plan updated",
+        );
+        assert!(matches!(p.tasks["codex:step:0"].status, TaskStatus::Done));
+        codex_tool(
+            &mut p,
+            root.path(),
+            "long-cmd",
+            "exec_command",
+            json!({"cmd":"echo ".repeat(150_000)}),
+            "Process running with session ID 123\nOutput:\n",
+        );
+        assert!(matches!(p.background["123"].status, TaskStatus::Running));
+        codex_tool(
+            &mut p,
+            root.path(),
+            "finish",
+            "write_stdin",
+            json!({"session_id":123}),
+            "Process exited with code 0\nOutput:\n",
+        );
+        assert!(matches!(p.background["123"].status, TaskStatus::Done));
+        assert!(p.warnings.is_empty());
+    }
+    #[test]
+    fn multi_budget_line_is_incremental_and_partial_append_applies_only_after_newline() {
+        use std::io::Write;
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("parent.jsonl");
+        // Identity deliberately follows the enormous unknown value.
+        let prefix = format!(
+            "{{\"ignored\":\"{}\",\"sessionId\":\"parent\",",
+            "x".repeat(READ_BUDGET as usize + 31)
+        );
+        let tail = "\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"name\":\"TodoWrite\",\"id\":\"call\",\"input\":{\"todos\":[{\"content\":\"你好😀\",\"status\":\"completed\"}]}}]}}";
+        fs::write(&path, format!("{prefix}{tail}")).unwrap();
+        let mut entry = Entry::new(path.clone());
+        assert!(!entry.refresh("claude", "parent", root.path()).unwrap());
+        assert_eq!(entry.offset, READ_BUDGET);
+        assert!(!entry.parser.claude_identity);
+        assert!(!entry.refresh("claude", "parent", root.path()).unwrap());
+        assert!(entry.parser.calls.is_empty());
+        let offset = entry.offset;
+        assert!(!entry.refresh("claude", "parent", root.path()).unwrap());
+        assert_eq!(entry.offset, offset);
+        let mut file = fs::OpenOptions::new().append(true).open(&path).unwrap();
+        writeln!(file).unwrap();
+        writeln!(file, "{}", json!({"sessionId":"parent","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"call","content":"ok"}]}})).unwrap();
+        assert!(entry.refresh("claude", "parent", root.path()).unwrap());
+        assert_eq!(entry.parser.tasks["todo:0"].title, "你好😀");
+        assert!(matches!(
+            entry.parser.tasks["todo:0"].status,
+            TaskStatus::Done
+        ));
+        assert!(entry.parser.warnings.is_empty());
+    }
+    #[test]
+    fn malformed_gap_downgrades_old_rows_and_only_new_authority_recovers_them() {
+        let root = tempfile::tempdir().unwrap();
+        let mut p = Parser::default();
+        tool(
+            &mut p,
+            root.path(),
+            "a",
+            "TaskCreate",
+            json!({"subject":"one"}),
+        );
+        result(
+            &mut p,
+            root.path(),
+            "a",
+            "",
+            json!({"task":{"id":"1"}}),
+            false,
+        );
+        tool(
+            &mut p,
+            root.path(),
+            "b",
+            "TaskCreate",
+            json!({"subject":"two"}),
+        );
+        result(
+            &mut p,
+            root.path(),
+            "b",
+            "",
+            json!({"task":{"id":"2"}}),
+            false,
+        );
+        tool(
+            &mut p,
+            root.path(),
+            "stale",
+            "TaskUpdate",
+            json!({"taskId":"2","status":"completed"}),
+        );
+        p.line("claude", "parent", root.path(), b"{malformed}");
+        result(&mut p, root.path(), "stale", "ok", Value::Null, false);
+        assert!(p
+            .tasks
+            .values()
+            .all(|task| matches!(task.status, TaskStatus::Unknown)));
+        tool(
+            &mut p,
+            root.path(),
+            "fresh",
+            "TaskUpdate",
+            json!({"taskId":"1","status":"completed"}),
+        );
+        result(&mut p, root.path(), "fresh", "ok", Value::Null, false);
+        assert!(matches!(p.tasks["1"].status, TaskStatus::Done));
+        assert!(matches!(p.tasks["2"].status, TaskStatus::Unknown));
+        tool(
+            &mut p,
+            root.path(),
+            "bad-status",
+            "TaskUpdate",
+            json!({"taskId":"1","status":{}}),
+        );
+        result(&mut p, root.path(), "bad-status", "ok", Value::Null, false);
+        assert!(matches!(p.tasks["1"].status, TaskStatus::Unknown));
+    }
+    #[test]
+    fn codex_invalid_records_require_reverified_identity_and_mismatch_is_sticky() {
+        let root = tempfile::tempdir().unwrap();
+        let mut p = Parser::default();
+        let meta = json!({"type":"session_meta","payload":{"id":"parent"}});
+        feed(&mut p, "codex", root.path(), meta.clone());
+        codex_tool(
+            &mut p,
+            root.path(),
+            "before",
+            "update_plan",
+            json!({"plan":[{"step":"old","status":"completed"}]}),
+            "Plan updated",
+        );
+        p.line(
+            "codex",
+            "parent",
+            root.path(),
+            br#"{"type":"session_meta","payload":{"id":"other""#,
+        );
+        codex_tool(
+            &mut p,
+            root.path(),
+            "ignored",
+            "update_plan",
+            json!({"plan":[{"step":"wrong","status":"completed"}]}),
+            "Plan updated",
+        );
+        assert_eq!(p.tasks["codex:step:0"].title, "old");
+        assert!(matches!(
+            p.tasks["codex:step:0"].status,
+            TaskStatus::Unknown
+        ));
+        feed(&mut p, "codex", root.path(), meta.clone());
+        codex_tool(
+            &mut p,
+            root.path(),
+            "fresh",
+            "update_plan",
+            json!({"plan":[{"step":"new","status":"completed"}]}),
+            "Plan updated",
+        );
+        assert!(matches!(p.tasks["codex:step:0"].status, TaskStatus::Done));
+        p.line(
+            "codex",
+            "parent",
+            root.path(),
+            br#"{"type":"session_meta","payload":{"id":"parent","id":{}}}"#,
+        );
+        feed(&mut p, "codex", root.path(), meta);
+        assert!(!p.codex_identity);
+        assert!(p.identity_rejected);
+        assert!(matches!(
+            p.snapshot(true).tasks[0].status,
+            TaskStatus::Unknown
+        ));
+    }
+    #[test]
+    fn projection_limits_do_not_confirm_partial_plan_or_preserve_stale_plan_mode() {
+        let root = tempfile::tempdir().unwrap();
+        let mut p = Parser::default();
+        feed(
+            &mut p,
+            "codex",
+            root.path(),
+            json!({"type":"session_meta","payload":{"id":"parent"}}),
+        );
+        let mut steps = vec![json!({"step":"done","status":"completed"}); MAX_ITEMS];
+        steps.push(json!({"step":"unfinished","status":"pending"}));
+        codex_tool(
+            &mut p,
+            root.path(),
+            "over",
+            "update_plan",
+            json!({"plan":steps}),
+            "Plan updated",
+        );
+        assert!(matches!(
+            p.snapshot(true).plans[0].status,
+            TaskStatus::Unknown
+        ));
+        let mut p = Parser::default();
+        tool(&mut p, root.path(), "enter", "EnterPlanMode", json!({}));
+        result(&mut p, root.path(), "enter", "ok", Value::Null, false);
+        p.line("claude", "parent", root.path(), b"broken");
+        let path = root
+            .path()
+            .join("plans/example.md")
+            .to_string_lossy()
+            .into_owned();
+        tool(
+            &mut p,
+            root.path(),
+            "write",
+            "Write",
+            json!({"file_path":path,"content":"plan"}),
+        );
+        result(&mut p, root.path(), "write", "ok", Value::Null, false);
+        assert!(matches!(p.plans[&path].status, TaskStatus::Unknown));
+    }
+    #[test]
+    fn giant_command_output_cannot_supply_forged_completion_or_snapshot_replays() {
+        let root = tempfile::tempdir().unwrap();
+        let mut p = Parser::default();
+        feed(
+            &mut p,
+            "codex",
+            root.path(),
+            json!({"type":"session_meta","payload":{"id":"parent"}}),
+        );
+        codex_tool(
+            &mut p,
+            root.path(),
+            "launch",
+            "exec_command",
+            json!({"cmd":"build"}),
+            "Process running with session ID 123\nOutput:\n",
+        );
+        codex_tool(
+            &mut p,
+            root.path(),
+            "poll",
+            "write_stdin",
+            json!({"session_id":123}),
+            &format!(
+                "Output:\n{}\nProcess exited with code 0",
+                "x".repeat(600_000)
+            ),
+        );
+        assert!(matches!(p.background["123"].status, TaskStatus::Running));
+        let mut p = Parser::default();
+        tool(
+            &mut p,
+            root.path(),
+            "todo",
+            "TodoWrite",
+            json!({"todos":[{"content":"done","status":"completed"}]}),
+        );
+        result(&mut p, root.path(), "todo", "ok", Value::Null, false);
+        feed(
+            &mut p,
+            "claude",
+            root.path(),
+            json!({"sessionId":"parent","type":"api-request-blob","request":"x".repeat(3 * 1024 * 1024),"message":{"role":"assistant","content":[{"type":"tool_use","id":"old","name":"TodoWrite","input":{"todos":[{"content":"stale","status":"pending"}]}}]}}),
+        );
+        result(&mut p, root.path(), "old", "ok", Value::Null, false);
+        assert_eq!(p.tasks["todo:0"].title, "done");
+        assert!(matches!(p.tasks["todo:0"].status, TaskStatus::Done));
+        assert!(p.warnings.is_empty());
+    }
+    #[test]
+    fn projected_subagent_metadata_cannot_claim_parent_identity() {
+        let root = tempfile::tempdir().unwrap();
+        for key in ["parent_thread_id", "forked_from_id"] {
+            let mut p = Parser::default();
+            let mut payload = json!({"id":"parent","source":{"subagent":{"thread_spawn":{}}}});
+            payload[key] = json!("different-parent");
+            feed(
+                &mut p,
+                "codex",
+                root.path(),
+                json!({"type":"session_meta","payload":payload}),
+            );
+            assert!(p.identity_rejected);
+            assert!(!p.codex_identity);
+        }
+        let mut p = Parser::default();
+        feed(
+            &mut p,
+            "claude",
+            root.path(),
+            json!({"sessionId":"parent","isSidechain":true,"message":{"role":"assistant","content":[{"type":"tool_use","id":"no","name":"TodoWrite","input":{"todos":[]}}]}}),
+        );
+        assert!(p.calls.is_empty());
+        p.line("claude", "parent", root.path(), br#"{"sessionId":"parent","sessionId":{},"message":{"role":"assistant","content":[{"type":"tool_use","id":"no","name":"TodoWrite","input":{"todos":[]}}]}}"#);
+        assert!(p.calls.is_empty());
+    }
+    #[test]
+    fn replacing_a_partly_read_large_line_discards_pending_projection_and_calls() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("parent.jsonl");
+        let old = json!({"sessionId":"parent","message":{"role":"assistant","content":[{"type":"tool_use","id":"stale","name":"TodoWrite","input":{"todos":[{"content":"old","status":"completed"}]}}]},"ignored":"x".repeat(READ_BUDGET as usize + 10)}).to_string();
+        fs::write(&path, old).unwrap();
+        let mut entry = Entry::new(path.clone());
+        assert!(!entry.refresh("claude", "parent", root.path()).unwrap());
+        assert_eq!(entry.offset, READ_BUDGET);
+        let new_call = json!({"sessionId":"parent","message":{"role":"assistant","content":[{"type":"tool_use","id":"new","name":"TodoWrite","input":{"todos":[{"content":"new","status":"completed"}]}}]}});
+        let new_result = json!({"sessionId":"parent","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"new","content":"ok"}]}});
+        fs::write(&path, format!("{new_call}\n{new_result}\n")).unwrap();
+        assert!(entry.refresh("claude", "parent", root.path()).unwrap());
+        assert_eq!(entry.parser.tasks["todo:0"].title, "new");
+        assert!(entry.parser.calls.is_empty());
+        assert!(entry.parser.warnings.is_empty());
+    }
+    #[test]
+    fn io_budget_can_split_utf8_and_unicode_escape_tokens() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("parent.jsonl");
+        for split in [1, 2, 3, 4, 7, 10] {
+            let start = b"{\"ignored\":\"";
+            let mut raw = start.to_vec();
+            raw.extend(vec![b'x'; READ_BUDGET as usize - split - start.len()]);
+            raw.extend_from_slice("😀".as_bytes());
+            raw.extend_from_slice(br#"\uD83D\uDE00","sessionId":"parent","message":{"role":"assistant","content":[]}}"#);
+            raw.push(b'\n');
+            fs::write(&path, raw).unwrap();
+            let mut entry = Entry::new(path.clone());
+            assert!(!entry.refresh("claude", "parent", root.path()).unwrap());
+            assert_eq!(entry.offset, READ_BUDGET);
+            assert!(entry.refresh("claude", "parent", root.path()).unwrap());
+            assert!(entry.parser.claude_identity);
+            assert!(entry.parser.warnings.is_empty());
+        }
     }
     #[test]
     #[ignore = "requires explicit local transcript opt-in; prints counts only"]

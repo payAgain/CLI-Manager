@@ -23,10 +23,12 @@ const { TaskScopeHeader, TaskSection, TaskStatus } = load("src/components/termin
 const { translate } = load("src/lib/i18n.ts", {
   "../stores/settingsStore": { useSettingsStore: { getState: () => ({ language: "zh-CN" }) } },
 });
+const taskPresentation = load("src/lib/agentTasks.ts", {});
 
 function render(state, language = "zh-CN") {
   const { AgentTasksPanel } = load("src/components/terminal/AgentTasksPanel.tsx", {
     "../../hooks/useAgentTasks": { useAgentTasks: () => state },
+    "../../lib/agentTasks": taskPresentation,
     "../../lib/i18n": { useI18n: () => ({ t: (key, params) => translate(language, key, params) }) },
     "../ui/MarkdownContent": { MarkdownContent: ({ content }) => React.createElement("div", null, content) },
     "./TaskList": { TaskScopeHeader, TaskSection, TaskStatus },
@@ -120,6 +122,23 @@ test("empty groups start collapsed while unavailable data has one shared notice"
 test("partial reads keep confirmed records while exposing diagnostics", () => {
   const html = render({ snapshot: { ...snapshot, warnings: ["transcript_truncated"] }, error: "read_failed", hasIdentity: true, remote: false, loading: false });
   assert.ok(html.includes("Build installer"));
-  assert.ok(html.includes("transcript_truncated"));
+  assert.ok(html.includes("部分任务信息暂时无法确认"));
+  assert.ok(!html.includes("transcript_truncated"));
   assert.ok(html.includes("read_failed"));
+});
+
+test("read conditions explain the cause in each language without exposing internal warning codes", () => {
+  const codes = ["transcript_line_limit_reached", "transcript_projection_limit_reached", "transcript_incomplete", "tool_results_pending", "new_backend_warning", "__proto__"];
+  for (const language of ["zh-CN", "en-US", "zh-TW"]) {
+    const html = render({ snapshot: { ...snapshot, warnings: codes }, hasIdentity: true, remote: false, loading: false }, language);
+    assert.ok(html.includes(translate(language, "terminal.agentTasks.partial")));
+    for (const key of ["recordLimit", "reading", "pendingResults", "unknown"]) {
+      const message = translate(language, `terminal.agentTasks.warning.${key}`);
+      assert.ok(html.includes(message), `${language}: ${key}`);
+      assert.equal(html.split(message).length - 1, 1, "duplicate causes share one notice");
+    }
+    for (const code of codes) assert.ok(!html.includes(code), `${language}: ${code}`);
+    assert.ok(!html.includes("terminal.agentTasks."));
+    assert.ok(html.includes('data-status="running"'), "notices do not change confirmed records in the view");
+  }
 });

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import type { AgentTasksSnapshot } from "../lib/agentTasks";
+import { unconfirmAgentTasksSnapshot, type AgentTasksSnapshot } from "../lib/agentTasks";
 import { getHistoryPathArgs } from "../lib/historyPathArgs";
 import { inferWslDistroFromCwd, resolveSubagentBrowserIdentity, resolveSubagentConfigDir } from "../lib/subagentBrowser";
 import type { Project, TerminalSession } from "../lib/types";
@@ -37,7 +37,10 @@ export function useAgentTasks(session: TerminalSession | null, project: Project 
         });
       },
       onSnapshot: snapshot => setState({ key, snapshot, error: null, loading: false }),
-      onError: error => setState(previous => ({ key, snapshot: previous.key === key ? previous.snapshot : null, error: String(error), loading: false })),
+      onError: error => setState(previous => ({ key,
+        snapshot: previous.key === key && previous.snapshot ? unconfirmAgentTasksSnapshot(previous.snapshot) : null,
+        error: String(error), loading: false,
+      })),
       onLoading: loading => setState(previous => previous.key === key ? { ...previous, loading } : previous),
     });
     const read = () => poller.refresh();

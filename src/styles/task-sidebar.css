@@ -72,6 +72,8 @@
 .agent-task-diagnostics { margin: 2px 4px 4px; padding: 6px 8px; border-radius: 7px; color: var(--text-muted); font-size: var(--ui-font-caption); }
 .agent-task-diagnostics summary { cursor: pointer; }
 .agent-task-diagnostics summary:hover { color: var(--text-secondary); }
+.agent-task-read-notices { margin: 6px 0 0; padding-left: 16px; line-height: 1.6; overflow-wrap: anywhere; }
+.agent-task-read-notices li + li { margin-top: 4px; }
 
 .task-row { display: grid; min-width: 0; grid-template-columns: 16px minmax(0, 1fr) auto; align-items: start; gap: 0 9px; padding: 7px 8px; border-radius: 7px; transition: background-color .12s ease; }
 .task-row + .task-row { margin-top: 1px; }
