@@ -2700,6 +2700,42 @@ fn maybe_activate_app_for_hook(payload: &crate::claude_hook::ClaudeHookPayload, 
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
+    fn compile_agent_process_fixture(dir: &std::path::Path) -> PathBuf {
+        let executable = dir.join("agent-process-fixture");
+        let source = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/agent_process.c");
+        let output = Command::new("cc")
+            .args(["-std=c99", "-Wall", "-Wextra", "-Werror", "-O2"])
+            .arg(&source)
+            .arg("-o")
+            .arg(&executable)
+            .output()
+            .expect("failed to run cc for the harmless Agent process fixture");
+        assert!(
+            output.status.success(),
+            "Agent fixture compilation failed: {}\n{}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        );
+        executable
+    }
+
+    #[cfg(unix)]
+    fn test_pty_replay(host: &DaemonHost, id: &str) -> String {
+        let Some(session) = host.get_session(id) else {
+            return "test session is unavailable".into();
+        };
+        let entry = session.lock().unwrap();
+        match entry.buffer.replay_entries() {
+            Ok(frames) => {
+                let bytes = frames.iter().flat_map(|frame| frame.data.iter().copied()).collect::<Vec<_>>();
+                String::from_utf8_lossy(&bytes).into_owned()
+            }
+            Err(error) => format!("test replay unavailable: {error}"),
+        }
+    }
+
     fn queued_writer(websocket: bool) -> Arc<ClientWriter> {
         Arc::new(ClientWriter {
             shared: Arc::new((Mutex::new(ClientWriterState {
@@ -3837,17 +3873,13 @@ mod tests {
         let host = Arc::new(DaemonHost::new());
         let _cleanup = Cleanup(host.clone());
         let dir = tempfile::tempdir().unwrap();
-        // Two nested harmless shell executables model launcher/child Agents.
+        // Native test executables avoid re-signing Apple's platform binaries.
+        let fixture = compile_agent_process_fixture(dir.path());
         for name in ["codex", "claude"] {
             let path = dir.path().join(name);
-            std::fs::copy("/bin/bash", &path).unwrap();
-            #[cfg(target_os = "macos")]
-            assert!(Command::new("/usr/bin/codesign").args(["--force", "--sign", "-"])
-                .arg(&path).output().unwrap().status.success());
+            std::fs::copy(&fixture, &path).unwrap();
         }
         let helper_file = dir.path().join("helper-pid");
-        let script = dir.path().join("helper.sh");
-        std::fs::write(&script, format!("sleep 30 &\necho $! > {}\nwait\n", helper_file.display())).unwrap();
         host.reserve_session("first-hook", None, Some("bash".into())).unwrap();
         let traits = host.pty.create("first-hook", None, None, Some("bash"),
             Arc::new(DaemonPtyEventSink::new(host.clone(), "first-hook".into()))).unwrap();
@@ -3857,14 +3889,16 @@ mod tests {
             entry.meta.root_pid = Some(traits.root_pid);
             entry.meta.root_started_at = traits.root_started_at;
         }
-        host.pty.write("first-hook", &format!("{} -c '{} {}; wait'\r",
-            dir.path().join("codex").display(), dir.path().join("claude").display(), script.display())).unwrap();
+        host.pty.write("first-hook", &format!("{} --launch {} --helper {}\r",
+            crate::ssh_transport::posix_quote(&dir.path().join("codex").to_string_lossy()),
+            crate::ssh_transport::posix_quote(&dir.path().join("claude").to_string_lossy()),
+            crate::ssh_transport::posix_quote(&helper_file.to_string_lossy()))).unwrap();
         let deadline = Instant::now() + Duration::from_secs(5);
         let helper = loop {
             if let Ok(text) = std::fs::read_to_string(&helper_file) {
                 if let Ok(pid) = text.trim().parse::<u32>() { break pid; }
             }
-            assert!(Instant::now() < deadline, "helper did not start");
+            assert!(Instant::now() < deadline, "helper did not start; test PTY replay:\n{}", test_pty_replay(&host, "first-hook"));
             std::thread::sleep(Duration::from_millis(20));
         };
         // The very first Hook may have inherited an external tab ID. Recover
@@ -3935,14 +3969,16 @@ mod tests {
         // pane. Neither has been sampled by the background tracker: the Hook
         // helper alone must not make its own branch appear unambiguous.
         std::fs::remove_file(&helper_file).unwrap();
-        host.pty.write("first-hook", &format!("{} -c 'sleep 30; wait' | {} {}\r",
-            dir.path().join("codex").display(), dir.path().join("claude").display(), script.display())).unwrap();
+        host.pty.write("first-hook", &format!("{} --wait | {} --helper {}\r",
+            crate::ssh_transport::posix_quote(&dir.path().join("codex").to_string_lossy()),
+            crate::ssh_transport::posix_quote(&dir.path().join("claude").to_string_lossy()),
+            crate::ssh_transport::posix_quote(&helper_file.to_string_lossy()))).unwrap();
         let deadline = Instant::now() + Duration::from_secs(5);
         let sibling_helper = loop {
             if let Ok(text) = std::fs::read_to_string(&helper_file) {
                 if let Ok(pid) = text.trim().parse::<u32>() { break pid; }
             }
-            assert!(Instant::now() < deadline, "pipeline helper did not start");
+            assert!(Instant::now() < deadline, "pipeline helper did not start; test PTY replay:\n{}", test_pty_replay(&host, "first-hook"));
             std::thread::sleep(Duration::from_millis(20));
         };
         let mut sibling_hook = serde_json::json!({"tabId":"first-hook", "source":"claude", "event":"Stop", "hookProcessId":sibling_helper});
@@ -3970,6 +4006,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let _cleanup = Cleanup(host.clone(), dir.clone());
         // Harmless foreground binaries: no network calls or AI requests.
+        let fixture = compile_agent_process_fixture(&dir);
         for name in ["codex", "claude"] {
             let path = if name == "claude" {
                 dir.join(".local/share/claude/versions/2.1.278")
@@ -3977,15 +4014,7 @@ mod tests {
                 dir.join(name)
             };
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-            std::fs::copy("/bin/cat", &path).unwrap();
-            #[cfg(target_os = "macos")]
-            assert!(Command::new("/usr/bin/codesign")
-                .args(["--force", "--sign", "-"])
-                .arg(&path)
-                .output()
-                .unwrap()
-                .status
-                .success());
+            std::fs::copy(&fixture, &path).unwrap();
             if name == "claude" {
                 std::os::unix::fs::symlink(&path, dir.join(name)).unwrap();
             }
@@ -4015,15 +4044,16 @@ mod tests {
                 }
                 assert!(
                     Instant::now() < deadline,
-                    "expected {tool:?} in {id}, got {:?}",
-                    meta.agent_detection
+                    "expected {tool:?} in {id}, got {:?}; test PTY replay:\n{}",
+                    meta.agent_detection,
+                    test_pty_replay(&host, id)
                 );
                 std::thread::sleep(Duration::from_millis(60));
             }
         };
         wait("one", None);
         host.pty
-            .write("one", &format!("{}/codex\r", dir.display()))
+            .write("one", &format!("{}\r", crate::ssh_transport::posix_quote(&dir.join("codex").to_string_lossy())))
             .unwrap();
         let first = wait("one", Some("codex"));
         let first_id = first.agent_detection.unwrap().agent.unwrap().run_id;
@@ -4073,7 +4103,7 @@ mod tests {
         host.pty.write("one", "\u{4}").unwrap();
         wait("one", None);
         host.pty
-            .write("one", &format!("{}/claude\r", dir.display()))
+            .write("one", &format!("{}\r", crate::ssh_transport::posix_quote(&dir.join("claude").to_string_lossy())))
             .unwrap();
         let switched = wait("one", Some("claude"));
         assert_ne!(
@@ -4086,7 +4116,7 @@ mod tests {
         );
         wait("two", None);
         host.pty
-            .write("two", &format!("exec {}/codex\r", dir.display()))
+            .write("two", &format!("exec {}\r", crate::ssh_transport::posix_quote(&dir.join("codex").to_string_lossy())))
             .unwrap();
         let replaced_shell = wait("two", Some("codex"));
         let second_agent = replaced_shell.agent_detection.as_ref().unwrap().agent.as_ref().unwrap();
