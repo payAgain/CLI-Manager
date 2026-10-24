@@ -108,10 +108,18 @@ class TestWheelEvent extends Event {
   }
 }
 
+class TestDomEventTarget extends EventTarget {
+  removeEventListener(type, listener, options) {
+    // Node 22's EventTarget does not normalize a boolean capture option like a
+    // browser does. Preserve DOM removal semantics for the terminal fixture.
+    super.removeEventListener(type, listener, typeof options === "boolean" ? { capture: options } : options);
+  }
+}
+
 async function tuiWheelTerminal(t, modes, initialMultiplier = 3) {
   const terminal = new Terminal({ cols: 80, rows: 10, allowProposedApi: true });
   t.after(() => terminal.dispose());
-  const element = new EventTarget();
+  const element = new TestDomEventTarget();
   element.ownerDocument = { defaultView: { WheelEvent: TestWheelEvent } };
   terminal._core.element = element;
   const protocol = trackTerminalMouseProtocol(terminal);

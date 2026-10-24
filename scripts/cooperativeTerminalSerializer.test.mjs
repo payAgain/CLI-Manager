@@ -72,7 +72,13 @@ test("each mouse tracking mode is identical to upstream", async t => {
 
 test("Unicode 11 / grapheme cells and resize reflow retain upstream output", async t => {
   const { terminal, addon } = setup(t, { cols: 21 });
-  const { UnicodeGraphemesAddon } = require("@xterm/addon-unicode-graphemes");
+  // Match the WebView's atob path. The beta addon's Node Buffer decoder ignores
+  // pooled buffers' byteOffset on some supported Node versions.
+  const browserUnicodeAddon = { exports: {} };
+  new Function("module", "exports", "Buffer", readFileSync(require.resolve("@xterm/addon-unicode-graphemes"), "utf8"))(
+    browserUnicodeAddon, browserUnicodeAddon.exports, undefined,
+  );
+  const { UnicodeGraphemesAddon } = browserUnicodeAddon.exports;
   terminal.loadAddon(new UnicodeGraphemesAddon());
   terminal.unicode.activeVersion = "15-graphemes";
   await write(terminal, "中e\u0301👩‍💻🏳️‍🌈👨‍👩‍👧‍👦".repeat(60));

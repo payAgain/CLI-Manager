@@ -37,16 +37,6 @@ function flushNextAnimationFrame() {
   callback(performance.now());
 }
 
-test.after(() => {
-  animationFrames.clear();
-  if (originalWindow === undefined) delete globalThis.window;
-  else globalThis.window = originalWindow;
-  if (originalRequestAnimationFrame === undefined) delete globalThis.requestAnimationFrame;
-  else globalThis.requestAnimationFrame = originalRequestAnimationFrame;
-  if (originalCancelAnimationFrame === undefined) delete globalThis.cancelAnimationFrame;
-  else globalThis.cancelAnimationFrame = originalCancelAnimationFrame;
-});
-
 writeFileSync(join(tempDir, "terminalTuiDisplay.mjs"), `
 export let normalizeCalls = 0;
 export function resetNormalizeCalls() { normalizeCalls = 0; }
@@ -232,4 +222,17 @@ test("scroll and alternate buffers still receive configured TUI colors", async t
   assert.equal(terminal.buffer.active.type, "alternate");
   assert.equal(terminal.buffer.active.getLine(0).getCell(0).getFgColor(), 0x123456);
   assert.equal(terminal.buffer.active.getLine(1).getCell(0).getFgColor(), 0xabcdef);
+});
+
+// Register after every top-level import and test. Node 22 can run an earlier
+// root after hook while a later top-level await is still loading test modules.
+// Each test disposes its terminals, controllers and subscriptions first.
+test.after(() => {
+  animationFrames.clear();
+  if (originalWindow === undefined) delete globalThis.window;
+  else globalThis.window = originalWindow;
+  if (originalRequestAnimationFrame === undefined) delete globalThis.requestAnimationFrame;
+  else globalThis.requestAnimationFrame = originalRequestAnimationFrame;
+  if (originalCancelAnimationFrame === undefined) delete globalThis.cancelAnimationFrame;
+  else globalThis.cancelAnimationFrame = originalCancelAnimationFrame;
 });
