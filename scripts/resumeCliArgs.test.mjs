@@ -249,3 +249,21 @@ test("existing Claude Codex and Grok history resume commands stay unchanged", ()
 test("Pi history source advertises local resume support", () => {
   assert.equal(HISTORY_SOURCE_DESCRIPTOR_BY_ID.get("pi")?.capabilities.resume, "supported");
 });
+
+test("history resume rejects shell syntax and option-like IDs for every supported Agent", () => {
+  for (const source of ["claude", "codex", "grok", "pi"]) {
+    for (const session_id of ["", " ", "two words", "--last", "-c", ";echo", "id;echo", "$(id)", "`id`", "id|cat", "id&&true", "id>file", "id'", 'id"', "id\\escape", "id\u0000", "id\nmore", "id\rmore"]) {
+      assert.equal(buildHistoryResumeCommand({ source, session_id }), null, `${source}: ${JSON.stringify(session_id)}`);
+    }
+  }
+});
+
+test("history resume keeps exact safe IDs and never selects the latest conversation", () => {
+  const commands = { claude: "claude --resume", codex: "codex resume", grok: "grok --resume", pi: "pi --session" };
+  for (const [source, command] of Object.entries(commands)) {
+    for (const id of [OLD_ID, "Session_A:12.3-4", "0"]) {
+      assert.equal(buildHistoryResumeCommand({ source, session_id: ` ${id} ` }), `${command} ${id}`);
+    }
+  }
+  assert.equal(buildHistoryResumeCommand({ source: "gemini", session_id: OLD_ID }), null);
+});

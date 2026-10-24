@@ -301,8 +301,16 @@ impl PtyManager {
 
     /// 让 hook 回调环境变量跨进 WSL：把它们追加进 WSLENV（无 flag = Win↔WSL 双向共享），
     /// 既进 Linux shell，又能在 claude 经 interop 调 Windows 端 cli-manager.exe 时回传。
-    /// 合并已有 WSLENV（注入批次或进程环境），不覆盖用户原有项。
+    /// 合并进程继承与显式 WSLENV，显式同名项覆盖 flags，保留其它用户项。
     fn apply_wsl_env_forwarding(env_vars: &mut HashMap<String, String>) {
+        let parent = std::env::var("WSLENV").ok();
+        Self::apply_wsl_env_forwarding_with_parent(env_vars, parent.as_deref());
+    }
+
+    fn apply_wsl_env_forwarding_with_parent(
+        env_vars: &mut HashMap<String, String>,
+        parent: Option<&str>,
+    ) {
         const FORWARD: [&str; 7] = [
             "CLI_MANAGER_TAB_ID",
             "CLI_MANAGER_PROJECT_ID",
@@ -321,18 +329,22 @@ impl PtyManager {
             return;
         }
 
-        let mut entries: Vec<String> = env_vars
-            .get("WSLENV")
-            .cloned()
-            .or_else(|| std::env::var("WSLENV").ok())
-            .map(|existing| {
-                existing
-                    .split(':')
-                    .filter(|item| !item.is_empty())
-                    .map(ToString::to_string)
-                    .collect()
-            })
-            .unwrap_or_default();
+        let mut entries: Vec<String> = Vec::new();
+        let mut positions = HashMap::new();
+        for existing in [parent, env_vars.get("WSLENV").map(String::as_str)]
+            .into_iter()
+            .flatten()
+        {
+            for entry in existing.split(':').filter(|item| !item.is_empty()) {
+                let key = entry.split('/').next().unwrap_or(entry);
+                if let Some(&index) = positions.get(key) {
+                    entries[index] = entry.to_string();
+                } else {
+                    positions.insert(key.to_string(), entries.len());
+                    entries.push(entry.to_string());
+                }
+            }
+        }
 
         for key in present {
             // WSLENV 项可能带 /u /w 等 flag，比对名字部分去重
@@ -1422,10 +1434,10 @@ mod tests {
         vars.insert("CLI_MANAGER_TAB_ID".to_string(), "t".to_string());
         vars.insert("CLI_MANAGER_NOTIFY_PORT".to_string(), "1".to_string());
         vars.insert("CLI_MANAGER_NOTIFY_TOKEN".to_string(), "x".to_string());
-        // 预置 WSLENV，函数应合并而非覆盖（也避免读到进程环境，保证确定性）
+        // 明确传入无父环境，使测试不依赖运行机器的 WSLENV。
         vars.insert("WSLENV".to_string(), "FOO/u".to_string());
 
-        PtyManager::apply_wsl_env_forwarding(&mut vars);
+        PtyManager::apply_wsl_env_forwarding_with_parent(&mut vars, None);
 
         let wslenv = vars.get("WSLENV").unwrap();
         assert!(wslenv.contains("FOO/u"));
@@ -1438,7 +1450,7 @@ mod tests {
     fn wsl_env_forwarding_is_noop_without_callback_vars() {
         let mut vars = HashMap::new();
         vars.insert("WSLENV".to_string(), "FOO/u".to_string());
-        PtyManager::apply_wsl_env_forwarding(&mut vars);
+        PtyManager::apply_wsl_env_forwarding_with_parent(&mut vars, Some("PATH/p"));
         // 无回调变量时不应改动 WSLENV
         assert_eq!(vars.get("WSLENV").unwrap(), "FOO/u");
     }
@@ -1448,8 +1460,58 @@ mod tests {
         let mut vars = HashMap::new();
         vars.insert("CLI_MANAGER_TAB_ID".to_string(), "t".to_string());
         vars.insert("WSLENV".to_string(), "CLI_MANAGER_TAB_ID".to_string());
-        PtyManager::apply_wsl_env_forwarding(&mut vars);
+        PtyManager::apply_wsl_env_forwarding_with_parent(&mut vars, None);
         assert_eq!(vars.get("WSLENV").unwrap(), "CLI_MANAGER_TAB_ID");
+    }
+
+    #[test]
+    fn wsl_env_forwarding_merges_parent_path_with_explicit_config_root() {
+        let mut vars = HashMap::from([
+            ("CODEX_HOME".to_string(), "/home/me/.codex".to_string()),
+            ("COLORTERM".to_string(), "truecolor".to_string()),
+            ("WSLENV".to_string(), "CODEX_HOME".to_string()),
+        ]);
+        PtyManager::apply_wsl_env_forwarding_with_parent(
+            &mut vars,
+            Some("PATH/p:EDITOR/u"),
+        );
+        assert_eq!(
+            vars.get("WSLENV").map(String::as_str),
+            Some("PATH/p:EDITOR/u:CODEX_HOME:COLORTERM")
+        );
+    }
+
+    #[test]
+    fn wsl_env_forwarding_explicit_flags_override_parent_and_deduplicate() {
+        let mut vars = HashMap::from([
+            ("CODEX_HOME".to_string(), "/home/me/.codex".to_string()),
+            ("CLI_MANAGER_TAB_ID".to_string(), "tab".to_string()),
+            (
+                "WSLENV".to_string(),
+                "CODEX_HOME:CODEX_HOME:CLAUDE_CONFIG_DIR/u:CLI_MANAGER_TAB_ID".to_string(),
+            ),
+        ]);
+        PtyManager::apply_wsl_env_forwarding_with_parent(
+            &mut vars,
+            Some("PATH/p:PATH/p:CODEX_HOME/p:CLAUDE_CONFIG_DIR/p:CLI_MANAGER_TAB_ID/w"),
+        );
+        assert_eq!(
+            vars.get("WSLENV").map(String::as_str),
+            Some("PATH/p:CODEX_HOME:CLAUDE_CONFIG_DIR/u:CLI_MANAGER_TAB_ID")
+        );
+    }
+
+    #[test]
+    fn wsl_env_forwarding_preserves_parent_flags_without_explicit_override() {
+        let mut vars = HashMap::from([("CLI_MANAGER_TAB_ID".to_string(), "tab".to_string())]);
+        PtyManager::apply_wsl_env_forwarding_with_parent(
+            &mut vars,
+            Some("PATH/p:CLI_MANAGER_TAB_ID/u"),
+        );
+        assert_eq!(
+            vars.get("WSLENV").map(String::as_str),
+            Some("PATH/p:CLI_MANAGER_TAB_ID/u")
+        );
     }
 
     #[test]
@@ -1526,7 +1588,7 @@ mod tests {
             ("COLORTERM".to_string(), "truecolor".to_string()),
             ("WSLENV".to_string(), "FOO/u:COLORTERM/u".to_string()),
         ]);
-        PtyManager::apply_wsl_env_forwarding(&mut vars);
+        PtyManager::apply_wsl_env_forwarding_with_parent(&mut vars, None);
 
         assert_eq!(
             vars.get("WSLENV").map(String::as_str),

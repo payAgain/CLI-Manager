@@ -1,9 +1,10 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { ArrowRightLeft, Bot, Check, ChevronDown, ChevronRight, Folder, ListChecks, MessageSquare, RefreshCw, Search, Star, Terminal, Trash2, X } from "lucide-react";
+import { ArrowRightLeft, Bot, Check, ChevronDown, ChevronRight, Folder, ListChecks, LoaderCircle, MessageSquare, Play, RefreshCw, Search, Star, Terminal, Trash2, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent, type ReactNode, type RefObject } from "react";
 import type { Group, HistoryIndexStatus, HistorySearchHit, HistorySessionView, HistorySourceFilter, Project } from "../../lib/types";
 import { useI18n } from "../../lib/i18n";
 import { HISTORY_SOURCE_DESCRIPTOR_BY_ID, type HistorySourceId } from "../../lib/historySources";
+import { isHistoryResumeSessionId } from "../../lib/historyResumeCommand";
 import { resolveCliToolIconKey, resolveHistorySourceIconKey } from "../../lib/cliTools";
 import { findWorktreeByPath } from "../../lib/terminalProject";
 import { useWorktreeStore } from "../../stores/worktreeStore";
@@ -77,6 +78,7 @@ interface HistoryListPaneProps {
   onToggleSessionSelection: (sessionKey: string) => void;
   onOpenSession: (sessionKey: string) => void;
   onResumeSession: (session: HistorySessionView) => void;
+  resumingSessionKey?: string | null;
   canConvertSession: (session: HistorySessionView) => boolean;
   onConvertSession: (session: HistorySessionView) => void;
   onDeleteSession: (session: HistorySessionView) => void;
@@ -310,6 +312,7 @@ export function HistoryListPane({
   onToggleSessionSelection,
   onOpenSession,
   onResumeSession,
+  resumingSessionKey = null,
   canConvertSession,
   onConvertSession,
   onDeleteSession,
@@ -320,6 +323,21 @@ export function HistoryListPane({
   onStartResize,
 }: HistoryListPaneProps) {
   const { t, language } = useI18n();
+  const resumeState = useCallback((session: HistorySessionView) => {
+    const supported = HISTORY_SOURCE_DESCRIPTOR_BY_ID.get(session.source as HistorySourceId)?.capabilities.resume === "supported";
+    const remote = session.session_ref?.transportKind === "ssh";
+    const remoteSupported = !remote || session.source === "claude" || session.source === "codex";
+    const sessionId = remote
+      ? session.session_ref?.sourceSessionId?.trim() || session.session_id
+      : session.session_id;
+    const validId = isHistoryResumeSessionId(sessionId);
+    return {
+      disabled: !supported || !remoteSupported || !validId || Boolean(resumingSessionKey),
+      pending: resumingSessionKey === session.sessionKey,
+      label: !supported ? t("history.quickResume.unsupported") : !remoteSupported ? t("history.resumeProject.remoteToolUnavailable") : !validId ? t("history.resumeProject.invalidSession")
+        : resumingSessionKey ? t("history.quickResume.pending") : t("history.quickResume.action", { title: session.displayTitle || session.session_id }),
+    };
+  }, [resumingSessionKey, t]);
   const [contextMenu, setContextMenu] = useState<SessionContextMenu | null>(null);
   const [collapsedFilterGroups, setCollapsedFilterGroups] = useState<Set<string>>(new Set());
   const [expandedSessionParents, setExpandedSessionParents] = useState<Set<string>>(new Set());
@@ -469,11 +487,11 @@ export function HistoryListPane({
   }, [contextMenu, onDeleteSession]);
 
   const handleContextMenuResume = useCallback(() => {
-    if (!contextMenu) return;
+    if (!contextMenu || resumeState(contextMenu.session).disabled) return;
     const session = contextMenu.session;
     setContextMenu(null);
     onResumeSession(session);
-  }, [contextMenu, onResumeSession]);
+  }, [contextMenu, onResumeSession, resumeState]);
 
   const handleContextMenuConvert = useCallback(() => {
     if (!contextMenu) return;
@@ -797,6 +815,7 @@ export function HistoryListPane({
                 ? formatSessionListTitle(row.item.displayTitle, t("history.imagePlaceholder"))
                 : "";
             const sessionWorktree = row.type === "session" ? getSessionWorktree(row.item) : null;
+            const quickResume = row.type === "session" ? resumeState(row.item) : null;
             const agentDescriptor = row.type === "group" ? HISTORY_SOURCE_DESCRIPTOR_BY_ID.get(row.source as HistorySourceId) : null;
             const agentLabel = agentDescriptor ? t(agentDescriptor.labelKey) : row.type === "group" ? row.source || t("history.agentGroup.other") : "";
             return (
@@ -918,12 +937,20 @@ export function HistoryListPane({
                         title={t("history.bulk.selectSessionNamed", { title: sessionDisplayTitle })}
                         ariaLabel={t("history.bulk.selectSessionNamed", { title: sessionDisplayTitle })}
                         onToggle={() => onToggleSessionSelection(row.item.sessionKey)} />
-                      : !row.item.read_only && (row.item.source !== "claude" || !inferSubagentParentSessionId(row.item)) && (
+                      : <>
+                        <button type="button" className="history-session-resume ui-focus-ring"
+                          disabled={quickResume!.disabled} aria-busy={quickResume!.pending || undefined}
+                          aria-label={quickResume!.label} title={quickResume!.label}
+                          onClick={(e) => { e.stopPropagation(); if (!quickResume!.disabled) onResumeSession(row.item); }}>
+                          {quickResume!.pending ? <LoaderCircle size={12} className="animate-spin" aria-hidden="true" /> : <Play size={12} strokeWidth={1.7} aria-hidden="true" />}
+                        </button>
+                        {!row.item.read_only && (row.item.source !== "claude" || !inferSubagentParentSessionId(row.item)) && (
                         <button type="button" onClick={() => onDeleteSession(row.item)} className="history-session-delete ui-focus-ring"
                           aria-label={t("history.deleteSessionNamed", { title: sessionDisplayTitle })} title={t("history.deleteSession")}>
                           <X size={12} />
                         </button>
-                      )}
+                        )}
+                      </>}
                     </div>
                   </div>
                 )}
@@ -960,7 +987,8 @@ export function HistoryListPane({
       {contextMenu && (
         <Portal>
           <div className="context-menu" style={{ left: menuX, top: menuY }} ref={contextMenuRef} role="menu">
-            <button className="context-menu-item" role="menuitem" onClick={handleContextMenuResume}>
+            <button className="context-menu-item" role="menuitem" onClick={handleContextMenuResume}
+              disabled={resumeState(contextMenu.session).disabled} title={resumeState(contextMenu.session).label}>
               <RefreshCw size={13} aria-hidden="true" />
               <span>{t("history.menu.resumeInTerminal")}</span>
             </button>

@@ -16,7 +16,10 @@ import {
   matchesHistoryProjectSource,
   selectLocalHistoryResumeProject,
 } from "../lib/historyResumeProject";
-import { buildHistoryResumeCommand } from "../lib/historyResumeCommand";
+import { buildHistoryResumeCommand, isHistoryResumeSessionId } from "../lib/historyResumeCommand";
+import { acquireHistoryResume, findRunningHistoryResumeTerminal } from "../lib/historyResumeRuntime";
+import { resolveHistoryResumeEnvironment } from "../lib/historyResumeEnvironment";
+import { resolveTerminalRuntimeEnvironment, terminalRuntimeWslDistro } from "../lib/terminalRuntimeEnvironment";
 import { sameHistorySessionIdentity } from "../lib/historySessionIdentity";
 import {
   HISTORY_SOURCE_DESCRIPTOR_BY_ID,
@@ -119,6 +122,20 @@ function resolveHistoryResumeCwd(
   if (worktree) return worktree.path;
   if (project) return project.path;
   return isAbsolutePathLike(session.project_key) ? session.project_key.trim() : undefined;
+}
+
+function revealHistoryResumeTerminal(sessionId: string): void {
+  const state = useTerminalStore.getState();
+  const terminal = state.sessions.find(item => item.id === sessionId);
+  if (!terminal) return;
+  const projectId = terminal.workspace === null ? undefined : terminal.workspace?.projectId ?? terminal.projectId;
+  const worktreeId = terminal.workspace ? terminal.workspace.worktreeId : terminal.worktreeId;
+  if (state.terminalScope.kind !== "all") {
+    state.setTerminalScope(projectId
+      ? worktreeId ? { kind: "worktree", projectId, worktreeId } : { kind: "project", projectId }
+      : { kind: "all" });
+  }
+  state.setActive(sessionId);
 }
 
 interface HistoryWorkspaceProps {
@@ -225,8 +242,6 @@ export function HistoryWorkspace({ active = true, docked = false, onOpenDetail }
   const groups = useProjectStore((s) => s.groups);
   const worktrees = useWorktreeStore((s) => s.worktrees);
   const createSession = useTerminalStore((s) => s.createSession);
-  const terminalSessions = useTerminalStore((s) => s.sessions);
-  const setActiveTerminalSession = useTerminalStore((s) => s.setActive);
 
   const globalSearchRef = useRef<HTMLInputElement | null>(null);
   const sessionSearchRef = useRef<HTMLInputElement | null>(null);
@@ -261,6 +276,8 @@ export function HistoryWorkspace({ active = true, docked = false, onOpenDetail }
   const [liveEditWarningOpen, setLiveEditWarningOpen] = useState(false);
   const liveEditResolverRef = useRef<((allowed: boolean) => void) | null>(null);
   const [resumeIntent, setResumeIntent] = useState<ResumeIntent | null>(null);
+  const [resumingSessionKey, setResumingSessionKey] = useState<string | null>(null);
+  const resumeInFlightRef = useRef<string | null>(null);
   const processModelCacheRef = useRef<{
     session: HistorySessionDetail;
     language: string;
@@ -804,113 +821,189 @@ export function HistoryWorkspace({ active = true, docked = false, onOpenDetail }
     worktree: WorktreeRecord | null,
     unscopedShell?: string
   ) => {
-    const isRemote = session.session_ref?.transportKind === "ssh";
-    if (isRemote) {
-      const context = remoteContext;
-      const sourceSessionId = session.session_ref?.sourceSessionId?.trim() || session.session_id.trim();
-      if (!context || context.source !== session.source || !context.sourceInstanceId || !sourceSessionId) {
-        toast.error(t("history.toast.resumeTerminalFailed"), { description: t("history.resumeProject.remoteUnavailable") });
-        return;
-      }
-      const activeTerminal = terminalSessions.find((item) => (
-        item.environmentType === "ssh"
-        && item.sshHostId === context.hostId
-        && item.cliSessionId === sourceSessionId
-        && item.remoteHistorySourceInstanceId === context.sourceInstanceId
-      ));
-      if (activeTerminal) {
-        setActiveTerminalSession(activeTerminal.id);
-        setResumeIntent(null);
-        closeHistory();
-        return;
-      }
-      const projectPaths = project?.environment_type === "ssh" ? [project.remote_path] : context.projectPaths;
-      try {
-        const preflight = await invoke<SshRemoteResumePreflight>("history_remote_resume_preflight", {
-          consumerId: context.consumerId,
-          sshLaunch: context.launch,
-          source: context.source,
-          configuredConfigRoot: context.configuredConfigRoot,
-          projectPaths,
-          sourceInstanceId: context.sourceInstanceId,
-          sourceSessionId,
-        });
-        const launchProject = project && worktree ? projectWithWorktreeProviderOverrides(project, worktree) : project;
-        const env = {
-          ...(parseProjectEnvVars(launchProject) ?? {}),
-          ...preflight.environmentOverrides,
-        };
-        await createSession(
-          project?.id,
-          preflight.remoteCwd,
-          worktree?.name ?? (project?.name.trim() || title),
-          preflight.resumeCommand,
-          env,
-          undefined,
-          undefined,
-          worktree?.id,
-          context.hostId,
-          preflight.sourceSessionId,
-          context.consumerId,
-          context.sourceInstanceId,
-        );
-        setResumeIntent(null);
-        closeHistory({ preserveRemoteConsumer: true });
-      } catch (err) {
-        void invoke("history_remote_close", {
-          hostId: context.hostId,
-          consumerId: context.consumerId,
-        }).catch(() => undefined);
-        const code = String(err);
-        const description = code.includes("remote_session_source_missing")
-          ? t("history.resumeProject.remoteSourceMissing")
-          : code.includes("remote_session_cwd_")
-            ? t("history.resumeProject.remoteCwdUnavailable")
-            : code.includes("unsupported_resume_tool")
-              ? t("history.resumeProject.remoteToolUnavailable")
-              : code.includes("history_remote_identity_changed")
-                ? t("history.resumeProject.remoteIdentityChanged")
-                : code.includes("remote_session_active_elsewhere")
-                  ? t("history.resumeProject.remoteActiveElsewhere")
-                : code;
-        toast.error(t("history.toast.resumeTerminalFailed"), { description });
-      }
-      return;
-    }
-    const launchProject = project && worktree ? projectWithWorktreeProviderOverrides(project, worktree) : project;
-    const command = buildHistoryResumeCommand(session, launchProject);
-    if (!command) {
+    if (resumeInFlightRef.current) return;
+    const sourceSessionId = (session.session_ref?.transportKind === "ssh"
+      ? session.session_ref.sourceSessionId || session.session_id : session.session_id).trim();
+    if (!isHistoryResumeSessionId(sourceSessionId)
+      || HISTORY_SOURCE_DESCRIPTOR_BY_ID.get(session.source as HistorySourceId)?.capabilities.resume !== "supported") {
       toast.error(t("history.toast.resumeTerminalFailed"), { description: t("history.resumeProject.invalidSession") });
       return;
     }
-
-    const cwd = resolveHistoryResumeCwd(session, project, worktree);
-    if (!cwd) {
-      toast.error(t("history.toast.resumeTerminalFailed"), { description: t("history.resumeProject.missingCwd") });
-      return;
-    }
-
+    const key = JSON.stringify([session.source, sourceSessionId, session.session_ref?.transportKind ?? "local",
+      session.session_ref?.sourceInstanceId ?? "", remoteContext?.hostId ?? ""]);
+    const release = acquireHistoryResume(key);
+    if (!release) { toast.info(t("history.quickResume.pending")); return; }
+    resumeInFlightRef.current = key;
+    const view = useHistoryStore.getState().sessions.find(item => sameHistorySessionIdentity(item, session));
+    setResumingSessionKey(view?.sessionKey ?? key);
     try {
-      const requestedShell = launchProject ? launchProject.shell : unscopedShell;
-      const shell = requestedShell && requestedShell !== "powershell" ? requestedShell : undefined;
-      await createSession(
-        project?.id,
-        cwd,
-        worktree?.name ?? (project?.name.trim() || title),
-        command,
-        launchProject ? parseProjectEnvVars(launchProject) : undefined,
-        shell,
-        undefined,
-        worktree?.id,
-        undefined,
-        session.session_id.trim(),
-      );
-      setResumeIntent(null);
-      closeHistory();
-    } catch (err) {
-      toast.error(t("history.toast.resumeTerminalFailed"), { description: String(err) });
+      const isRemote = session.session_ref?.transportKind === "ssh";
+      if (isRemote) {
+        if (session.source !== "claude" && session.source !== "codex") {
+          toast.error(t("history.toast.resumeTerminalFailed"), { description: t("history.resumeProject.remoteToolUnavailable") });
+          return;
+        }
+        const context = remoteContext;
+        const sourceSessionId = session.session_ref?.sourceSessionId?.trim() || session.session_id.trim();
+        if (!context || context.source !== session.source || !context.sourceInstanceId || !sourceSessionId) {
+          toast.error(t("history.toast.resumeTerminalFailed"), { description: t("history.resumeProject.remoteUnavailable") });
+          return;
+        }
+        if (session.session_ref?.sourceInstanceId !== context.sourceInstanceId
+          || session.session_ref.sourceId !== context.source
+          || (session.remote_identity?.hostId && session.remote_identity.hostId !== context.hostId)) {
+          toast.error(t("history.toast.resumeTerminalFailed"), { description: t("history.resumeProject.remoteIdentityChanged") });
+          return;
+        }
+        const terminalState = useTerminalStore.getState();
+        const activeTerminal = findRunningHistoryResumeTerminal(terminalState.sessions, terminalState.sessionStatuses, {
+          source: session.source, sessionId: sourceSessionId, environmentType: "ssh",
+          sshHostId: context.hostId, sourceInstanceId: context.sourceInstanceId,
+        });
+        if (activeTerminal) {
+          revealHistoryResumeTerminal(activeTerminal.id);
+          setResumeIntent(null);
+          closeHistory({ preserveRemoteConsumer: activeTerminal.remoteHistoryConsumerId === context.consumerId });
+          return;
+        }
+        const projectPaths = project?.environment_type === "ssh" ? [project.remote_path] : context.projectPaths;
+        try {
+          const preflight = await invoke<SshRemoteResumePreflight>("history_remote_resume_preflight", {
+            consumerId: context.consumerId,
+            sshLaunch: context.launch,
+            source: context.source,
+            configuredConfigRoot: context.configuredConfigRoot,
+            projectPaths,
+            sourceInstanceId: context.sourceInstanceId,
+            sourceSessionId,
+          });
+          const currentContext = useHistoryStore.getState().remoteContext;
+          if (!currentContext || currentContext.consumerId !== context.consumerId
+            || currentContext.hostId !== context.hostId || currentContext.sourceInstanceId !== context.sourceInstanceId) {
+            throw new Error("history_remote_identity_changed");
+          }
+          const latestTerminalState = useTerminalStore.getState();
+          const existingTerminal = findRunningHistoryResumeTerminal(latestTerminalState.sessions, latestTerminalState.sessionStatuses, {
+            source: session.source, sessionId: sourceSessionId, environmentType: "ssh",
+            sshHostId: context.hostId, sourceInstanceId: context.sourceInstanceId,
+          });
+          if (existingTerminal) {
+            revealHistoryResumeTerminal(existingTerminal.id);
+            setResumeIntent(null);
+            closeHistory({ preserveRemoteConsumer: existingTerminal.remoteHistoryConsumerId === context.consumerId });
+            return;
+          }
+          const launchProject = project && worktree ? projectWithWorktreeProviderOverrides(project, worktree) : project;
+          const env = {
+            ...(parseProjectEnvVars(launchProject) ?? {}),
+            ...preflight.environmentOverrides,
+          };
+          const terminalId = await createSession(
+            project?.id,
+            preflight.remoteCwd,
+            worktree?.name ?? (project?.name.trim() || title),
+            preflight.resumeCommand,
+            env,
+            undefined,
+            undefined,
+            worktree?.id,
+            context.hostId,
+            preflight.sourceSessionId,
+            context.consumerId,
+            context.sourceInstanceId,
+            undefined,
+            { waitForStartup: true },
+          );
+          revealHistoryResumeTerminal(terminalId);
+          setResumeIntent(null);
+          closeHistory({ preserveRemoteConsumer: true });
+        } catch (err) {
+          void invoke("history_remote_close", {
+            hostId: context.hostId,
+            consumerId: context.consumerId,
+          }).catch(() => undefined);
+          const code = String(err);
+          const description = code.includes("remote_session_source_missing")
+            ? t("history.resumeProject.remoteSourceMissing")
+            : code.includes("remote_session_cwd_")
+              ? t("history.resumeProject.remoteCwdUnavailable")
+              : code.includes("unsupported_resume_tool")
+                ? t("history.resumeProject.remoteToolUnavailable")
+                : code.includes("history_remote_identity_changed")
+                  ? t("history.resumeProject.remoteIdentityChanged")
+                  : code.includes("remote_session_active_elsewhere")
+                    ? t("history.resumeProject.remoteActiveElsewhere")
+                  : code;
+          toast.error(t("history.toast.resumeTerminalFailed"), { description });
+        }
+        return;
+      }
+      const launchProject = project && worktree ? projectWithWorktreeProviderOverrides(project, worktree) : project;
+      const command = buildHistoryResumeCommand(session, launchProject);
+      if (!command) {
+        toast.error(t("history.toast.resumeTerminalFailed"), { description: t("history.resumeProject.invalidSession") });
+        return;
+      }
+
+      const cwd = resolveHistoryResumeCwd(session, project, worktree);
+      if (!cwd) {
+        toast.error(t("history.toast.resumeTerminalFailed"), { description: t("history.resumeProject.missingCwd") });
+        return;
+      }
+
+      try {
+        const requestedShell = launchProject ? launchProject.shell : unscopedShell;
+        const shell = requestedShell && requestedShell !== "powershell" ? requestedShell : undefined;
+        const runtime = { environmentType: launchProject?.environment_type, shell: requestedShell, cwd,
+          envVars: launchProject ? parseProjectEnvVars(launchProject) : undefined };
+        const environmentType = resolveTerminalRuntimeEnvironment(runtime);
+        const wslDistro = terminalRuntimeWslDistro(runtime) ?? undefined;
+        const env = resolveHistoryResumeEnvironment(session, runtime.envVars, { environmentType, wslDistro });
+        const configRoot = session.source === "codex" ? env?.CODEX_HOME
+          : session.source === "claude" ? env?.CLAUDE_CONFIG_DIR : undefined;
+        const terminalState = useTerminalStore.getState();
+        const activeTerminal = findRunningHistoryResumeTerminal(terminalState.sessions, terminalState.sessionStatuses, {
+          source: session.source, sessionId: session.session_id.trim(), cwd,
+          environmentType, wslDistro, configRoot,
+        });
+        if (activeTerminal) {
+          revealHistoryResumeTerminal(activeTerminal.id);
+          setResumeIntent(null);
+          closeHistory();
+          return;
+        }
+        const terminalId = await createSession(
+          project?.id,
+          cwd,
+          worktree?.name ?? (project?.name.trim() || title),
+          command,
+          env,
+          shell,
+          undefined,
+          worktree?.id,
+          undefined,
+          session.session_id.trim(),
+          undefined,
+          undefined,
+          undefined,
+          { waitForStartup: true },
+        );
+        revealHistoryResumeTerminal(terminalId);
+        setResumeIntent(null);
+        closeHistory();
+      } catch (err) {
+        const code = String(err);
+        const description = code.includes("history_resume_wsl_distro_mismatch")
+          ? t("history.quickResume.wslDistroMismatch")
+          : code.includes("history_resume_") ? t("history.quickResume.sourcePathUnavailable") : code;
+        toast.error(t("history.toast.resumeTerminalFailed"), { description });
+      }
+    } finally {
+      release();
+      resumeInFlightRef.current = null;
+      setResumingSessionKey(null);
     }
-  }, [closeHistory, createSession, remoteContext, setActiveTerminalSession, t, terminalSessions]);
+  }, [closeHistory, createSession, remoteContext, t]);
 
   const requestResume = useCallback((session: HistorySessionView | HistorySessionDetail, title: string) => {
     if (session.session_ref?.transportKind === "ssh") {
@@ -961,7 +1054,7 @@ export function HistoryWorkspace({ active = true, docked = false, onOpenDetail }
         void resumeSession(session, title, null, null, cwdProjects[0].shell);
         return;
       }
-      setResumeIntent({ session, title, worktree: null, projects, allowNewWindow: true, remote: false });
+      setResumeIntent({ session, title, worktree: null, projects: historyProjects.filter(project => project.environment_type !== "ssh"), allowNewWindow: true, remote: false });
       return;
     }
     setResumeIntent({ session, title, worktree: null, projects: candidates, allowNewWindow: false, remote: false });
@@ -1201,6 +1294,7 @@ export function HistoryWorkspace({ active = true, docked = false, onOpenDetail }
           onToggleSessionSelection={handleToggleSessionSelection}
           onOpenSession={(key) => { onOpenDetail?.(); void openSessionSafe(key); }}
           onResumeSession={resumeSessionInTerminal}
+          resumingSessionKey={resumingSessionKey}
           canConvertSession={canConvertSession}
           onConvertSession={(session) => {
             void convertSession(session);

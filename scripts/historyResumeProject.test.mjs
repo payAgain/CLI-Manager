@@ -160,6 +160,6 @@ test("local history resume binds the terminal tab to the selected CLI session", 
 
   assert.match(
     localResumeBody,
-    /await createSession\([\s\S]*?worktree\?\.id,\s*undefined,\s*session\.session_id\.trim\(\),\s*\);/
+    /await createSession\([\s\S]*?worktree\?\.id,\s*undefined,\s*session\.session_id\.trim\(\),\s*undefined,\s*undefined,\s*undefined,\s*\{ waitForStartup: true \},\s*\);/
   );
 });

@@ -76,9 +76,13 @@ export function stripPiResumeCliArgs(cliArgs: string | null | undefined): string
   return kept.join(" ").trim();
 }
 
+export function isHistoryResumeSessionId(value: string): boolean {
+  return /^[a-zA-Z0-9][a-zA-Z0-9._:-]*$/.test(value.trim());
+}
+
 function normalizeSessionId(sessionId: string): string | null {
   const trimmed = sessionId.trim();
-  return trimmed && !/[\s\0\r\n]/.test(trimmed) ? trimmed : null;
+  return isHistoryResumeSessionId(trimmed) ? trimmed : null;
 }
 
 export function buildHistoryResumeCommand(
