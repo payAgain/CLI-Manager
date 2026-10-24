@@ -66,6 +66,14 @@ export function getLanguageLocale(language: AppLanguage, englishLocale = "en-US"
 
 const zh = {
   "palette.quickJump": "快速跳转",
+  "workspace.status.working": "进行中",
+  "workspace.status.attention": "待处理",
+  "workspace.status.failed": "异常",
+  "workspace.status.done": "已完成",
+  "workspace.status.ready": "就绪",
+  "workspace.status.connecting": "连接中",
+  "workspace.status.stopped": "未运行",
+  "workspace.status.unavailable": "路径不可用",
   "worktree.remove.success": "已移除 {count} 个 Worktree",
   "worktree.remove.changeCounts": "已暂存 {staged} · 未暂存 {unstaged} · 未跟踪 {untracked}",
   "worktree.remove.wslSessions": "此工作区仍有 WSL 会话。请先在 WSL 中结束任务并退出 Shell，关闭对应终端后重新检查。",
@@ -2798,6 +2806,14 @@ const zh = {
 
 const en: Record<keyof typeof zh, string> = {
   "palette.quickJump": "Quick jump",
+  "workspace.status.working": "Working",
+  "workspace.status.attention": "Needs attention",
+  "workspace.status.failed": "Failed",
+  "workspace.status.done": "Done",
+  "workspace.status.ready": "Ready",
+  "workspace.status.connecting": "Connecting",
+  "workspace.status.stopped": "Stopped",
+  "workspace.status.unavailable": "Path unavailable",
   "worktree.remove.success": "Removed {count} worktree(s)",
   "worktree.remove.changeCounts": "{staged} staged · {unstaged} unstaged · {untracked} untracked",
   "worktree.remove.wslSessions": "This worktree has WSL sessions. Finish their tasks and exit the WSL shells, close their terminals, then check again.",

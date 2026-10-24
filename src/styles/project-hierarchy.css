@@ -1,4 +1,4 @@
-/* Project, checkout and terminal are three distinct levels of the same tree. */
+/* A project contains checkout cards; each card owns its branch and terminal rows. */
 .ui-project-tree .ui-project-section { margin-bottom: 14px; }
 .ui-project-tree .ui-project-heading { height: 34px; gap: 3px; padding-right: 3px; }
 .ui-project-tree .ui-project-heading-name { min-height: 30px; gap: 6px; font-size: var(--font-size-body); font-weight: 600; }
@@ -6,52 +6,50 @@
 .ui-project-tree .ui-project-disclosure { color: var(--text-muted); transition: transform 120ms ease-out; }
 .ui-project-tree .ui-project-heading-actions { gap: 1px; }
 .ui-project-tree .ui-project-heading-actions .ui-sidebar-tool { width: 22px; height: 26px; }
-.ui-project-tree .ui-project-workspaces { position: relative; padding: 0 0 1px 22px; }
-.ui-project-tree .ui-project-workspaces::before { position: absolute; top: 1px; bottom: 16px; left: 11px; width: 1px; background: color-mix(in srgb, var(--text-muted) 23%, transparent); content: ""; pointer-events: none; }
+.ui-project-tree .ui-project-workspaces { padding: 0 1px 1px 16px; }
 .ui-project-tree .ui-worktree-children { margin: 0; padding: 0; }
 .ui-project-tree .ui-worktree-children > .ui-worktree-item { margin-left: 0; }
-.ui-project-tree .ui-workspace-card { position: relative; margin: 1px 0; padding: 0; border: 0; border-radius: 0; background: transparent; cursor: default; }
-.ui-project-tree .ui-workspace-card::before { position: absolute; top: 15px; left: -10px; width: 10px; height: 1px; background: color-mix(in srgb, var(--text-muted) 23%, transparent); content: ""; pointer-events: none; }
-.ui-project-tree .ui-workspace-card:hover,
-.ui-project-tree .ui-workspace-card[data-selected="true"] { border: 0; background: transparent; }
+.ui-project-tree .ui-workspace-card { position: relative; min-width: 0; margin: 5px 0; padding: 5px 6px 4px; border: 1px solid color-mix(in srgb, var(--text-muted) 20%, transparent); border-radius: 9px; background: color-mix(in srgb, var(--text-primary) 2%, transparent); cursor: default; }
+.ui-project-tree .ui-workspace-card:hover { border-color: color-mix(in srgb, var(--text-muted) 35%, transparent); }
+.ui-project-tree .ui-workspace-card[data-selected="true"] { border-color: color-mix(in srgb, var(--text-primary) 32%, transparent); background: color-mix(in srgb, var(--text-primary) 7%, transparent); }
 .ui-project-tree [role="treeitem"]:focus-visible > .ui-project-workspaces > .ui-workspace-card,
-.ui-project-tree [role="treeitem"]:focus-visible > .ui-workspace-card { outline: none; }
-.ui-project-tree [role="treeitem"]:focus-visible > .ui-project-heading,
-.ui-project-tree [role="treeitem"]:focus-visible > .ui-workspace-card > .ui-workspace-card-title { outline: 1px solid var(--text-secondary); outline-offset: -1px; border-radius: 4px; }
-.ui-project-tree .ui-workspace-card-title { position: relative; min-width: 0; min-height: 30px; gap: 6px; padding: 4px 5px; border-radius: 4px; color: var(--text-secondary); }
-.ui-project-tree .ui-workspace-card-title:hover { background: var(--interactive-hover-bg); }
-.ui-project-tree .ui-workspace-card[data-selected="true"] > .ui-workspace-card-title { color: var(--text-primary); }
-.ui-project-tree .ui-workspace-card[data-selected="true"][data-active-terminal="false"] > .ui-workspace-card-title { background: color-mix(in srgb, var(--text-primary) 5%, transparent); }
-.ui-project-tree .ui-workspace-kind-icon { display: inline-flex; width: 15px; height: 18px; flex: 0 0 15px; align-items: center; justify-content: center; color: var(--text-muted); }
-.ui-project-tree .ui-workspace-card-identity { display: flex; min-width: 0; flex: 1; align-items: baseline; gap: 7px; }
-.ui-project-tree .ui-workspace-card-name { min-width: 0; flex: 0 1 auto; overflow: hidden; font-size: var(--ui-font-label); font-weight: 500; line-height: 20px; text-overflow: ellipsis; white-space: nowrap; }
-.ui-project-tree .ui-workspace-card-identity:has(.ui-workspace-card-branch) .ui-workspace-card-name { flex-shrink: 0; max-width: 70%; }
-.ui-project-tree .ui-workspace-card-branch { min-width: 0; flex: 1 2 auto; overflow: hidden; color: var(--text-muted); font-size: var(--ui-font-caption); line-height: 18px; text-overflow: ellipsis; white-space: nowrap; }
-.ui-project-tree .ui-workspace-primary-badge { height: 17px; padding: 0 4px; border: 0; border-radius: 3px; background: color-mix(in srgb, var(--text-primary) 5%, transparent); color: var(--text-muted); font-size: var(--ui-font-caption); line-height: 17px; }
-.ui-project-tree .ui-workspace-environment { margin-left: 0; font-size: var(--ui-font-caption); }
-.ui-project-tree .ui-workspace-terminal-overview { display: inline-flex; flex-shrink: 0; align-items: center; gap: 3px; color: var(--text-muted); font-size: var(--ui-font-caption); font-variant-numeric: tabular-nums; }
-.ui-project-tree .ui-workspace-process-dot { width: 5px; height: 5px; margin-left: 1px; flex-shrink: 0; }
-.ui-project-tree .ui-workspace-card-actions { position: absolute; top: 4px; right: 3px; margin-left: 0; padding-left: 5px; border-radius: 3px; background: var(--surface-container-low); opacity: 0; pointer-events: none; }
-.ui-project-tree .ui-workspace-card:hover .ui-workspace-card-actions { opacity: 0; pointer-events: none; }
-.ui-project-tree .ui-workspace-card .ui-workspace-card-title:hover .ui-workspace-card-actions,
-.ui-project-tree .ui-workspace-card .ui-workspace-card-title:focus-within .ui-workspace-card-actions { opacity: 1; pointer-events: auto; }
+.ui-project-tree [role="treeitem"]:focus-visible > .ui-workspace-card { outline: 1px solid var(--text-secondary); outline-offset: 1px; }
+.ui-project-tree [role="treeitem"]:focus-visible > .ui-project-heading { outline: 1px solid var(--text-secondary); outline-offset: -1px; border-radius: 4px; }
+.ui-project-tree .ui-workspace-card-title { display: flex; position: relative; min-width: 0; min-height: 29px; align-items: center; gap: 6px; padding: 3px 3px; color: var(--text-primary); }
+.ui-project-tree .ui-workspace-card-name { min-width: 0; flex: 1; overflow: hidden; font-size: var(--ui-font-label); font-weight: 500; line-height: 20px; text-overflow: ellipsis; white-space: nowrap; }
+.ui-project-tree .ui-workspace-primary-badge { flex-shrink: 0; height: 17px; padding: 0 4px; border: 0; border-radius: 3px; background: color-mix(in srgb, var(--text-primary) 7%, transparent); color: var(--text-secondary); font-size: var(--ui-font-caption); line-height: 17px; }
+.ui-project-tree .ui-workspace-environment { flex-shrink: 0; color: var(--text-muted); font-size: var(--ui-font-caption); }
+.ui-project-tree .ui-workspace-process-dot,
+.ui-project-tree .ui-workspace-session-state { display: inline-block; width: 7px; height: 7px; flex: 0 0 7px; border: 1px solid var(--text-muted); border-radius: 50%; background: transparent; }
+.ui-project-tree .ui-workspace-card[data-status="ready"] > .ui-workspace-card-title > .ui-workspace-process-dot,
+.ui-project-tree .ui-workspace-card[data-status="working"] > .ui-workspace-card-title > .ui-workspace-process-dot,
+.ui-project-tree .ui-workspace-card[data-status="done"] > .ui-workspace-card-title > .ui-workspace-process-dot,
+.ui-project-tree .ui-workspace-session:is([data-status="ready"], [data-status="working"], [data-status="done"]) > .ui-workspace-session-state { border-color: var(--success); background: var(--success); }
+.ui-project-tree .ui-workspace-card[data-status="attention"] > .ui-workspace-card-title > .ui-workspace-process-dot,
+.ui-project-tree .ui-workspace-session[data-status="attention"] > .ui-workspace-session-state { border-color: var(--warning); background: var(--warning); }
+.ui-project-tree .ui-workspace-card:is([data-status="failed"], [data-status="unavailable"]) > .ui-workspace-card-title > .ui-workspace-process-dot,
+.ui-project-tree .ui-workspace-session[data-status="failed"] > .ui-workspace-session-state { border-color: var(--danger); background: var(--danger); }
+.ui-project-tree .ui-workspace-card-actions { display: inline-flex; flex: 0 0 42px; align-items: center; gap: 1px; opacity: 0; pointer-events: none; }
+.ui-project-tree .ui-workspace-card:hover .ui-workspace-card-actions,
+.ui-project-tree .ui-workspace-card:focus-within .ui-workspace-card-actions { opacity: 1; pointer-events: auto; }
 .ui-project-tree .ui-workspace-card-actions .ui-sidebar-tool { width: 20px; height: 22px; }
-.ui-project-tree .ui-workspace-sessions { position: relative; margin: 0 0 4px 12px; padding: 1px 0 1px 12px; border: 0; }
-.ui-project-tree .ui-workspace-sessions::before { position: absolute; top: 0; bottom: 16px; left: 0; width: 1px; background: color-mix(in srgb, var(--text-muted) 19%, transparent); content: ""; pointer-events: none; }
-.ui-project-tree .ui-workspace-session { position: relative; display: flex; width: 100%; min-height: 32px; align-items: center; gap: 7px; margin: 1px 0; padding: 6px 7px; border: 0; border-radius: 4px; background: transparent; color: var(--text-secondary); text-align: left; font-size: var(--ui-font-label); line-height: 19px; }
-.ui-project-tree .ui-workspace-session::before { position: absolute; top: 15px; left: -12px; width: 10px; height: 1px; background: color-mix(in srgb, var(--text-muted) 19%, transparent); content: ""; pointer-events: none; }
+.ui-project-tree .ui-workspace-card-meta { display: flex; min-width: 0; align-items: center; gap: 6px; padding: 0 3px 4px 16px; }
+.ui-project-tree .ui-workspace-card-branch { display: flex; min-width: 0; flex: 1; align-items: center; gap: 4px; color: var(--text-muted); font-size: var(--ui-font-caption); line-height: 18px; }
+.ui-project-tree .ui-workspace-card-branch > svg { flex-shrink: 0; }
+.ui-project-tree .ui-workspace-card-branch > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ui-project-tree .ui-workspace-sessions { margin: 2px 0 0; padding: 3px 0 0; border-top: 1px solid color-mix(in srgb, var(--text-muted) 12%, transparent); }
+.ui-project-tree .ui-workspace-session { display: flex; width: 100%; min-height: 31px; align-items: center; gap: 6px; margin: 1px 0; padding: 5px 3px; border: 0; border-radius: 4px; background: transparent; color: var(--text-secondary); text-align: left; font-size: var(--ui-font-label); line-height: 19px; cursor: pointer; }
 .ui-project-tree .ui-workspace-session:hover { background: var(--interactive-hover-bg); color: var(--text-primary); }
-.ui-project-tree .ui-workspace-session[data-active="true"] { background: var(--interactive-selected-bg); color: var(--text-primary); box-shadow: inset 2px 0 var(--text-secondary); }
-.ui-project-tree .ui-workspace-session-agent { display: inline-flex; width: 16px; max-width: none; height: 18px; flex: 0 0 16px; align-items: center; justify-content: center; padding: 0; border: 0; border-radius: 0; background: transparent; color: var(--text-secondary); }
+.ui-project-tree .ui-workspace-session[data-active="true"] { color: var(--text-primary); }
+.ui-project-tree .ui-workspace-session-agent { display: inline-flex; width: 16px; height: 18px; flex: 0 0 16px; align-items: center; justify-content: center; color: var(--text-secondary); }
 .ui-project-tree .ui-workspace-session-title { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ui-project-tree .ui-workspace-session-state { width: 5px; height: 5px; margin-left: 3px; }
+.ui-project-tree .ui-workspace-session-state { width: 5px; height: 5px; flex-basis: 5px; }
 .ui-project-tree[data-density="compact"] .ui-project-section { margin-bottom: 9px; }
 .ui-project-tree[data-density="compact"] .ui-project-heading { height: 30px; }
-.ui-project-tree[data-density="compact"] .ui-workspace-card-title { min-height: 27px; padding-block: 3px; }
-.ui-project-tree[data-density="compact"] .ui-workspace-card::before { top: 13px; }
+.ui-project-tree[data-density="compact"] .ui-workspace-card { margin-block: 4px; padding-block: 3px; }
+.ui-project-tree[data-density="compact"] .ui-workspace-card-title { min-height: 26px; padding-block: 2px; }
+.ui-project-tree[data-density="compact"] .ui-workspace-session { min-height: 27px; padding-block: 3px; }
 @media (hover: none) {
-  .ui-project-tree .ui-project-heading-actions { opacity: 1; pointer-events: auto; }
-  .ui-project-tree .ui-workspace-card-title { padding-right: 49px; }
-  .ui-project-tree .ui-workspace-card .ui-workspace-card-actions,
-  .ui-project-tree .ui-workspace-card:hover .ui-workspace-card-actions { opacity: 1; pointer-events: auto; }
+  .ui-project-tree .ui-project-heading-actions,
+  .ui-project-tree .ui-workspace-card .ui-workspace-card-actions { opacity: 1; pointer-events: auto; }
 }
