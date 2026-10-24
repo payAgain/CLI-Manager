@@ -6,11 +6,11 @@
 
 **把项目、AI 终端和对话，放在同一个工作区。**
 
-精简版 · `0.1.0` 开发中 · [AGPL-3.0-or-later](LICENSE)
+精简版 · [v0.1.0 正式版](https://github.com/payAgain/CLI-Manager/releases/tag/v0.1.0) · [AGPL-3.0-or-later](LICENSE)
 
 [English](README.md) · 简体中文
 
-[功能亮点](#highlights) · [开始使用](#get-started) · [源码构建](#build-from-source) · [项目文档](#documentation)
+[下载](#download) · [功能亮点](#highlights) · [开始使用](#get-started) · [源码构建](#build-from-source) · [项目文档](#documentation)
 
 </div>
 
@@ -20,7 +20,24 @@ CLI-Manager 是面向多项目 AI 编程的桌面终端工作台。在一个窗�
 
 这个分支围绕日常开发流程做了精简和重设计：**项目 → 终端 → 对话 → 代码变更**。新的桌面布局、Agent 自动识别、原对话恢复和后台通知，都是为这条工作流服务。
 
-> **开发预览版。** 本分支独立从 **0.1.0** 开始编号，尚未正式发布，目前通过本地构建进行测试。桌面应用已关闭完整版上游的自动更新链路。
+**v0.1.0 是精简版的首个正式发布。** 本分支独立维护版本，通过本仓库的 [Releases](https://github.com/payAgain/CLI-Manager/releases) 下载后续更新。
+
+<a id="download"></a>
+
+## 下载
+
+| 下载 | 内容 |
+| --- | --- |
+| [macOS Apple Silicon](https://github.com/payAgain/CLI-Manager/releases/download/v0.1.0/CLI-Manager-0.1.0-macos-arm64.zip) | ZIP 内为适用于 arm64 Mac 的 `CLI-Manager.app`。 |
+| [SHA256SUMS.txt](https://github.com/payAgain/CLI-Manager/releases/download/v0.1.0/SHA256SUMS.txt) | 压缩包的 SHA-256 校验值。 |
+
+本次提供 macOS Apple Silicon 应用。Intel Mac、Windows 和 Linux 可[从源码构建](#build-from-source)，v0.1.0 不包含这些平台的安装包。
+
+1. 将 ZIP 和校验文件下载到同一目录，在该目录执行 `shasum -a 256 -c SHA256SUMS.txt`。
+2. 解压 ZIP，将 `CLI-Manager.app` 移至“应用程序”。替换已有版本前，先退出旧版应用。
+3. 打开应用，再按[开始使用](#get-started)配置要运行的 CLI 工具。
+
+应用使用 ad-hoc 签名，尚未经过 Apple 公证。若首次启动被 macOS 拦截，确认下载来源及校验值后，先尝试打开一次，再进入**系统设置 → 隐私与安全性 → 仍要打开**。详见 [Apple 的打开说明](https://support.apple.com/en-us/102445)。
 
 <a id="highlights"></a>
 
@@ -28,10 +45,10 @@ CLI-Manager 是面向多项目 AI 编程的桌面终端工作台。在一个窗�
 
 | 特点 | 可以怎样使用 |
 | --- | --- |
-| **围绕项目组织工作区** | 把文件夹拖进侧边栏即可创建项目。主工作区、Worktree、分支和打开的终端集中展示；查看历史对话时，可以把历史列表停靠在终端旁边。 |
+| **围绕项目组织工作区** | 把文件夹拖进侧边栏即可创建项目。主工作区与 Worktree 的卡片内展示分支、所属终端和状态点；自动发现外部 Worktree，移除前检查改动与运行会话。 |
 | **手动运行 Agent，自动识别身份** | 在本地终端直接启动 Codex、Claude Code、Gemini、OpenCode、Pi 等可识别的 Agent。身份跟随实际前台进程，退出、挂起或切换工具时同步更新；分屏和 Workspan 各自独立绑定。 |
-| **重新打开原来的对话** | 终端仍在 daemon 中运行时直接接回；需要重建时，按保存的准确会话 ID 重新打开受支持的 Agent 对话。手动启动的 Agent 也能保存和恢复。 |
-| **专注时安静，后台时提醒** | Hook 任务提醒使用系统通知，正在前台查看的终端保持安静。默认应用聚焦时全部静默，也可以单独允许后台标签提醒。 |
+| **重新打开原来的对话** | 终端仍在 daemon 中运行时直接接回；也可从历史列表按准确会话 ID 快速继续受支持的 Agent 对话。手动启动的 Agent 也能保存和恢复。 |
+| **提醒可追溯，回到准确会话** | Hook 任务提醒使用系统通知和持久未读收件箱，点击可回到对应终端；按需要设置前台抑制与后台标签提醒。 |
 | **从最近命令创建模板** | 搜索在 CLI-Manager 内执行过的命令，选中后命名并保存为模板。按项目筛选和去重，减少重复输入常用命令。 |
 | **统一、紧凑的桌面界面** | 项目侧栏、终端标签、文件／Git／会话工具和底部状态栏组成统一布局。炭灰与暖纸终端配色跟随应用深浅模式，历史页与设置页保持相同风格。 |
 
@@ -51,6 +68,7 @@ CLI-Manager 是面向多项目 AI 编程的桌面终端工作台。在一个窗�
 
 - 集中浏览和搜索 Claude Code、Codex CLI、Gemini CLI、GitHub Copilot CLI、Grok Build、Pi、OpenCode、Antigravity、Kiro、Cursor、Cline 的历史，按各来源能力显示可用操作。
 - Codex 会话优先使用 **Codex Desktop 保存的名称**，后续重命名也会同步，便于在两个应用中找到同一个对话。
+- 历史会话行提供快速继续入口；复用同一准确身份的存活终端，或在原项目／Worktree 中启动指定会话。
 - 查看消息、Unified Diff 与 Codex Patch，打开原始文件，并使用来源支持的编辑、转换、备份和恢复操作。
 - 历史来源采用紧凑列表，按需展开目录配置；备份与恢复使用独立页签。
 
@@ -65,7 +83,8 @@ CLI-Manager 是面向多项目 AI 编程的桌面终端工作台。在一个窗�
 | 代码检查 | 本地文件编辑、Git 变更与 Diff、暂存、提交、Git 远程操作、Worktree 创建与清理。 |
 | SSH | 主机与认证、远端终端、分屏、命令模板，以及只读文件／Git／历史面板；Claude／Codex Hook 在对应主机的 CLI 集成中管理。 |
 | 当前会话 | 展示来源可提供的模型、Token／上下文、工具／MCP 调用和 Hook 状态。 |
-| 系统资源 | 本机 CPU、内存和进程详情，查看各终端及 Agent 的内存归属；SSH／WSL 数据仅覆盖本机连接进程。 |
+| 任务 | 按当前会话显示任务清单、计划、后台命令和子代理；保留终端与应用操作单独分组。大记录使用有界读取，无法确认的状态明确标记。 |
+| 系统资源 | 本机 CPU、内存和进程详情，按工作区 → 终端 → Agent／进程查看内存归属；缺少采样时不估算，SSH／WSL 数据仅覆盖本机连接进程。 |
 | 日常操作 | 命令模板、快捷键、命令面板、Markdown 回答预览、自定义终端主题和背景图。 |
 | 语言与时间 | 简体中文、繁体中文、英文，统一使用 24 小时制。 |
 
@@ -75,8 +94,8 @@ CLI-Manager 是面向多项目 AI 编程的桌面终端工作台。在一个窗�
 
 - **Agent 自动识别：** 本机前台进程。SSH／WSL 使用客端 Hook 提供身份，本机进程扫描不判断远端 Agent 是否存活。
 - **最近命令采集：** 开启后新建的本地 Zsh、Bash、Git Bash 和 PowerShell 终端。记录确认执行的单行 Shell 命令，过滤常见敏感参数，可关闭和清理；不读取系统 Shell 历史，不采集 Agent 对话。SSH／WSL、Fish、Sh、CMD 和自定义 Shell 路径暂不采集。
-- **SSH 工具面板：** 文件与 Git 当前只读，暂不支持远程 Worktree 管理和面板写操作；仍可直接在远端终端执行命令。
-- **平台验证：** 保留 Windows、macOS、Linux 构建配置；本分支近期已进行 macOS `.app` 本地构建测试，其他平台及 SSH／WSL 组合需要分别验证。
+- **SSH 工具面板：** 文件与 Git 当前只读，暂不支持远程 Worktree 管理和面板写操作；仍可直接在远端终端执行命令。 本包未内置 Linux SSH Agent，安装或更新需联网访问既有可信签名分发源，或使用已安装的兼容 Agent。
+- **平台验证：** v0.1.0 提供 macOS Apple Silicon 构建；Windows、Linux、Intel Mac 及 SSH／WSL 组合仍需在对应环境验证。源码中存在相关能力不代表已提供经过验证的发布包。
 
 <a id="get-started"></a>
 
@@ -99,11 +118,12 @@ CLI-Manager 是面向多项目 AI 编程的桌面终端工作台。在一个窗�
 ```sh
 git clone https://github.com/payAgain/CLI-Manager.git
 cd CLI-Manager
+git checkout v0.1.0
 npm ci
 npm run tauri -- dev
 ```
 
-**macOS 测试构建，只生成 `.app`：**
+**macOS 构建，只生成 `.app`：**
 
 ```sh
 npm run tauri:build:local -- --bundles app
@@ -142,6 +162,7 @@ node --test scripts/terminalAgent.test.mjs scripts/terminalConversationRestore.t
 ## 项目文档
 
 - [当前功能清单与边界](docs/功能清单.md)
+- [v0.1.0 发布说明](docs/releases/v0.1.0.md)
 - [变更记录](CHANGELOG.md)
 - [PTY daemon、后台任务与恢复](docs/pty-daemon-manual.md)
 - [终端验证清单](docs/terminal-validation-checklist.md)
@@ -152,6 +173,6 @@ node --test scripts/terminalAgent.test.mjs scripts/terminalConversationRestore.t
 
 本分支保留项目、终端、SSH、Git／Worktree、历史会话、模板、主题、Hook 通知和当前会话信息。已移除桌宠、供应商管理与配置注入、命令建议、Statusline 管理、cc-connect、WebDAV 同步、历史统计、请求记录、ccusage 及 Trellis 工具。旧数据库迁移保持兼容，精简过程不删除外部 CLI 对话文件。
 
-CLI-Manager 精简版基于 [dark-hxx/CLI-Manager](https://github.com/dark-hxx/CLI-Manager) 开发，工作区布局与侧边栏交互参考了 [Orca](https://github.com/stablyai/orca)。本仓库独立维护界面、功能边界和开发版本。
+CLI-Manager 精简版基于 [dark-hxx/CLI-Manager](https://github.com/dark-hxx/CLI-Manager) 开发，工作区布局与侧边栏交互参考了 [Orca](https://github.com/stablyai/orca)。本仓库独立维护界面、功能边界和发布版本。
 
 项目遵循 [AGPL-3.0-or-later](LICENSE)。原作者与第三方版权声明保留在 [NOTICE](NOTICE) 和[第三方许可证文件](third-party/)中。

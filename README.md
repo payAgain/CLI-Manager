@@ -6,11 +6,11 @@
 
 **Your projects, AI terminals, and conversations in one workspace.**
 
-Lean Edition · `0.1.0` in development · [AGPL-3.0-or-later](LICENSE)
+Lean Edition · [v0.1.0](https://github.com/payAgain/CLI-Manager/releases/tag/v0.1.0) · [AGPL-3.0-or-later](LICENSE)
 
 English · [简体中文](README.zh-CN.md)
 
-[Highlights](#highlights) · [Get started](#get-started) · [Build from source](#build-from-source) · [Documentation](#documentation)
+[Download](#download) · [Highlights](#highlights) · [Get started](#get-started) · [Build from source](#build-from-source) · [Documentation](#documentation)
 
 </div>
 
@@ -20,16 +20,31 @@ CLI-Manager is a desktop terminal workspace for working with AI coding agents ac
 
 This fork focuses on the daily coding workflow: **projects → terminals → conversations → code changes**. It combines a redesigned desktop layout with automatic Agent discovery, exact conversation restore, and quieter notifications.
 
-> **Development preview.** This edition uses its own version series starting at **0.1.0** and has not been formally released. Build locally for testing; desktop updates from the full upstream edition are disabled.
+**v0.1.0 is the first release of the Lean Edition.** It uses its own version series. Download updates from this repository's [Releases](https://github.com/payAgain/CLI-Manager/releases).
+
+## Download
+
+| Download | Contents |
+| --- | --- |
+| [macOS Apple Silicon](https://github.com/payAgain/CLI-Manager/releases/download/v0.1.0/CLI-Manager-0.1.0-macos-arm64.zip) | `CLI-Manager.app` in a ZIP archive, built for arm64 Macs. |
+| [SHA256SUMS.txt](https://github.com/payAgain/CLI-Manager/releases/download/v0.1.0/SHA256SUMS.txt) | SHA-256 checksum for the archive. |
+
+This release provides the macOS Apple Silicon app. Intel Mac, Windows, and Linux users can [build from source](#build-from-source); installers for those platforms are not included in v0.1.0.
+
+1. Download the ZIP and checksum file into the same folder. In that folder, run `shasum -a 256 -c SHA256SUMS.txt`.
+2. Extract the ZIP and move `CLI-Manager.app` to Applications. Quit an existing copy before replacing it.
+3. Open the app, then install or configure the CLI tools you want to use as described in [Get started](#get-started).
+
+The app uses an ad-hoc signature and has not been notarized by Apple. If macOS blocks the first launch, verify the download's source and checksum, try opening it once, then use **System Settings → Privacy & Security → Open Anyway**. See [Apple's instructions](https://support.apple.com/en-us/102445).
 
 ## Highlights
 
 | Feature | What it does for you |
 | --- | --- |
-| **A workspace organized around projects** | Drag folders into the sidebar to create projects. Keep the main workspace, Worktrees, open terminals, and branches together; dock history beside the terminal when reviewing a conversation. |
+| **A workspace organized around projects** | Drag folders into the sidebar to create projects. Main workspaces and Worktrees keep their branch, terminals, and status indicators in one card. Discover external Worktrees and review changes and running sessions before removing them. |
 | **Run an Agent and get recognized** | Start Codex, Claude Code, Gemini, OpenCode, Pi, or another recognized Agent inside a local terminal. Its identity follows the actual foreground process and updates when you exit, suspend, or switch tools. Each split and Workspan keeps its own binding. |
-| **Reopen the original conversation** | Reattach to a surviving daemon terminal, or reopen a supported Agent conversation using its exact saved session ID. Manually started Agents are included. |
-| **Notifications that respect your focus** | Hook task alerts use system notifications. Visible foreground terminals stay quiet; by default the entire app stays quiet while focused. Optional background-tab alerts let you choose the behavior. |
+| **Reopen the original conversation** | Reattach to a surviving daemon terminal, or resume a supported Agent conversation directly from history using its exact saved session ID. Manually started Agents are included. |
+| **Notifications with a persistent inbox** | Hook task alerts use system notifications and a persistent unread inbox. Jump back to the right terminal and configure foreground suppression and background-tab alerts to fit your workflow. |
 | **Turn recent commands into templates** | Search commands executed inside CLI-Manager, select one, name it, and save it as a reusable template. Project filtering and deduplication keep the list useful. |
 | **A consistent desktop interface** | A project sidebar, terminal tabs, files/Git/session tools, and a global status bar share a compact layout. Charcoal and warm-paper terminal themes follow the app's appearance; history and settings use the same visual language. |
 
@@ -49,6 +64,7 @@ Enable the supported CLI's **Hook integration** to save exact conversation IDs a
 
 - Browse and search conversations from Claude Code, Codex CLI, Gemini CLI, GitHub Copilot CLI, Grok Build, Pi, OpenCode, Antigravity, Kiro, Cursor, and Cline. Actions depend on the source's capabilities.
 - Codex titles follow names saved by **Codex Desktop**, including later renames, so the same conversation is recognizable in both apps.
+- Resume a supported conversation from its history row. CLI-Manager reuses an already-running terminal with the same confirmed identity or starts the exact session in its source project/Worktree.
 - Review messages, Unified Diff and Codex Patch views; open source files and use available editing, conversion, backup, and restore actions.
 - Configure sources in a compact list with expandable path controls and a separate backup/restore tab.
 
@@ -63,7 +79,8 @@ Enable the supported CLI's **Hook integration** to save exact conversation IDs a
 | Code review | Local file editing, Git changes and Diff, staging, commits, remote Git operations, and Worktree creation/cleanup. |
 | SSH | Hosts and authentication, remote terminals, splits, templates, and read-only file/Git/history views. Claude/Codex Hooks are managed per host through CLI integration. |
 | Current session | Available model, Token/context, tool/MCP calls, and Hook status for the active conversation. |
-| System resources | Local CPU, memory, and process details, including memory attributed to terminals and Agents. SSH/WSL figures cover local connection processes. |
+| Tasks | Session-scoped task lists, plans, background commands, and subagents; retained terminals and app operations stay separate. Large records are parsed with bounded reads, and unconfirmed states stay explicit. |
+| System resources | Local CPU, memory, and process details, with a workspace → terminal → Agent/process memory hierarchy. Unavailable samples stay empty rather than being estimated; SSH/WSL figures cover local connection processes. |
 | Everyday controls | Command templates, shortcuts, command palette, Markdown answer previews, custom terminal themes, and backgrounds. |
 | Languages | Simplified Chinese, Traditional Chinese, English, and 24-hour time formatting. |
 
@@ -73,8 +90,8 @@ Terminal improvements include Unicode 15 grapheme handling, IME input fixes, pre
 
 - **Agent discovery:** local foreground processes. SSH and WSL use guest-side Hook evidence for Agent identity; local process discovery does not determine whether a remote Agent is alive.
 - **Recent command capture:** local Zsh, Bash, Git Bash, and PowerShell terminals created after capture is enabled. It records submitted single-line Shell commands, filters common sensitive arguments, and offers an off switch and history clearing. It does not import system Shell history or collect Agent chat input. SSH/WSL, Fish, Sh, CMD, and custom Shell paths are not collected yet.
-- **SSH tools:** file and Git panels are read-only; remote Worktree management and panel write operations are not supported yet. You can run commands directly in the remote terminal.
-- **Platform validation:** Windows, macOS, and Linux build configurations are present. Recent testing for this fork includes a macOS `.app`; other platforms and SSH/WSL combinations require their own validation.
+- **SSH tools:** file and Git panels are read-only; remote Worktree management and panel write operations are not supported yet. You can run commands directly in the remote terminal. This package does not bundle the Linux SSH Agent; installation or updates require access to the existing signed distribution source, or an already-installed compatible Agent.
+- **Platform validation:** v0.1.0 provides a macOS Apple Silicon build. Windows, Linux, Intel Mac, and SSH/WSL combinations need validation in their respective environments; their presence in the source does not imply a tested release package.
 
 ## Get started
 
@@ -93,11 +110,12 @@ Use Node.js **22.12+** with npm, a stable Rust toolchain, and the platform depen
 ```sh
 git clone https://github.com/payAgain/CLI-Manager.git
 cd CLI-Manager
+git checkout v0.1.0
 npm ci
 npm run tauri -- dev
 ```
 
-**macOS test build — `.app` only:**
+**macOS build — `.app` only:**
 
 ```sh
 npm run tauri:build:local -- --bundles app
@@ -134,6 +152,7 @@ Built with **Tauri 2 · Rust · React 19 · TypeScript · Vite · Zustand · SQL
 ## Documentation
 
 - [Current feature list and boundaries](docs/功能清单.md)
+- [v0.1.0 release notes](docs/releases/v0.1.0.md)
 - [Changelog](CHANGELOG.md)
 - [PTY daemon, background tasks, and recovery](docs/pty-daemon-manual.md)
 - [Terminal validation checklist](docs/terminal-validation-checklist.md)
@@ -144,6 +163,6 @@ Built with **Tauri 2 · Rust · React 19 · TypeScript · Vite · Zustand · SQL
 
 This edition retains projects, terminals, SSH, Git/Worktrees, conversation history, templates, themes, Hook notifications, and current-session information. Desktop pets, provider management/configuration injection, command suggestions, Statusline management, cc-connect, WebDAV sync, historical analytics, request logs, ccusage, and Trellis tooling have been removed. Existing database migrations remain compatible; cleanup does not delete external CLI conversation files.
 
-CLI-Manager Lean Edition is a fork of [dark-hxx/CLI-Manager](https://github.com/dark-hxx/CLI-Manager). The workspace layout and sidebar interactions take inspiration from [Orca](https://github.com/stablyai/orca). This repository maintains its own UI, feature scope, and development version.
+CLI-Manager Lean Edition is a fork of [dark-hxx/CLI-Manager](https://github.com/dark-hxx/CLI-Manager). The workspace layout and sidebar interactions take inspiration from [Orca](https://github.com/stablyai/orca). This repository maintains its own UI, feature scope, and release series.
 
 Licensed under [AGPL-3.0-or-later](LICENSE). Original author attribution and third-party notices are retained in [NOTICE](NOTICE) and [third-party license files](third-party/).
