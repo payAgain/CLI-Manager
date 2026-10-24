@@ -736,3 +736,18 @@ test("stopping a running task through the actual exit cleanup preserves restorat
   assert.equal(restored.writes[0].text, `codex resume --no-alt-screen ${CURRENT}\r`);
   assert.doesNotMatch(app, /discardSessions:\s*true/);
 });
+
+test("retiring workspace movement preserves a live daemon's confirmed ownership after an older failed save", async () => {
+  const p=project(), tree={id:'target',project_id:p.id,name:'Target',path:'/trees/target',status:'active'};
+  const previous={id:`main:${p.id}`,projectId:p.id,path:p.path,environmentType:'local'};
+  const current={id:tree.id,projectId:p.id,worktreeId:tree.id,path:tree.path,environmentType:'local'};
+  const saved=shell({projectId:p.id,workspace:previous,cwd:'/repo',startupCmd:`codex resume ${OLD}`,isAgentSession:true,cliTool:'codex',cliSessionId:OLD,envVars:{CLI_MANAGER_WORKTREE_ID:previous.id}});
+  const h=await restoreHarness({sessions:[saved]},[p],[{sessionId:saved.id,alive:true,cwd:tree.path,shell:'zsh',workspace:current,agentDetection:{agent:null,updatedAtMs:1000}}],{},{},[tree]);
+  const restored=h.state.sessions[0];
+  assert.equal(restored.cwd,tree.path);assert.deepEqual(plain(restored.workspace),current);
+  assert.equal(restored.worktreeId,tree.id);assert.equal(restored.envVars.CLI_MANAGER_WORKTREE_ID,tree.id);
+  assert.equal(restored.startupCmd,undefined);assert.equal(restored.cliSessionId,undefined);assert.equal(restored.isAgentSession,false);
+  assert.equal(h.created.length,0);assert.equal(h.writes.length,0);
+  const manual=h.attach({...saved,workspace:current,worktreeId:tree.id,cwd:'/trees/target/subdir'},{alive:true,cwd:tree.path,workspace:current,shell:'zsh'});
+  assert.equal(manual.cwd,'/trees/target/subdir');assert.equal(manual.bindingChanged,false);
+});

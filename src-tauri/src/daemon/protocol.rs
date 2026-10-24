@@ -244,7 +244,7 @@ fn deserialize_workspace<'de, D: serde::Deserializer<'de>>(
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionMeta {
-    /// Immutable workspace ownership supplied at launch, independent of shell cwd.
+    /// Workspace ownership, independent of subsequent shell cwd changes.
     /// Missing on older daemons; JSON null explicitly denotes an unscoped terminal.
     #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_workspace")]
     pub workspace: Option<serde_json::Value>,
@@ -600,6 +600,44 @@ pub fn decode_daemon_frame(line: &str) -> Result<DaemonFrame, ProtocolError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn retired_workspace_move_metadata_preserves_the_current_binding_and_cwd() {
+        let workspace = serde_json::json!({
+            "id": "target", "projectId": "repo", "worktreeId": "target",
+            "path": "/worktrees/target", "environmentType": "local",
+        });
+        let payload = serde_json::json!({
+            "sessionId": "kept-shell", "cwd": "/worktrees/target/subdirectory",
+            "shell": "zsh", "alive": true, "createdAtMs": 1,
+            "workspace": workspace,
+            "workspaceRevision": 3, "workspaceOutputSequence": 42,
+            "workspaceMovePending": false,
+        });
+        let meta: SessionMeta = serde_json::from_value(payload).unwrap();
+        assert_eq!(meta.cwd.as_deref(), Some("/worktrees/target/subdirectory"));
+        assert_eq!(meta.workspace.as_ref(), Some(&workspace));
+        let serialized = serde_json::to_value(meta).unwrap();
+        for retired in ["workspaceRevision", "workspaceOutputSequence", "workspaceMovePending"] {
+            assert!(serialized.get(retired).is_none());
+        }
+    }
+
+    #[test]
+    fn retired_workspace_move_frames_are_unknown_and_the_capability_is_absent() {
+        assert!(!supported_features().iter().any(|feature| feature == "workspace_move_v1"));
+        assert!(matches!(
+            decode_client_frame(r#"{"type":"move_workspace","id":1}"#),
+            Err(ProtocolError::UnknownType(kind)) if kind == "move_workspace"
+        ));
+        for kind in ["workspace_moved", "workspace_changed", "workspace_move_failed"] {
+            let payload = serde_json::json!({ "type": kind }).to_string();
+            assert!(matches!(
+                decode_daemon_frame(&payload),
+                Err(ProtocolError::UnknownType(actual)) if actual == kind
+            ));
+        }
+    }
 
     #[test]
     fn client_frame_roundtrip() {

@@ -394,9 +394,14 @@ function resolveDaemonAttachUpdatedAt(attach: DaemonSessionState): string {
 function resolveAttachedDaemonSession(
   persisted: TerminalSession | undefined,
   attach: DaemonSessionState
-): Pick<TerminalSession, "projectId" | "worktreeId" | "workspace" | "title" | "cwd" | "shell" | "environmentType" | "sshHostId" | "remotePath" | "connectionState" | "disconnectReason"> {
+): Pick<TerminalSession, "projectId" | "worktreeId" | "workspace" | "title" | "cwd" | "shell" | "environmentType" | "sshHostId" | "remotePath" | "connectionState" | "disconnectReason"> & { bindingChanged: boolean } {
   const projectState = useProjectStore.getState();
-  const cwd = persisted?.cwd ?? attach.cwd ?? undefined;
+  // An older build may have changed a live daemon's workspace before its disk save completed.
+  // Attach keeps that confirmed ownership without exposing workspace-move actions.
+  const workspaceChanged = Boolean(attach.workspace && persisted
+    && (attach.workspace.projectId !== persisted.projectId
+      || (attach.workspace.worktreeId ?? null) !== ((persisted.workspace ? persisted.workspace.worktreeId : persisted.worktreeId) ?? null)));
+  const cwd = workspaceChanged ? attach.cwd ?? attach.workspace?.path : persisted?.cwd ?? attach.cwd ?? undefined;
   const binding = bindTerminalWorkspace({
     ...persisted, cwd,
     workspace: attach.workspace !== undefined ? attach.workspace : persisted?.workspace,
@@ -409,6 +414,7 @@ function resolveAttachedDaemonSession(
   const fallbackTitle = worktree?.name || project?.name || basenameFromPath(cwd) || translateCurrent("terminal.backgroundTasks.untitled");
   return {
     ...binding,
+    bindingChanged: workspaceChanged,
     title: isGenericDaemonSessionTitle(persisted?.title) ? fallbackTitle : persisted!.title,
     cwd,
     shell: persisted?.shell ?? attach.shell,
@@ -2676,12 +2682,12 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
               remotePath: attachedMeta.remotePath,
               connectionState: attachedMeta.connectionState,
               disconnectReason: attachedMeta.disconnectReason,
-              envVars: ps.envVars,
-              // 仅保留给 Tab 厂商识别；daemon attach 不会重新执行该命令。
-              startupCmd: ps.startupCmd,
-              conversationResumeTarget: ps.conversationResumeTarget,
-              ...getRestoredAgentTerminalMetadata(ps, attachedMeta.projectId),
-              cliSessionId: daemonSession.agentDetection ? daemonSession.agentDetection.agent?.cliSessionId ?? undefined : ps.cliSessionId,
+              envVars: attachedMeta.bindingChanged ? terminalWorkspaceEnvironment(attachedMeta.workspace ?? null, ps.envVars) : ps.envVars,
+              // daemon attach never executes the saved command; discard stale restore identity after an ownership change.
+              startupCmd: attachedMeta.bindingChanged ? undefined : ps.startupCmd,
+              conversationResumeTarget: attachedMeta.bindingChanged ? undefined : ps.conversationResumeTarget,
+              ...getRestoredAgentTerminalMetadata(attachedMeta.bindingChanged ? { isAgentSession: false } : ps, attachedMeta.projectId),
+              cliSessionId: daemonSession.agentDetection ? daemonSession.agentDetection.agent?.cliSessionId ?? undefined : attachedMeta.bindingChanged ? undefined : ps.cliSessionId,
               ...(daemonSession.agentDetection ? {
                 runtimeAgent: daemonSession.agentDetection.agent ? { ...daemonSession.agentDetection.agent, source: "process" as const } : null,
                 runtimeAgentObservedAtMs: daemonSession.agentDetection.updatedAtMs,
@@ -2977,12 +2983,11 @@ export const useTerminalStore = create<TerminalStore>((set, get) => ({
       remotePath: attachedMeta.remotePath,
       connectionState: attachedMeta.connectionState,
       disconnectReason: attachedMeta.disconnectReason,
-      envVars: persisted?.envVars,
-      // 元数据用于 Tab 厂商识别；daemon attach 不会重新执行该命令。
-      startupCmd: persisted?.startupCmd,
-      conversationResumeTarget: persisted?.conversationResumeTarget,
-      ...getRestoredAgentTerminalMetadata(persisted, attachedMeta.projectId),
-      cliSessionId: daemonSession.agentDetection ? daemonSession.agentDetection.agent?.cliSessionId ?? undefined : persisted?.cliSessionId,
+      envVars: attachedMeta.bindingChanged ? terminalWorkspaceEnvironment(attachedMeta.workspace ?? null, persisted?.envVars) : persisted?.envVars,
+      startupCmd: attachedMeta.bindingChanged ? undefined : persisted?.startupCmd,
+      conversationResumeTarget: attachedMeta.bindingChanged ? undefined : persisted?.conversationResumeTarget,
+      ...getRestoredAgentTerminalMetadata(attachedMeta.bindingChanged ? { isAgentSession: false } : persisted, attachedMeta.projectId),
+      cliSessionId: daemonSession.agentDetection ? daemonSession.agentDetection.agent?.cliSessionId ?? undefined : attachedMeta.bindingChanged ? undefined : persisted?.cliSessionId,
       ...(daemonSession.agentDetection ? {
         runtimeAgent: daemonSession.agentDetection.agent ? { ...daemonSession.agentDetection.agent, source: "process" as const } : null,
         runtimeAgentObservedAtMs: daemonSession.agentDetection.updatedAtMs,

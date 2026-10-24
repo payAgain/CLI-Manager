@@ -393,7 +393,7 @@ export interface SyncedHistoryPaneSession {
   updatedAt: number;
 }
 
-/** Immutable launch ownership. cwd may change without moving this terminal. */
+/** Explicit launch ownership; ordinary cd keeps this binding. */
 export interface TerminalWorkspaceBinding {
   id: string;
   projectId: string;
