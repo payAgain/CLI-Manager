@@ -13,3 +13,7 @@ Portions of the terminal process management, resize debouncing, flow control,
 and replay architecture are adapted from Code - OSS (Visual Studio Code),
 Copyright (c) Microsoft Corporation, licensed under the MIT License. See
 third-party/vscode-LICENSE.
+
+The bundled ConPTY runtime (conpty.dll and OpenConsole.exe) comes from Microsoft
+Windows Terminal v1.24.11321.0, Copyright (c) Microsoft Corporation, licensed
+under the MIT License. See src-tauri/resources/conpty/LICENSE.
