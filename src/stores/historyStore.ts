@@ -54,6 +54,7 @@ interface HistoryStore {
   focusedMessageSeq: number;
   metaMap: SessionMetaMap;
   focusGlobalSearchSeq: number;
+  openRequestSeq: number;
   focusSessionSearchSeq: number;
   indexStatus: HistoryIndexStatus;
   remoteContext: SshAgentHistoryContext | null;
@@ -1405,6 +1406,7 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
   focusedMessageSeq: 0,
   metaMap: {},
   focusGlobalSearchSeq: 0,
+  openRequestSeq: 0,
   focusSessionSearchSeq: 0,
   indexStatus: { ...DEFAULT_HISTORY_INDEX_STATUS },
   remoteContext: null,
@@ -1488,6 +1490,7 @@ export const useHistoryStore = create<HistoryStore>((set, get) => ({
   },
 
   openHistory: async (options) => {
+    set((state) => ({ openRequestSeq: state.openRequestSeq + 1 }));
     // 重复点击入口或快捷键时保留用户在已打开面板中选择的项目范围。
     const explicitScope = hasExplicitHistoryScope(options);
     if (!explicitScope && options?.sourceFilter === undefined && get().isOpen) return;

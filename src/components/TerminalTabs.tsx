@@ -4,7 +4,7 @@ import { createPortal } from "react-dom";
 import { useShallow } from "zustand/shallow";
 import { invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
-import { ClipboardList, type LucideIcon } from "lucide-react";
+import { ClipboardList, PanelRightClose, PanelRightOpen, type LucideIcon } from "lucide-react";
 import {
   DndContext,
   DragOverlay,
@@ -2556,6 +2556,7 @@ export function TerminalTabs({
   const openHistory = useHistoryStore((s) => s.openHistory);
   const closeHistory = useHistoryStore((s) => s.closeHistory);
   const focusGlobalSearchSeq = useHistoryStore((s) => s.focusGlobalSearchSeq);
+  const historyOpenRequestSeq = useHistoryStore((s) => s.openRequestSeq);
   const [workspanTabHost, setWorkspanTabHost] = useState<HTMLDivElement | null>(null);
   const [historyExpanded, setHistoryExpanded] = useState(false);
   const historyDockWidth = useSettingsStore((s) => s.terminalPanelWidths.merged);
@@ -2576,7 +2577,9 @@ export function TerminalTabs({
     isOverflowing: false,
     hiddenIds: [],
   });
+  const [rightSidebarVisible, setRightSidebarVisible] = useState(true);
   const [sidePanelOpen, setSidePanelOpen] = useState(false);
+  const previousSidePanelMergedRef = useRef(sidePanelMerged);
   const [sidePanelTab, setSidePanelTab] = useState<TerminalSidePanelTab>("stats");
   // 非合并模式：实时统计与 Git 变更各自独立开关，可并排显示
   const [statsOpen, setStatsOpen] = useState(false);
@@ -2970,11 +2973,38 @@ export function TerminalTabs({
     }),
     [panelCapabilities.files, panelCapabilities.history, panelCapabilities.statistics, panelGitSupported, terminalToolbarVisibility]
   );
-  const historyActive = historyOpen && historyExpanded && activeWorkspaceTab === "history";
-  const statsPanelActive = sidePanelMerged ? sidePanelOpen && sidePanelTab === "stats" : statsOpen;
-  const gitPanelActive = sidePanelMerged ? sidePanelOpen && sidePanelTab === "git" : gitOpen;
-  const filesPanelActive = sidePanelMerged ? sidePanelOpen && sidePanelTab === "files" : filesOpen;
-  const templatesPanelActive = sidePanelMerged ? sidePanelOpen && sidePanelTab === "templates" : templatesOpen;
+  const historyActive = rightSidebarVisible && historyOpen && historyExpanded && activeWorkspaceTab === "history";
+  const statsPanelActive = rightSidebarVisible && (sidePanelMerged ? sidePanelOpen && sidePanelTab === "stats" : statsOpen);
+  const gitPanelActive = rightSidebarVisible && (sidePanelMerged ? sidePanelOpen && sidePanelTab === "git" : gitOpen);
+  const filesPanelActive = rightSidebarVisible && (sidePanelMerged ? sidePanelOpen && sidePanelTab === "files" : filesOpen);
+  const templatesPanelActive = rightSidebarVisible && (sidePanelMerged ? sidePanelOpen && sidePanelTab === "templates" : templatesOpen);
+
+  // Keep the chosen panel when its presentation mode changes, including while hidden.
+  useEffect(() => {
+    if (previousSidePanelMergedRef.current === sidePanelMerged) return;
+    previousSidePanelMergedRef.current = sidePanelMerged;
+    if (sidePanelMerged) {
+      const openTabs: TerminalSidePanelTab[] = [];
+      if (statsOpen) openTabs.push("stats");
+      if (gitOpen) openTabs.push("git");
+      if (filesOpen) openTabs.push("files");
+      if (tasksPanelOpen) openTabs.push("tasks");
+      if (templatesOpen) openTabs.push("templates");
+      const selected = openTabs.includes(sidePanelTab) ? sidePanelTab : openTabs[0];
+      if (selected) setSidePanelTab(selected);
+      setSidePanelOpen(Boolean(selected));
+      setStatsOpen(false); setGitOpen(false); setFilesOpen(false); setTasksPanelOpen(false); setTemplatesOpen(false);
+    } else {
+      const selected = sidePanelOpen ? sidePanelTab : null;
+      setStatsOpen(selected === "stats"); setGitOpen(selected === "git"); setFilesOpen(selected === "files");
+      setTasksPanelOpen(selected === "tasks"); setTemplatesOpen(selected === "templates");
+      setSidePanelOpen(false);
+    }
+  }, [filesOpen, gitOpen, sidePanelMerged, sidePanelOpen, sidePanelTab, statsOpen, tasksPanelOpen, templatesOpen]);
+
+  useEffect(() => {
+    if (historyOpenRequestSeq > 0) setRightSidebarVisible(true);
+  }, [historyOpenRequestSeq]);
 
   useEffect(() => {
     if (!sidePanelMerged || !sidePanelOpen || visibleSidePanelTabs.includes(sidePanelTab)) return;
@@ -3008,6 +3038,7 @@ export function TerminalTabs({
 
   useEffect(() => {
     if (!historyOpen) return;
+    setRightSidebarVisible(true);
     setActiveWorkspaceTab("history");
   }, [focusGlobalSearchSeq, historyOpen]);
 
@@ -3139,6 +3170,8 @@ export function TerminalTabs({
     closeHistory();
     setActiveWorkspaceTab("terminal");
     setActive(sessionId);
+    setRightSidebarVisible(true);
+    setSidePanelTab("git");
     if (sidePanelMerged) {
       setSidePanelTab("git");
       setSidePanelOpen(true);
@@ -3379,6 +3412,8 @@ export function TerminalTabs({
     if (rejectUnsupportedCapability(project, "statistics")) return;
     const allowed = await ensureStatsPanelAllowed();
     if (!allowed) return;
+    setRightSidebarVisible(true);
+    setSidePanelTab("stats");
     if (terminalSidePanelSingleOpen) {
       closeHistory();
       setActiveWorkspaceTab("terminal");
@@ -3405,6 +3440,8 @@ export function TerminalTabs({
     }
     const project = panelSession?.projectId ? projectById.get(panelSession.projectId) : null;
     if (project?.environment_type !== "ssh" && rejectUnsupportedCapability(project, "git")) return;
+    setRightSidebarVisible(true);
+    setSidePanelTab("git");
     if (sidePanelMerged) {
       if (terminalSidePanelSingleOpen) {
         closeHistory();
@@ -3455,6 +3492,8 @@ export function TerminalTabs({
   const openFilesPanelForProject = useCallback(async (project: Project): Promise<boolean> => {
     const allowed = await syncFilePanelProject(project);
     if (!allowed) return false;
+    setRightSidebarVisible(true);
+    setSidePanelTab("files");
     if (terminalSidePanelSingleOpen) {
       closeHistory();
       setActiveWorkspaceTab("terminal");
@@ -3555,6 +3594,11 @@ export function TerminalTabs({
   ]);
 
   const handleOpenHistoryTab = useCallback(() => {
+    if (historyOpen && !rightSidebarVisible) {
+      setRightSidebarVisible(true);
+      setActiveWorkspaceTab("history");
+      return;
+    }
     if (historyOpen) {
       closeHistory();
       return;
@@ -3584,7 +3628,7 @@ export function TerminalTabs({
       sourceFilter: "all",
       ...historyScope,
     });
-  }, [activeSession, closeHistory, groups, historyOpen, openHistory, projects, rejectUnsupportedCapability, sessions, terminalScopeValue, terminalSidePanelSingleOpen, worktrees]);
+  }, [activeSession, closeHistory, groups, historyOpen, openHistory, projects, rejectUnsupportedCapability, sessions, terminalScopeValue, terminalSidePanelSingleOpen, worktrees, rightSidebarVisible]);
 
   const handleOpenSplitPicker = useCallback((sessionId: string, direction: TerminalPaneSplitDirection, anchor?: SplitPickerAnchor) => {
     clearSplitPickerOpenSchedule();
@@ -3853,7 +3897,7 @@ export function TerminalTabs({
     return () => window.clearInterval(timer);
   }, [refreshBackgroundTasks]);
 
-  const tasksPanelActive = sidePanelMerged ? sidePanelOpen && sidePanelTab === "tasks" : tasksPanelOpen;
+  const tasksPanelActive = rightSidebarVisible && (sidePanelMerged ? sidePanelOpen && sidePanelTab === "tasks" : tasksPanelOpen);
 
   const closeTasksPanel = useCallback(() => {
     if (sidePanelMerged) setSidePanelOpen(false);
@@ -3867,6 +3911,8 @@ export function TerminalTabs({
 
   const handleToggleTemplatesPanel = useCallback(() => {
     if (templatesPanelActive) { closeTemplatesPanel(); return; }
+    setRightSidebarVisible(true);
+    setSidePanelTab("templates");
     if (terminalSidePanelSingleOpen) { closeHistory(); setActiveWorkspaceTab("terminal"); }
     if (sidePanelMerged) { setSidePanelTab("templates"); setSidePanelOpen(true); }
     else {
@@ -3879,6 +3925,8 @@ export function TerminalTabs({
 
   const handleToggleTasksPanel = useCallback(() => {
     if (tasksPanelActive) { closeTasksPanel(); return; }
+    setRightSidebarVisible(true);
+    setSidePanelTab("tasks");
     if (terminalSidePanelSingleOpen) { closeHistory(); setActiveWorkspaceTab("terminal"); }
     if (sidePanelMerged) { setSidePanelTab("tasks"); setSidePanelOpen(true); }
     else {
@@ -3904,6 +3952,10 @@ export function TerminalTabs({
     }
     onToggleFullscreen?.();
   }, [activeFullscreenPaneId, onToggleFullscreen]);
+
+  const handleToggleRightSidebar = useCallback(() => {
+    setRightSidebarVisible(visible => !visible);
+  }, []);
 
   const renderToolbarActions = useCallback(() => {
     const toolbarTooltips: Record<string, string> = {
@@ -4038,11 +4090,12 @@ export function TerminalTabs({
               <Terminal size={13} /><span>{panelProject?.name ?? t("workspace.label")}</span>
             </div>}
           </div>
-          {historyOpen && <button type="button" className="ui-workspace-history-view ui-focus-ring"
+          <div id="terminal-right-tools" style={{ display: "contents" }}>
+          {rightSidebarVisible && historyOpen && <button type="button" className="ui-workspace-history-view ui-focus-ring"
             onClick={() => { setActiveWorkspaceTab("history"); setHistoryExpanded(!historyActive); }} title={t(historyActive ? "workspace.backTerminal" : "workspace.expandHistory")}>
             {t(historyActive ? "workspace.backTerminal" : "workspace.expandHistory")}
           </button>}
-          <SortableContext items={visibleButtons.map((b) => b.id)} strategy={horizontalListSortingStrategy}>
+          {rightSidebarVisible && <SortableContext items={visibleButtons.map((b) => b.id)} strategy={horizontalListSortingStrategy}>
             {visibleButtons.map((btn, index) => (
               <SortableToolbarButton
                 key={btn.id}
@@ -4054,7 +4107,14 @@ export function TerminalTabs({
                 {btn.element}
               </SortableToolbarButton>
             ))}
-          </SortableContext>
+          </SortableContext>}
+          </div>
+          <button type="button" className="ui-focus-ring ui-icon-action ui-terminal-sidebar-toggle"
+            onClick={handleToggleRightSidebar} aria-controls="terminal-right-tools" aria-expanded={rightSidebarVisible}
+            aria-label={t(rightSidebarVisible ? "terminal.sidePanel.hide" : "terminal.sidePanel.show")}
+            title={t(rightSidebarVisible ? "terminal.sidePanel.hide" : "terminal.sidePanel.show")}>
+            {rightSidebarVisible ? <PanelRightClose size={14} /> : <PanelRightOpen size={14} />}
+          </button>
         </nav>
         <DragOverlay dropAnimation={null}>
           {activeToolbarDragId && buttonMap[activeToolbarDragId] ? (
@@ -4067,6 +4127,8 @@ export function TerminalTabs({
     );
   }, [
     activeToolbarDragId,
+    rightSidebarVisible,
+    handleToggleRightSidebar,
     tasksPanelActive,
     handleToggleTasksPanel,
     hasBackgroundTasks,
@@ -4338,10 +4400,10 @@ export function TerminalTabs({
         {historyOpen && (
           <div
             className="ui-history-workspace-host absolute right-0 top-0 bottom-0 min-h-0 overflow-hidden"
-            style={{ width: historyActive ? "100%" : "min(var(--history-dock-width), 100%)", zIndex: 5 }}
+            style={{ width: historyActive ? "100%" : "min(var(--history-dock-width), 100%)", zIndex: 5, display: rightSidebarVisible ? undefined : "none" }}
           >
             <Suspense fallback={null}>
-              <HistoryWorkspace active={historyOpen} docked={!historyActive} onOpenDetail={() => setHistoryExpanded(true)} />
+              <HistoryWorkspace active={historyOpen && rightSidebarVisible} docked={!historyActive} onOpenDetail={() => setHistoryExpanded(true)} />
             </Suspense>
           </div>
         )}
@@ -4350,7 +4412,7 @@ export function TerminalTabs({
           data-terminal-mode="independent"
           data-empty={visibleSessions.length === 0 ? "true" : "false"}
           data-terminal-theme-tone={terminalThemeTone}
-          style={{ display: historyActive ? "none" : "flex", right: historyOpen && !historyActive ? "min(var(--history-dock-width), 100%)" : 0 }}
+          style={{ display: historyActive ? "none" : "flex", right: rightSidebarVisible && historyOpen && !historyActive ? "min(var(--history-dock-width), 100%)" : 0 }}
         >
           <div className="flex min-h-0 min-w-0 flex-1 flex-col">
             {mountedWorkspanLayouts.length > 0 ? (
@@ -4626,7 +4688,7 @@ export function TerminalTabs({
               </div>
             )}
           </div>
-          {sidePanelMerged ? (
+          {rightSidebarVisible && (sidePanelMerged ? (
             <TerminalSidePanel
               open={sidePanelOpen}
               activeTab={sidePanelTab}
@@ -4691,7 +4753,7 @@ export function TerminalTabs({
                 </ResizableTerminalPanelFrame>
               )}
             </>
-          )}
+          ))}
         </div>
       </div>
     </div>
