@@ -154,7 +154,6 @@ export function BackgroundTasksPanel({ tasks, onRefresh, onRestored, refreshSeq 
         return <TaskSection key={group} icon={group === "terminals" ? <TerminalSquare size={15} /> : <RefreshCw size={15} />}
           title={t(group === "terminals" ? "terminal.backgroundTasks.title" : "backgroundOperations.sectionTitle")} count={groupEntries.length}
           actions={group === "operations" && hasFinishedOperation && <button type="button" className="task-action task-action--text ui-focus-ring" onClick={clearFinished}>{t("backgroundOperations.clearFinished")}</button>}>
-        {!groupEntries.length && <p className="task-list-empty">{t(group === "terminals" ? "terminal.backgroundTasks.emptyDescription" : "terminal.agentTasks.operationsEmpty")}</p>}
         {groupEntries.map(entry => {
           const statusLabel = entry.kind === "terminal"
             ? t(entry.status === "done" ? "terminal.backgroundTasks.completed" : `terminal.backgroundTasks.${entry.status}` as TranslationKey)

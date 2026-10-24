@@ -12,7 +12,6 @@ export function AgentTasksPanel({ session, project, refreshSeq }: { session: Ter
   const { t } = useI18n();
   const { snapshot, loading, error, hasIdentity, remote, source } = useAgentTasks(session, project, refreshSeq);
   const unavailable = remote ? "terminal.agentTasks.remoteUnsupported" : !hasIdentity ? "terminal.agentTasks.noIdentity" : error ? "terminal.agentTasks.error" : snapshot && !snapshot.supported ? "terminal.agentTasks.unsupported" : null;
-  const empty = (key: "terminal.agentTasks.tasksEmpty" | "terminal.agentTasks.plansEmpty" | "terminal.agentTasks.backgroundEmpty") => <p className="task-list-empty">{t(key)}</p>;
   const iconKey = resolveHistorySourceIconKey(source);
   const statusLabel = (status: AgentTaskStatus) => t(`terminal.agentTasks.status.${status}`);
   const background = snapshot?.backgroundTasks ?? [];
@@ -53,13 +52,13 @@ export function AgentTasksPanel({ session, project, refreshSeq }: { session: Ter
           {task.description && <p>{task.description}</p>}
           {task.detail && <p>{task.detail}</p>}
         </div>
-      </details>) : !unavailable && empty("terminal.agentTasks.tasksEmpty")}
+      </details>) : null}
     </TaskSection>
     <TaskSection icon={<FileText size={15} />} title={t("terminal.agentTasks.plans")} count={unavailable ? undefined : snapshot?.plans.length ?? 0} busy={loading}>
       {snapshot?.plans.length ? snapshot.plans.map(plan => <details className="agent-task-record agent-task-plan" key={plan.id} data-status={plan.status}>
         <summary><ChevronRight size={12} className="agent-task-record__chevron" aria-hidden="true" /><span className="agent-task-record__name" title={plan.title}>{plan.title}</span><TaskStatus status={plan.status} label={statusLabel(plan.status)} /></summary>
         <div className="agent-task-record__body"><MarkdownContent content={plan.content} compact /></div>
-      </details>) : !unavailable && empty("terminal.agentTasks.plansEmpty")}
+      </details>) : null}
     </TaskSection>
     <TaskSection icon={<TerminalSquare size={15} />} title={t("terminal.agentTasks.background")} count={unavailable ? undefined : background.length} busy={loading}>
       {active.map(backgroundRow)}
@@ -67,7 +66,6 @@ export function AgentTasksPanel({ session, project, refreshSeq }: { session: Ter
         <summary><ChevronRight size={12} aria-hidden="true" /><span>{t("terminal.agentTasks.finished", { count: finished.length })}</span>{failed > 0 && <span className="agent-task-archive__failed">{t("terminal.agentTasks.failedCount", { count: failed })}</span>}</summary>
         {finished.map(backgroundRow)}
       </details>}
-      {!background.length && !unavailable && empty("terminal.agentTasks.backgroundEmpty")}
     </TaskSection>
     {error && <details className="agent-task-diagnostics"><summary>{t("terminal.agentTasks.diagnostics")}</summary><pre>{error}</pre></details>}
     {!!snapshot?.warnings.length && <details className="agent-task-diagnostics"><summary>{t("terminal.agentTasks.partial")}</summary><pre>{snapshot.warnings.join("\n")}</pre></details>}
