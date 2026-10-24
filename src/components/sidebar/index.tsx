@@ -24,6 +24,7 @@ import { useAppConfirm } from "../ui/useAppConfirm";
 import { WorktreeLaunchOptions } from "../worktree/WorktreeLaunchOptions";
 import { defaultWorktreeLaunchMode, worktreeStartupCommand, type WorktreeLaunchMode } from "../../lib/worktreeLaunch";
 import { WorktreeFinishDialog } from "../worktree/WorktreeFinishDialog";
+import { WorktreeRemoveDialog } from "../worktree/WorktreeRemoveDialog";
 import { openWindowsTerminal } from "../../lib/externalTerminal";
 import { projectTerminalLaunchLabel, resolveProjectStartupCommand } from "../../lib/projectStartupCommand";
 import { resolveHistoryProjectPath } from "../../lib/historyProjectPaths";
@@ -253,7 +254,6 @@ export function Sidebar({
   const validateProjectGit = useWorktreeStore((s) => s.validateProjectGit);
   const checkWorktreeDeps = useWorktreeStore((s) => s.checkDeps);
   const dismissWorktreeDepsPrompt = useWorktreeStore((s) => s.dismissDepsPrompt);
-  const removeWorktree = useWorktreeStore((s) => s.removeWorktree);
   const useExternalTerminal = useSettingsStore((s) => s.useExternalTerminal);
   const projectWorktreeConfigEnabled = useSettingsStore((s) => s.projectWorktreeConfigEnabled);
   const sidebarDensity = useSettingsStore((s) => s.sidebarDensity);
@@ -554,7 +554,9 @@ export function Sidebar({
   useEffect(() => {
     if (!IN_TAURI) return;
     void getOsPlatform()
-      .then((platform) => setIsMacOs(platform === "macos"))
+      .then((platform) => {
+        setIsMacOs(platform === "macos");
+      })
       .catch(() => {});
   }, []);
 
@@ -1319,11 +1321,10 @@ export function Sidebar({
   }, []);
 
   const handleRequestDiscardSelectedWorktrees = useCallback(() => {
-    if (worktrees.some(item => selectedWorktreeIds.has(item.id) && item.origin === "discovered")) return;
     const items = Array.from(selectedWorktreeIds)
       .map((id) => {
         const worktree = worktrees.find((item) => item.id === id);
-        if (!worktree || worktree.origin === "discovered") return null;
+        if (!worktree) return null;
         const project = projects.find((item) => item.id === worktree.project_id);
         if (!project) return null;
         return { project, worktree };
@@ -2471,6 +2472,7 @@ export function Sidebar({
             {contextMenu.kind === "worktree" && (
               <>
                 <div className="ui-context-label">{t("workspace.label")}</div>
+                {contextMenu.worktree.origin === "discovered" && <p className="ui-context-note" role="note">{t("worktree.remove.externalMenuHint")}</p>}
                 <button className="context-menu-item" role="menuitem" onClick={() => {
                   void writeText(contextMenu.worktree.path).catch((err) => toast.error(t("workspace.copyFailed"), { description: String(err) })); setContextMenu(null);
                 }}><Copy size={14} />{t("workspace.copyPath")}</button>
@@ -2578,8 +2580,6 @@ export function Sidebar({
                   <button
                     className="context-menu-item danger"
                     role="menuitem"
-                    disabled={worktrees.some(item => selectedWorktreeIds.has(item.id) && item.origin === "discovered")}
-                    title={worktrees.some(item => selectedWorktreeIds.has(item.id) && item.origin === "discovered") ? t("worktree.externalManagedElsewhere") : undefined}
                     onClick={() => {
                       handleRequestDiscardSelectedWorktrees();
                       setContextMenu(null);
@@ -2592,8 +2592,6 @@ export function Sidebar({
                 <button
                   className="context-menu-item danger"
                   role="menuitem"
-                  disabled={contextMenu.worktree.origin === "discovered"}
-                  title={contextMenu.worktree.origin === "discovered" ? t("worktree.externalManagedElsewhere") : undefined}
                   onClick={() => {
                     setDiscardTarget({ project: contextMenu.project, worktree: contextMenu.worktree });
                     setContextMenu(null);
@@ -2878,56 +2876,11 @@ export function Sidebar({
         onClose={() => setFinishTarget(null)}
       />
 
-      <ConfirmDialog
-        open={!!discardTarget}
-        title={t("worktree.discard.title", { name: discardTarget?.worktree.name ?? "" })}
-        message={t("worktree.discard.message", { branch: discardTarget?.worktree.branch ?? "" })}
-        confirmText={t("worktree.discard.confirm")}
-        cancelText={t("common.cancel")}
-        danger
-        onConfirm={() => {
-          if (discardTarget) {
-            void removeWorktree(discardTarget.worktree, true).catch((err) => {
-              toast.error(t("worktree.toast.discardFailed"), { description: String(err) });
-            });
-          }
-          setDiscardTarget(null);
-        }}
-        onClose={() => setDiscardTarget(null)}
-      />
-
-      <ConfirmDialog
-        open={!!discardTargets}
-        title={t("worktree.discard.batchTitle", { count: discardTargets?.length ?? 0 })}
-        message={t("worktree.discard.batchMessage", { count: discardTargets?.length ?? 0 })}
-        confirmText={t("worktree.discard.confirm")}
-        cancelText={t("common.cancel")}
-        danger
-        onConfirm={() => {
-          const targets = discardTargets;
-          setDiscardTargets(null);
-          if (!targets || targets.length === 0) return;
-          void (async () => {
-            let failed = 0;
-            for (const target of targets) {
-              try {
-                await removeWorktree(target.worktree, true);
-              } catch (err) {
-                failed += 1;
-                logError("Failed to discard worktree", err);
-              }
-            }
-            setSelectedWorktreeIds(new Set());
-            if (failed > 0) {
-              toast.error(t("worktree.toast.discardFailed"), {
-                description: t("worktree.toast.batchDiscardPartial", { failed, total: targets.length }),
-              });
-            } else {
-              toast.success(t("worktree.toast.batchDiscardSuccess", { count: targets.length }));
-            }
-          })();
-        }}
-        onClose={() => setDiscardTargets(null)}
+      <WorktreeRemoveDialog
+        open={!!discardTarget || !!discardTargets}
+        targets={discardTargets ?? (discardTarget ? [discardTarget] : [])}
+        onRemoved={(ids) => setSelectedWorktreeIds(previous => new Set([...previous].filter(id => !ids.includes(id))))}
+        onClose={() => { setDiscardTarget(null); setDiscardTargets(null); }}
       />
 
       {showAdd && (

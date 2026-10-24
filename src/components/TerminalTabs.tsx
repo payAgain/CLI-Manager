@@ -25,6 +25,7 @@ import { CSS } from "@dnd-kit/utilities";
 import { useTerminalStore, type SplitTerminalOptions, type TabNotificationState } from "../stores/terminalStore";
 import { TERMINAL_PANEL_WIDTH_DEFAULTS, useSettingsStore } from "../stores/settingsStore";
 import { useWorktreeStore } from "../stores/worktreeStore";
+import { resolveWorktreeManagementTarget } from "../lib/worktreeManagement";
 import { useProjectStore } from "../stores/projectStore";
 import { useNotificationInboxStore } from "../stores/notificationInboxStore";
 import { useNotificationInboxAutoRead } from "../hooks/useNotificationInbox";
@@ -64,6 +65,7 @@ import {
   type TerminalSidePanelTab,
 } from "./terminal/TerminalSidePanel";
 import { WorktreeFinishDialog } from "./worktree/WorktreeFinishDialog";
+import { WorktreeRemoveDialog } from "./worktree/WorktreeRemoveDialog";
 import { WorktreeContinuationDialog } from "./worktree/WorktreeContinuationDialog";
 import { useWorktreeContinuationStore } from "../stores/worktreeContinuationStore";
 import { FileExplorerSidebar } from "./files/LazyFileExplorerSidebar";
@@ -103,7 +105,6 @@ import {
 import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from "./ui/popover";
 import { Button } from "./ui/button";
 import { Portal } from "./ui/Portal";
-import { ConfirmDialog } from "./ConfirmDialog";
 import { getTerminalTheme, isLightTerminalTheme } from "../lib/terminalThemes";
 import { getTerminalSidePanelSkinStyle } from "./stats/termStatsUi";
 import {
@@ -1587,7 +1588,7 @@ function PaneTabBar({
                   <>
                     <button type="button" className="context-menu-item w-full" onClick={() => runAndClose(() => onOpenWorktreeChanges(session.id))}>{t("worktree.menu.viewChanges")}</button>
                     <button type="button" className="context-menu-item w-full" onClick={() => runAndClose(() => onOpenWorktreeHistory(project, activeWorktree))}>{t("worktree.menu.viewHistory")}</button>
-                    <button type="button" className="context-menu-item w-full" onClick={() => runAndClose(() => onFinishWorktree(project, activeWorktree))}>{t("worktree.menu.finish")}</button>
+                    <button type="button" className="context-menu-item w-full" disabled={activeWorktree.origin === "discovered"} title={activeWorktree.origin === "discovered" ? t("worktree.externalManagedElsewhere") : undefined} onClick={() => runAndClose(() => onFinishWorktree(project, activeWorktree))}>{t("worktree.menu.finish")}</button>
                     <button type="button" className="context-menu-item w-full" onClick={() => runAndClose(() => onInstallWorktreeDeps(project, activeWorktree))}>{t("worktree.menu.installDeps")}</button>
                     <button type="button" className="context-menu-item w-full" onClick={() => runAndClose(() => onOpenWorktreeDirectory(activeWorktree))}>{t("worktree.menu.openDirectory")}</button>
                     <button type="button" className="context-menu-item danger w-full" onClick={() => runAndClose(() => onDiscardWorktree(project, activeWorktree))}>{t("worktree.menu.discard")}</button>
@@ -1650,7 +1651,7 @@ function PaneTabBar({
                       <ContextMenuSeparator />
                       <ContextMenuItem onSelect={() => onOpenWorktreeChanges(session.id)}>{t("worktree.menu.viewChanges")}</ContextMenuItem>
                       <ContextMenuItem onSelect={() => onOpenWorktreeHistory(projectById.get(session.projectId!)!, worktreeById.get(session.worktreeId!)!)}>{t("worktree.menu.viewHistory")}</ContextMenuItem>
-                      <ContextMenuItem onSelect={() => onFinishWorktree(projectById.get(session.projectId!)!, worktreeById.get(session.worktreeId!)!)}>{t("worktree.menu.finish")}</ContextMenuItem>
+                      <ContextMenuItem disabled={worktreeById.get(session.worktreeId!)!.origin === "discovered"} title={worktreeById.get(session.worktreeId!)!.origin === "discovered" ? t("worktree.externalManagedElsewhere") : undefined} onSelect={() => onFinishWorktree(projectById.get(session.projectId!)!, worktreeById.get(session.worktreeId!)!)}>{t("worktree.menu.finish")}</ContextMenuItem>
                       <ContextMenuItem onSelect={() => onInstallWorktreeDeps(projectById.get(session.projectId!)!, worktreeById.get(session.worktreeId!)!)}>{t("worktree.menu.installDeps")}</ContextMenuItem>
                       <ContextMenuItem onSelect={() => onOpenWorktreeDirectory(worktreeById.get(session.worktreeId!)!)}>{t("worktree.menu.openDirectory")}</ContextMenuItem>
                       <ContextMenuItem onSelect={() => onDiscardWorktree(projectById.get(session.projectId!)!, worktreeById.get(session.worktreeId!)!)}>{t("worktree.menu.discard")}</ContextMenuItem>
@@ -2506,7 +2507,6 @@ export function TerminalTabs({
   const worktrees = useWorktreeStore((s) => s.worktrees);
   const checkWorktreeDeps = useWorktreeStore((s) => s.checkDeps);
   const dismissWorktreeDepsPrompt = useWorktreeStore((s) => s.dismissDepsPrompt);
-  const removeWorktree = useWorktreeStore((s) => s.removeWorktree);
   const useExternalTerminal = useSettingsStore((s) => s.useExternalTerminal);
   const defaultShell = useSettingsStore((s) => s.defaultShell);
   const fontSize = useSettingsStore((s) => s.fontSize);
@@ -4129,10 +4129,18 @@ export function TerminalTabs({
   const handlePaneUnsplit = useCallback((sessionId: string) => {
     void unsplitTerminal(sessionId);
   }, [unsplitTerminal]);
+  const getManagedWorktree = useCallback((worktree: WorktreeRecord): WorktreeRecord | null => {
+    const result = resolveWorktreeManagementTarget(worktree, useWorktreeStore.getState().worktrees);
+    if (!result.worktree) {
+      toast.error(t(result.error === "external_worktree_read_only" ? "worktree.externalManagedElsewhere" : "worktree.continue.error.missingTarget"));
+    }
+    return result.worktree;
+  }, [t]);
   const handlePaneFinishWorktree = useCallback((project: Project, worktree: WorktreeRecord) => {
-    if (rejectMissingWorktree(worktree)) return;
-    setFinishTarget({ project, worktree });
-  }, [rejectMissingWorktree]);
+    const current = getManagedWorktree(worktree);
+    if (!current || rejectMissingWorktree(current)) return;
+    setFinishTarget({ project, worktree: current });
+  }, [getManagedWorktree, rejectMissingWorktree]);
   const handlePaneDiscardWorktree = useCallback((project: Project, worktree: WorktreeRecord) => {
     setDiscardTarget({ project, worktree });
   }, []);
@@ -4319,21 +4327,9 @@ export function TerminalTabs({
         onClose={() => setFinishTarget(null)}
       />
       <WorktreeContinuationDialog onContinued={() => { closeHistory(); setActiveWorkspaceTab("terminal"); }} />
-      <ConfirmDialog
+      <WorktreeRemoveDialog
         open={!!discardTarget}
-        title={t("worktree.discard.title", { name: discardTarget?.worktree.name ?? "" })}
-        message={t("worktree.discard.message", { branch: discardTarget?.worktree.branch ?? "" })}
-        confirmText={t("worktree.discard.confirm")}
-        cancelText={t("common.cancel")}
-        danger
-        onConfirm={() => {
-          if (discardTarget) {
-            void removeWorktree(discardTarget.worktree, true).catch((err) => {
-              toast.error(t("worktree.toast.discardFailed"), { description: String(err) });
-            });
-          }
-          setDiscardTarget(null);
-        }}
+        targets={discardTarget ? [discardTarget] : []}
         onClose={() => setDiscardTarget(null)}
       />
 

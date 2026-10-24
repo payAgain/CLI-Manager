@@ -3,10 +3,15 @@ import { create } from "zustand";
 import { getDb } from "../lib/db";
 import { hasConfiguredCliTool } from "../lib/projectCli";
 import { projectSupportsCapability } from "../lib/projectCapabilities";
+import { resolveWorktreeManagementTarget, resolveWorktreeRemovalTarget } from "../lib/worktreeManagement";
 import type { Project, TerminalSession, WorktreeIsolationStrategy, WorktreeRecord } from "../lib/types";
 import { useProjectStore } from "./projectStore";
 import { useTerminalStore } from "./terminalStore";
 import { useSettingsStore } from "./settingsStore";
+import { toast } from "sonner";
+import { translateCurrent } from "../lib/i18n";
+import { worktreeRelatedSessions } from "../lib/worktreeRemoval";
+import { resolveTerminalRuntimeEnvironment } from "../lib/terminalRuntimeEnvironment";
 
 export interface GitWorktreeCreateResult {
   name: string;
@@ -28,6 +33,38 @@ export interface GitWorktreeMergeResult {
   skipped: boolean;
   skipReason: string | null;
 }
+
+export interface WorktreeRemovalSession {
+  sessionId: string;
+  title?: string;
+  workspacePath?: string;
+  cwd?: string;
+}
+export interface WorktreeRemovalPreflight {
+  confirmationToken: string;
+  worktreePath: string;
+  branch: string | null;
+  detached: boolean;
+  head: string;
+  locked: boolean;
+  dirty: boolean;
+  stagedCount: number;
+  unstagedCount: number;
+  untrackedCount: number;
+  changedPaths: string[];
+  changedCount?: number;
+  runningSessions: WorktreeRemovalSession[];
+  externalProcesses: { pid: number; name: string }[];
+  /** App-side identity checked again before any terminal is closed. */
+  worktreeId: string;
+  projectPath: string;
+}
+export interface WorktreeRemovalOptions {
+  preflight: WorktreeRemovalPreflight;
+  discardChanges: boolean;
+  closeSessions: boolean;
+}
+const inFlightWorktreeRemovals = new Set<string>();
 
 export type WorktreeIsolationDecision = "prompt" | "auto" | "none";
 
@@ -65,7 +102,8 @@ interface WorktreeStore {
   checkDeps: (worktree: WorktreeRecord) => Promise<GitWorktreeDepsCheckResult>;
   dismissDepsPrompt: (worktreeId: string) => Promise<void>;
   mergeWorktree: (worktree: WorktreeRecord) => Promise<GitWorktreeMergeResult>;
-  removeWorktree: (worktree: WorktreeRecord, deleteBranch: boolean) => Promise<void>;
+  preflightRemoval: (worktree: WorktreeRecord) => Promise<WorktreeRemovalPreflight>;
+  removeWorktree: (worktree: WorktreeRecord, deleteBranch: boolean, options?: WorktreeRemovalOptions) => Promise<void>;
   markMissingWorktrees: () => Promise<void>;
 }
 
@@ -280,39 +318,108 @@ export const useWorktreeStore = create<WorktreeStore>((set, get) => ({
   },
 
   mergeWorktree: async (worktree) => {
-    if (worktree.origin === "discovered") throw new Error("external_worktree_read_only");
-    const project = useProjectStore.getState().projects.find((item) => item.id === worktree.project_id);
+    const target = resolveWorktreeManagementTarget(worktree, get().worktrees);
+    if (!target.worktree) throw new Error(target.error);
+    const current = target.worktree;
+    const project = useProjectStore.getState().projects.find((item) => item.id === current.project_id);
     if (!project) throw new Error("project_not_found");
     return invoke<GitWorktreeMergeResult>("git_worktree_merge", {
       projectPath: project.path,
-      worktreeBranch: worktree.branch,
-      baseBranch: worktree.base_branch,
+      worktreeBranch: current.branch,
+      baseBranch: current.base_branch,
     });
   },
 
-  removeWorktree: async (worktree, deleteBranch) => {
-    if (worktree.origin === "discovered") throw new Error("external_worktree_read_only");
-    const project = useProjectStore.getState().projects.find((item) => item.id === worktree.project_id);
+  preflightRemoval: async (worktree) => {
+    const target = resolveWorktreeRemovalTarget(worktree, get().worktrees);
+    if (!target.worktree) throw new Error(target.error);
+    const project = useProjectStore.getState().projects.find(item => item.id === worktree.project_id);
     if (!project) throw new Error("project_not_found");
-    const terminalStore = useTerminalStore.getState();
-    const linkedSessionIds = terminalStore.sessions
-      .filter((session) => session.worktreeId === worktree.id)
-      .map((session) => session.id);
-    for (const sessionId of linkedSessionIds) {
-      await terminalStore.closeSession(sessionId);
-    }
-    if (linkedSessionIds.length > 0) {
-      await waitForSessionRelease();
-    }
-    await invoke<string>("git_worktree_remove", {
-      projectPath: project.path,
-      worktreePath: worktree.path,
-      branch: worktree.branch,
-      deleteBranch,
+    if (project.environment_type !== "local") throw new Error("worktree_remove_unsupported_environment");
+    const result = await invoke<Omit<WorktreeRemovalPreflight, "worktreeId" | "projectPath">>("git_worktree_remove_preflight", {
+      projectPath: project.path, worktreePath: target.worktree.path, branch: target.worktree.branch,
     });
-    const db = await getDb();
-    await db.execute("DELETE FROM worktrees WHERE id = $1", [worktree.id]);
-    set((state) => ({ worktrees: state.worktrees.filter((item) => item.id !== worktree.id) }));
-    await useProjectStore.getState().fetchAll("interactive");
+    const state = useTerminalStore.getState();
+    const running = new Map(result.runningSessions.map(session => [session.sessionId, { ...session,
+      title: state.sessions.find(item => item.id === session.sessionId)?.title || session.title }]));
+    const related = worktreeRelatedSessions(target.worktree, result.worktreePath, state.sessions, state.sessionStatuses);
+    if (related.some(session => resolveTerminalRuntimeEnvironment(session) === "wsl")) throw new Error("worktree_remove_wsl_sessions");
+    for (const session of related) {
+      running.set(session.id, { sessionId: session.id, title: session.title, cwd: session.cwd });
+    }
+    return { ...result, runningSessions: [...running.values()], worktreeId: worktree.id, projectPath: project.path };
+  },
+
+  removeWorktree: async (worktree, deleteBranch, options) => {
+    const preflight = options?.preflight;
+    if (!options || !preflight?.confirmationToken || preflight.worktreeId !== worktree.id) throw new Error("worktree_remove_confirmation_required");
+    if (preflight.dirty && !options.discardChanges) throw new Error("worktree_remove_changes_confirmation_required");
+    if (preflight.externalProcesses.length) throw new Error("worktree_remove_processes_running");
+    if (preflight.runningSessions.length && !options.closeSessions) throw new Error("worktree_remove_sessions_running");
+    if (deleteBranch && (preflight.detached || !preflight.branch)) throw new Error("worktree_remove_detached_branch");
+    const key = `${worktree.project_id}:${preflight.worktreePath}`;
+    if (inFlightWorktreeRemovals.has(key)) throw new Error("worktree_remove_busy");
+    inFlightWorktreeRemovals.add(key);
+    const currentTarget = () => {
+      const target = resolveWorktreeRemovalTarget(worktree, get().worktrees);
+      if (!target.worktree) throw new Error(target.error);
+      const project = useProjectStore.getState().projects.find(item => item.id === worktree.project_id);
+      if (!project || project.path !== preflight.projectPath) throw new Error("worktree_target_changed");
+      if (project.environment_type !== "local") throw new Error("worktree_remove_unsupported_environment");
+      return { worktree: target.worktree, project };
+    };
+    try {
+      currentTarget();
+      const permitted = new Set(preflight.runningSessions.map(session => session.sessionId));
+      // A hidden tab may have stale cwd/status. Refresh daemon association before closing,
+      // while retaining the original content token for the final destructive operation.
+      const daemonRelated = new Set<string>();
+      if (options.closeSessions && permitted.size) {
+        const target = currentTarget();
+        const current = await invoke<WorktreeRemovalPreflight>("git_worktree_remove_preflight", {
+          projectPath: target.project.path, worktreePath: target.worktree.path, branch: target.worktree.branch,
+        });
+        if (current.externalProcesses.length) throw new Error("worktree_remove_processes_running");
+        for (const session of current.runningSessions) {
+          if (!permitted.has(session.sessionId)) throw new Error("worktree_remove_changed");
+          daemonRelated.add(session.sessionId);
+        }
+      }
+      const terminalState = useTerminalStore.getState();
+      const related = worktreeRelatedSessions(worktree, preflight.worktreePath, terminalState.sessions, terminalState.sessionStatuses);
+      if (related.some(session => resolveTerminalRuntimeEnvironment(session) === "wsl")) throw new Error("worktree_remove_wsl_sessions");
+      if (related.some(session => !permitted.has(session.id))) throw new Error("worktree_remove_changed");
+      if (options.closeSessions) {
+        for (const sessionId of permitted) {
+          currentTarget();
+          const state = useTerminalStore.getState();
+          const session = state.sessions.find(item => item.id === sessionId);
+          if (!daemonRelated.has(sessionId) && (!session || !worktreeRelatedSessions(worktree, preflight.worktreePath, [session], state.sessionStatuses).length)) continue;
+          if (session && resolveTerminalRuntimeEnvironment(session) === "wsl") throw new Error("worktree_remove_wsl_sessions");
+          await state.discardDaemonSession(sessionId);
+        }
+        if (permitted.size) await waitForSessionRelease();
+      }
+      const latest = currentTarget();
+      const output = await invoke<string>("git_worktree_remove", {
+        projectPath: latest.project.path, worktreePath: latest.worktree.path, branch: latest.worktree.branch,
+        deleteBranch, confirmationToken: preflight.confirmationToken, discardChanges: options.discardChanges,
+      });
+      // Git removal is authoritative even if saving the sidebar record later fails.
+      if (latest.worktree.origin !== "discovered") {
+        try {
+          const db = await getDb();
+          await db.execute("DELETE FROM worktrees WHERE id = $1", [worktree.id]);
+        } catch {
+          toast.warning(translateCurrent("worktree.remove.metadataFailed"));
+        }
+      }
+      set(state => ({ worktrees: state.worktrees.filter(item => item.id !== worktree.id) }));
+      if (output.includes("branch_delete_failed:")) toast.warning(translateCurrent("worktree.remove.branchKept"));
+      try { await useProjectStore.getState().fetchAll("interactive"); }
+      catch { toast.warning(translateCurrent("worktree.remove.refreshFailed")); }
+    } finally {
+      inFlightWorktreeRemovals.delete(key);
+    }
   },
 }));

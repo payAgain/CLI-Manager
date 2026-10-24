@@ -272,7 +272,7 @@ export interface SshConfigImportPreview {
 export type WorktreeStatus = "active" | "missing";
 
 export interface WorktreeRecord {
-  /** Git registrations discovered outside this app; never managed/deleted by it. */
+  /** Git registrations discovered outside this app; removal requires the shared safety preflight. */
   origin?: "discovered";
   id: string;
   project_id: string;

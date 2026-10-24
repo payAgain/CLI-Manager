@@ -90,14 +90,17 @@ test('discovered worktrees feed both quick jump and restored terminal membership
   assert.ok(targets.some(t=>t.kind==='worktree' && t.intent==='create' && t.worktreeId===records[0].id));
 });
 
-test('external management is rejected before closing sessions, running Git or writing the database', async () => {
+test('external merging stays protected and removal requires explicit preflight before side effects', async () => {
   const src=readFileSync(new URL('../src/stores/worktreeStore.ts',import.meta.url),'utf8');
   const ast=ts.createSourceFile('worktreeStore.ts',src,ts.ScriptTarget.Latest,true);
   for(const name of ['mergeWorktree','removeWorktree']) {
     let fn;function visit(node){if(ts.isPropertyAssignment(node)&&node.name.getText(ast)===name)fn=node.initializer;ts.forEachChild(node,visit);}visit(ast);assert.ok(fn);
     const code=ts.transpileModule(`const action=${fn.getText(ast)};`,{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;
-    const action=new Function(code+';return action;')();
-    await assert.rejects(()=>action({...managed(),origin:'discovered'},true),/external_worktree_read_only/);
+    const action=new Function('resolveWorktreeManagementTarget','get',code+';return action;')(
+      load('../src/lib/worktreeManagement.ts').resolveWorktreeManagementTarget,
+      ()=>({worktrees:[managed()]}),
+    );
+    await assert.rejects(()=>action({...managed(),origin:'discovered'},true),name==='mergeWorktree'?/external_worktree_read_only/:/worktree_remove_confirmation_required/);
   }
 });
 

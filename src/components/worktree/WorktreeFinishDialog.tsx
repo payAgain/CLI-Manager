@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { toast } from "sonner";
 import type { GitFileChange, Project, WorktreeRecord } from "../../lib/types";
 import { useI18n, type TranslationKey } from "../../lib/i18n";
 import { useWorktreeStore } from "../../stores/worktreeStore";
+import { resolveWorktreeManagementTarget } from "../../lib/worktreeManagement";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogTitle } from "../ui/dialog";
 import { Button } from "../ui/button";
 import { Textarea } from "../ui/textarea";
+import { WorktreeRemoveDialog } from "./WorktreeRemoveDialog";
 
 interface WorktreeFinishDialogProps {
   project: Project | null;
@@ -44,6 +45,12 @@ function createMergeConflictError(conflictFiles: string[], t: Translate): Finish
 
 function formatFinishError(err: unknown, t: Translate, projectPath?: string): FinishErrorInfo {
   const raw = errorText(err).trim();
+  if (raw === "external_worktree_read_only" || raw === "worktree_target_changed") {
+    return {
+      title: t("worktree.finish.error.genericTitle"),
+      description: t(raw === "external_worktree_read_only" ? "worktree.externalManagedElsewhere" : "worktree.continue.error.missingTarget"),
+    };
+  }
   if (raw.includes("dirty_main_worktree")) {
     return {
       title: t("worktree.finish.error.dirtyMainTitle"),
@@ -81,8 +88,8 @@ function formatFinishError(err: unknown, t: Translate, projectPath?: string): Fi
 
 export function WorktreeFinishDialog({ project, worktree, open, onClose }: WorktreeFinishDialogProps) {
   const { t } = useI18n();
+  const worktrees = useWorktreeStore((state) => state.worktrees);
   const mergeWorktree = useWorktreeStore((state) => state.mergeWorktree);
-  const removeWorktree = useWorktreeStore((state) => state.removeWorktree);
   const [changes, setChanges] = useState<GitFileChange[]>([]);
   const [loadingChanges, setLoadingChanges] = useState(false);
   const [step, setStep] = useState<Step>("review");
@@ -90,10 +97,12 @@ export function WorktreeFinishDialog({ project, worktree, open, onClose }: Workt
   const [busy, setBusy] = useState(false);
   const [output, setOutput] = useState("");
   const [error, setError] = useState<FinishErrorInfo | null>(null);
+  const [removeReviewOpen, setRemoveReviewOpen] = useState(false);
 
   useEffect(() => {
     if (!open || !worktree) return;
     setStep("review");
+    setRemoveReviewOpen(false);
     setCommitMessage(worktree.name);
     setOutput("");
     setError(null);
@@ -108,18 +117,29 @@ export function WorktreeFinishDialog({ project, worktree, open, onClose }: Workt
   }, [open, t, worktree]);
 
   const changeSummary = useMemo(() => formatChangeSummary(changes), [changes]);
-  const canCommit = changes.length > 0 && commitMessage.trim().length > 0 && !busy;
+  const managementError = worktree ? resolveWorktreeManagementTarget(worktree, worktrees).error : null;
+  const canCommit = changes.length > 0 && commitMessage.trim().length > 0 && !busy && !managementError;
 
   if (!project || !worktree) return null;
 
+  const getManagedWorktree = (): WorktreeRecord | null => {
+    const result = resolveWorktreeManagementTarget(worktree, useWorktreeStore.getState().worktrees);
+    if (!result.worktree) setError(formatFinishError(result.error, t, worktree.path));
+    return result.worktree;
+  };
+
   const handleCommit = async () => {
     if (!canCommit) return;
+    const current = getManagedWorktree();
+    if (!current) return;
     setBusy(true);
     setError(null);
     setOutput(`git add --all\ngit commit -m "${commitMessage.trim()}"`);
     try {
-      await invoke("git_stage_all", { projectPath: worktree.path });
-      const commitId = await invoke<string>("git_commit", { projectPath: worktree.path, message: commitMessage.trim() });
+      await invoke("git_stage_all", { projectPath: current.path });
+      const commitTarget = getManagedWorktree();
+      if (!commitTarget) return;
+      const commitId = await invoke<string>("git_commit", { projectPath: commitTarget.path, message: commitMessage.trim() });
       setOutput((current) => `${current}\n${t("worktree.finish.commitResult", { commitId })}`);
       setStep("merge");
     } catch (err) {
@@ -136,11 +156,13 @@ export function WorktreeFinishDialog({ project, worktree, open, onClose }: Workt
   };
 
   const handleMerge = async () => {
+    const current = getManagedWorktree();
+    if (!current) return;
     setBusy(true);
     setError(null);
     setOutput((current) => `${current}\n\ngit -C "${project.path}" merge --no-ff --no-edit ${worktree.branch}`);
     try {
-      const result = await mergeWorktree(worktree);
+      const result = await mergeWorktree(current);
       setOutput((current) => `${current}\n${result.output}`);
       if (result.merged) {
         setStep("cleanup");
@@ -157,21 +179,18 @@ export function WorktreeFinishDialog({ project, worktree, open, onClose }: Workt
     }
   };
 
-  const handleCleanup = async () => {
-    setBusy(true);
-    setError(null);
-    setOutput((current) => `${current}\n\ngit worktree remove "${worktree.path}"\ngit branch -D ${worktree.branch}`);
-    try {
-      await removeWorktree(worktree, true);
-      setStep("done");
-      toast.success(t("worktree.finish.cleanupDone"));
-      onClose();
-    } catch (err) {
-      setError(formatFinishError(err, t, project.path));
-    } finally {
-      setBusy(false);
-    }
+  const handleCleanup = () => {
+    const current = getManagedWorktree();
+    if (!current) return;
+    setRemoveReviewOpen(true);
   };
+
+  if (removeReviewOpen) return <WorktreeRemoveDialog
+    open={open}
+    targets={[{ project, worktree }]}
+    onClose={() => setRemoveReviewOpen(false)}
+    onRemoved={() => { setStep("done"); onClose(); }}
+  />;
 
   return (
     <Dialog open={open} onOpenChange={(next) => { if (!next) onClose(); }}>
@@ -182,6 +201,11 @@ export function WorktreeFinishDialog({ project, worktree, open, onClose }: Workt
         </DialogDescription>
 
         <div className="mt-4 space-y-3 text-sm">
+          {managementError && (
+            <div role="note" className="rounded-lg border border-border bg-bg-secondary/60 p-3 text-xs text-text-muted">
+              {t(managementError === "external_worktree_read_only" ? "worktree.externalManagedElsewhere" : "worktree.continue.error.missingTarget")}
+            </div>
+          )}
           <div className="rounded-lg border border-border bg-bg-secondary/60 p-3">
             <div className="mb-1 text-xs font-semibold text-text-secondary">{t("worktree.finish.changes")}</div>
             {loadingChanges ? (
@@ -235,8 +259,8 @@ export function WorktreeFinishDialog({ project, worktree, open, onClose }: Workt
         <DialogFooter>
           <Button variant="outline" onClick={onClose} disabled={busy}>{t("common.cancel")}</Button>
           {step === "review" && <Button onClick={handleCommit} disabled={!canCommit}>{busy ? t("common.processing") : t("worktree.finish.commitAll")}</Button>}
-          {step === "merge" && <Button onClick={handleMerge} disabled={busy}>{busy ? t("common.processing") : t("worktree.finish.merge")}</Button>}
-          {step === "cleanup" && <Button onClick={handleCleanup} disabled={busy}>{busy ? t("common.processing") : t("worktree.finish.cleanup")}</Button>}
+          {step === "merge" && <Button onClick={handleMerge} disabled={busy || !!managementError}>{busy ? t("common.processing") : t("worktree.finish.merge")}</Button>}
+          {step === "cleanup" && <Button onClick={handleCleanup} disabled={busy || !!managementError}>{busy ? t("common.processing") : t("worktree.finish.cleanup")}</Button>}
         </DialogFooter>
       </DialogContent>
     </Dialog>

@@ -1105,6 +1105,7 @@ pub fn run() {
             commands::git_worktree::git_worktree_create,
             commands::git_worktree::git_worktree_check_deps,
             commands::git_worktree::git_worktree_merge,
+            commands::git_worktree::git_worktree_remove_preflight,
             commands::git_worktree::git_worktree_remove,
             commands::agent_tasks::agent_tasks_get_snapshot,
             commands::subagent_transcript::subagent_transcript_subscribe,
